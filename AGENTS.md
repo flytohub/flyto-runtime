@@ -1,6 +1,17 @@
-# DevSpace
+# Flyto2 Runtime
 
-DevSpace is a local development execution layer for MCP hosts such as ChatGPT and Claude. It gives a remote host workspace-scoped tools for reading, editing, searching, running commands, managing Git worktrees, reviewing changes, and coordinating bounded subagents on the user's machine.
+## Fork identity and composition boundary
+
+- The product name is **Flyto2 Runtime**; the repository is `flytohub/flyto-runtime` and remains an MIT-licensed fork of `Waishnav/devspace`.
+- Runtime is standalone-first. Direct MCP/local-agent use MUST work with Flyto2 Cloud absent.
+- Flyto2 Cloud integration is optional and MUST stay behind the versioned Flyto2 execution protocol / bridge. Runtime core MUST NOT import Cloud application modules, tenant/billing models, War Room state, or hosted persistence.
+- Preserve the upstream MIT notice and merge-friendly compatibility surfaces such as the `devspace` CLI alias and existing state layout unless an explicit migration replaces them.
+- New Flyto2 runtime/core implementation is TypeScript source. Do not implement product behavior by patching compiled JavaScript.
+- See `PROJECT.md` and `ARCHITECTURE.md` before changing the Runtime/Cloud boundary.
+- Before non-trivial Flyto2 source changes, use `flyto-index` impact/context analysis to explore the affected symbols and dependency surface.
+- After source changes, run the relevant tests/typecheck/build plus `flyto-index verify . --full-scan --strict --json`; do not lower the verification threshold to make a change pass.
+
+Flyto2 Runtime is a local development execution layer for MCP hosts such as ChatGPT and Claude. It gives a remote host workspace-scoped tools for reading, editing, searching, running commands, managing Git worktrees, reviewing changes, and coordinating bounded subagents on the user's machine.
 
 Pi's SDK currently provides mature local coding primitives. DevSpace wraps those primitives in a Streamable HTTP MCP server and adds the product-specific boundaries around them: approved roots, workspace state, instructions, process sessions, worktrees, artifacts, review checkpoints, widgets, and subagent execution.
 

@@ -19,7 +19,7 @@ function isDevspaceNodeModulesBin(pathEntry: string): boolean {
 
   try {
     const packageInfo = JSON.parse(readFileSync(packageJson, "utf8")) as { name?: unknown };
-    return packageInfo.name === "@waishnav/devspace";
+    return packageInfo.name === "flyto2-runtime" || packageInfo.name === "@waishnav/devspace";
   } catch {
     return false;
   }

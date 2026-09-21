@@ -1,10 +1,10 @@
 {
-  "name": "@waishnav/devspace",
+  "name": "flyto2-runtime",
   "version": "1.0.8",
-  "description": "Expose a secure local coding workspace through an MCP server.",
+  "description": "Standalone local execution runtime for Flyto2 and MCP hosts.",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Waishnav/devspace.git"
+    "url": "git+https://github.com/flytohub/flyto-runtime.git"
   },
   "type": "module",
   "main": "dist/server.js",
@@ -13,7 +13,9 @@
   },
   "packageManager": "pnpm@11.25.0",
   "bin": {
+    "flyto2-runtime": "bin/devspace.js",
     "devspace": "bin/devspace.js",
+    "flyto2-runtime-agentd": "bin/devspace-agentd.js",
     "devspace-agentd": "bin/devspace-agentd.js"
   },
   "files": [
@@ -24,7 +26,8 @@
     "schema",
     "scripts",
     "skills",
-    "README.md"
+    "README.md",
+    "NOTICE.md"
   ],
   "publishConfig": {
     "access": "public"
@@ -33,6 +36,7 @@
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "build": "pnpm clean && pnpm build:app && tsc -p tsconfig.build.json",
     "build:app": "vite build",
+    "lint": "tsx scripts/lint-flyto2.ts",
     "dev": "tsx scripts/dev.ts",
     "dev:seed": "tsx scripts/dev-state.ts seed",
     "dev:reset": "tsx scripts/dev-state.ts reset",
@@ -45,7 +49,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "keywords": [],
-  "author": "",
+  "author": "Flyto2 contributors",
   "license": "MIT",
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.1.0",

@@ -49,6 +49,9 @@ jobs:
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
 
+      - name: Flyto2 architecture lint
+        run: pnpm lint
+
       - name: Typecheck
         run: pnpm typecheck
 
@@ -59,6 +62,14 @@ jobs:
 
       - name: Package install smoke test
         run: pnpm test:package-install
+
+      - name: Install repository verifier
+        if: matrix.os == 'ubuntu-latest'
+        run: pipx install flyto-indexer
+
+      - name: Verify repository
+        if: matrix.os == 'ubuntu-latest'
+        run: flyto-index verify . --full-scan --strict --json
 
       - name: Doctor
         run: node dist/cli.js doctor

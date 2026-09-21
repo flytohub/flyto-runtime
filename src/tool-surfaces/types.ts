@@ -11,6 +11,7 @@ export const toolNames = {
   write: "write",
   edit: "edit",
   shell: "bash",
+  runtimeManifest: "runtime_manifest",
 } as const;
 
 export const workspaceIdDescription =

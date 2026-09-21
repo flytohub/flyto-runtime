@@ -91,6 +91,23 @@ export const oauthRefreshTokens = sqliteTable(
   },
 );
 
+export const durableOperations = sqliteTable(
+  "durable_operations",
+  {
+    operationId: text("operation_id").primaryKey(),
+    tool: text("tool").notNull(),
+    fingerprint: text("fingerprint").notNull(),
+    status: text("status").notNull(),
+    responseJson: text("response_json"),
+    errorJson: text("error_json"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    index("durable_operations_status_idx").on(table.status, table.updatedAt),
+  ],
+);
+
 export const localAgentSessions = sqliteTable(
   "local_agent_sessions",
   {
@@ -117,6 +134,8 @@ export const localAgentSessions = sqliteTable(
   ],
 );
 
+export type DurableOperationRow = typeof durableOperations.$inferSelect;
+export type NewDurableOperationRow = typeof durableOperations.$inferInsert;
 export type WorkspaceSessionRow = typeof workspaceSessions.$inferSelect;
 export type NewWorkspaceSessionRow = typeof workspaceSessions.$inferInsert;
 export type LoadedAgentFileRow = typeof loadedAgentFiles.$inferSelect;

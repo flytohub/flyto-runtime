@@ -110,7 +110,7 @@ export class CodexAppServerRuntime implements LocalAgentRuntime {
 
   async initialize(): Promise<void> {
     await this.rpc.request("initialize", {
-      clientInfo: { name: "devspace", title: "DevSpace", version: DEVSPACE_VERSION },
+      clientInfo: { name: "flyto2-runtime", title: "Flyto2 Runtime", version: DEVSPACE_VERSION },
       capabilities: {},
     });
     this.rpc.notify("initialized");

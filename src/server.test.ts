@@ -14,6 +14,7 @@ import { buildLocalAgentProviderStatuses } from "./local-agent-catalog.js";
 import type { SubagentsConfig } from "./local-agent-config.js";
 import { createReviewCheckpointManager } from "./review-checkpoints.js";
 import { ProcessSessionManager } from "./process-sessions.js";
+import { DurableOperationStore } from "./flyto2/durable-operations.js";
 import { createMcpServer, createServer } from "./server.js";
 import { SqliteWorkspaceStore } from "./workspace-store.js";
 import { WorkspaceRegistry } from "./workspaces.js";
@@ -28,11 +29,11 @@ test("tool modes expose the expected host-facing tool surface", async (t) => {
   }> = [
     {
       mode: "claude",
-      expected: ["open_workspace", "read", "write", "edit", "bash", "show_changes"],
+      expected: ["open_workspace", "read", "write", "edit", "bash", "runtime_manifest", "show_changes"],
     },
     {
       mode: "codex",
-      expected: ["open_workspace", "read", "apply_patch", "exec_command", "write_stdin", "show_changes"],
+      expected: ["open_workspace", "read", "apply_patch", "exec_command", "write_stdin", "runtime_manifest", "show_changes"],
     },
   ];
 
@@ -82,6 +83,62 @@ test("Codex process tools bound model-facing yield windows to 12 seconds", async
     assert.equal(yieldSchema?.maximum, 12_000);
     assert.match(yieldSchema?.description ?? "", /maximum 12000/i);
   }
+});
+
+test("runtime manifest identifies standalone Flyto2 Runtime in every tool mode", async (t) => {
+  for (const toolMode of ["claude", "codex"] as const) {
+    await t.test(toolMode, async (nested) => {
+      const context = await fixture(nested, { toolMode, uiEnabled: false });
+      const manifest = structuredContent(await context.client.callTool({
+        name: "runtime_manifest",
+        arguments: {},
+      }));
+      assert.equal(manifest.schema, "flyto2.execution.v1");
+      assert.equal(manifest.product, "Flyto2");
+      assert.equal(manifest.runtime, "flyto-runtime");
+      assert.equal(typeof manifest.runtime_id, "string");
+      assert.ok(Array.isArray(manifest.capabilities));
+      assert.ok((manifest.capabilities as Array<{ id?: string }>).some(({ id }) => id === "source.edit"));
+    });
+  }
+});
+
+test("durable operation_id replays a lost write response without repeating the side effect", async (t) => {
+  const context = await fixture(t, { toolMode: "claude", uiEnabled: false });
+  const workspaceId = structuredContent(
+    await callOpen(context.client, context.project, "durable-write"),
+  ).workspace_id;
+  assert.equal(typeof workspaceId, "string");
+
+  const args = {
+    workspace_id: workspaceId,
+    path: "durable.txt",
+    content: "first\n",
+    operation_id: "op.write.0001",
+  };
+  const first = await context.client.callTool({ name: "write", arguments: args });
+  assert.equal(first.isError, undefined);
+  assert.equal(await readFile(join(context.project, "durable.txt"), "utf8"), "first\n");
+
+  await writeFile(join(context.project, "durable.txt"), "changed-after-response-loss\n");
+  const replay = await context.client.callTool({ name: "write", arguments: args });
+  assert.equal(replay.isError, undefined);
+  assert.equal(
+    await readFile(join(context.project, "durable.txt"), "utf8"),
+    "changed-after-response-loss\n",
+  );
+
+  const drift = await context.client.callTool({
+    name: "write",
+    arguments: { ...args, content: "different\n" },
+  });
+  assert.equal(drift.isError, true);
+  assert.match(
+    ((drift.content ?? []) as Array<{ type?: string; text?: string }>)
+      .map((item) => item.type === "text" ? item.text ?? "" : "")
+      .join("\n"),
+    /different arguments/i,
+  );
 });
 
 test("Claude edit and bash tools accept snake_case runtime inputs", async (t) => {
@@ -792,6 +849,7 @@ async function fixture(
   );
   const store = new SqliteWorkspaceStore(stateDir);
   const workspaces = new WorkspaceRegistry(config, store);
+  const durableOperations = new DurableOperationStore(stateDir);
   const server = createMcpServer(
     config,
     workspaces,
@@ -799,6 +857,7 @@ async function fixture(
     new ProcessSessionManager(),
     resolveLocalAgentProviders,
     [],
+    durableOperations,
   );
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "devspace-test-client", version: "1.0.0" });
@@ -813,6 +872,7 @@ async function fixture(
     closed = true;
     await client.close();
     await server.close();
+    durableOperations.close();
     store.close();
   };
 

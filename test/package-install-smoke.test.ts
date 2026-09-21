@@ -45,19 +45,23 @@ function testPackedPackageLaunchers(): void {
       workspaces: { allowedRoots: [root], worktreeRoot: join(root, "worktrees") },
       skills: { agentDir: join(root, "agents") },
     });
-    const cliOutput = execInstalledBin(installRoot, "devspace", ["config", "get"], {
-      ...process.env,
-      ...env,
-    });
-    const config = JSON.parse(cliOutput) as { tools?: { mode?: string } };
-    assert.equal(config.tools?.mode, "codex");
+    for (const cliName of ["flyto2-runtime", "devspace"]) {
+      const cliOutput = execInstalledBin(installRoot, cliName, ["config", "get"], {
+        ...process.env,
+        ...env,
+      });
+      const config = JSON.parse(cliOutput) as { tools?: { mode?: string } };
+      assert.equal(config.tools?.mode, "codex");
+    }
 
-    execInstalledBin(installRoot, "devspace-agentd", [], {
-      ...process.env,
-      ...env,
-      DEVSPACE_AGENTD_IDLE_TIMEOUT_MS: "0",
-      DEVSPACE_AGENTD_SHUTDOWN_TIMEOUT_MS: "1000",
-    });
+    for (const daemonName of ["flyto2-runtime-agentd", "devspace-agentd"]) {
+      execInstalledBin(installRoot, daemonName, [], {
+        ...process.env,
+        ...env,
+        DEVSPACE_AGENTD_IDLE_TIMEOUT_MS: "0",
+        DEVSPACE_AGENTD_SHUTDOWN_TIMEOUT_MS: "1000",
+      });
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

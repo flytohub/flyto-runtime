@@ -47,6 +47,11 @@ const migrations: Migration[] = [
     name: "local-agent-turns",
     up: migrateLocalAgentTurns,
   },
+  {
+    version: 9,
+    name: "durable-operations",
+    up: migrateDurableOperations,
+  },
 ];
 
 export function migrateDatabase(sqlite: Database.Database): void {
@@ -286,6 +291,24 @@ function migrateLocalAgentTurns(sqlite: Database.Database): void {
 
     create index if not exists local_agent_turns_status_idx
       on local_agent_turns(status);
+  `);
+}
+
+function migrateDurableOperations(sqlite: Database.Database): void {
+  sqlite.exec(`
+    create table if not exists durable_operations (
+      operation_id text primary key,
+      tool text not null,
+      fingerprint text not null,
+      status text not null,
+      response_json text,
+      error_json text,
+      created_at text not null,
+      updated_at text not null
+    );
+
+    create index if not exists durable_operations_status_idx
+      on durable_operations(status, updated_at desc);
   `);
 }
 

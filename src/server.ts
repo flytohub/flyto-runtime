@@ -46,6 +46,9 @@ import { shutdownHttpServer } from "./server-shutdown.js";
 import { formatPathForPrompt } from "./skills.js";
 import { DEVSPACE_VERSION } from "./version.js";
 import { createWorkspaceStore } from "./workspace-store.js";
+import { DurableOperationStore } from "./flyto2/durable-operations.js";
+import { withDurableToolHandlers } from "./flyto2/durable-tools.js";
+import { runtimeManifest } from "./flyto2/manifest.js";
 import { formatAgentsPath, WorkspaceRegistry } from "./workspaces.js";
 import {
   getLocalAgentProviderAvailabilitySnapshot,
@@ -77,11 +80,11 @@ const WORKSPACE_APP_MANIFEST_ENTRY = "workspace-app.html";
 
 function mcpServerInfo() {
   return {
-    name: "devspace",
-    title: "DevSpace",
+    name: "flyto2-runtime",
+    title: "Flyto2 Runtime",
     version: DEVSPACE_VERSION,
     description:
-      "Coding tools for project workspaces. Open each project or worktree once, then reuse its workspace_id.",
+      "Standalone local execution runtime for Flyto2 and MCP hosts. Open each project or worktree once, then reuse its workspace_id.",
   };
 }
 
@@ -312,6 +315,7 @@ export function createMcpServer(
   processSessions: ProcessSessionManager,
   resolveLocalAgentProviders: () => LocalAgentProviderStatus[],
   incomingArtifactAdapters: readonly IncomingArtifactAdapter[],
+  durableOperations: DurableOperationStore,
   trackToolActivity?: TrackToolActivity,
 ): McpServer {
   const toolSurface = getToolSurface(config.toolMode);
@@ -330,6 +334,7 @@ export function createMcpServer(
     processSessions,
     resolveLocalAgentProviders,
     incomingArtifactAdapters,
+    durableOperations,
     trackToolActivity,
   );
   return server;
@@ -343,11 +348,13 @@ function registerMcpSurface(
   processSessions: ProcessSessionManager,
   resolveLocalAgentProviders: () => LocalAgentProviderStatus[],
   incomingArtifactAdapters: readonly IncomingArtifactAdapter[],
+  durableOperations: DurableOperationStore,
   trackToolActivity?: TrackToolActivity,
 ): void {
-  const registrationTarget = trackToolActivity
+  const trackedTarget = trackToolActivity
     ? withTrackedToolHandlers(server, trackToolActivity)
     : server;
+  const registrationTarget = withDurableToolHandlers(trackedTarget, durableOperations);
   const toolSurface = getToolSurface(config.toolMode);
 
   registerAppResource(
@@ -690,6 +697,41 @@ function registerMcpSurface(
     },
   );
 
+  registrationTarget.registerTool(
+    toolNames.runtimeManifest,
+    {
+      title: "Runtime manifest",
+      description:
+        "Describe this standalone Flyto2 Runtime instance and its execution capabilities. Cloud integration is optional; this manifest is valid in direct MCP mode too.",
+      inputSchema: {},
+      outputSchema: {
+        schema: z.literal("flyto2.execution.v1"),
+        product: z.literal("Flyto2"),
+        runtime: z.literal("flyto-runtime"),
+        runtime_version: z.string(),
+        runtime_id: z.string(),
+        display_name: z.string(),
+        platform: z.string(),
+        roles: z.array(z.string()),
+        capabilities: z.array(z.object({
+          id: z.string(),
+          revision: z.number().int(),
+          risk_level: z.enum(["low", "medium", "high", "dangerous"]),
+          approval: z.enum(["none", "policy", "explicit"]),
+          evidence: z.array(z.string()),
+        })),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async () => {
+      const manifest = runtimeManifest(config);
+      return {
+        content: [textBlock(JSON.stringify(manifest, null, 2))],
+        structuredContent: manifest,
+      };
+    },
+  );
+
   toolSurface.register({
     server: registrationTarget,
     config,
@@ -815,6 +857,7 @@ export function createServer(
     resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(resourceServerUrl),
   });
   const workspaceStore = createWorkspaceStore(config.stateDir);
+  const durableOperations = new DurableOperationStore(config.stateDir);
   const workspaces = new WorkspaceRegistry(config, workspaceStore);
   const reviewCheckpoints = createReviewCheckpointManager();
   const processSessions = new ProcessSessionManager();
@@ -837,6 +880,7 @@ export function createServer(
       processSessions,
       resolveLocalAgentProviders,
       incomingArtifactAdapters,
+      durableOperations,
       toolActivities.track,
     );
   });
@@ -915,7 +959,7 @@ export function createServer(
   );
 
   app.get("/healthz", (_req, res) => {
-    res.json({ ok: true, name: "devspace" });
+    res.json({ ok: true, name: "flyto2-runtime", product: "Flyto2" });
   });
 
   app.all("/mcp", async (req, res) => {
@@ -976,6 +1020,7 @@ export function createServer(
         await toolActivities.waitForIdle();
         processSessions.shutdown();
         oauthProvider.close();
+        durableOperations.close();
         workspaceStore.close?.();
       })();
       return closePromise;
@@ -995,7 +1040,7 @@ if (await isMainModule()) {
   const { app, config, close, localAgentProviders } = createServer();
   const httpServer = app.listen(config.port, config.host, () => {
     console.log(
-      `devspace listening on http://${config.host}:${config.port}/mcp`,
+      `Flyto2 Runtime listening on http://${config.host}:${config.port}/mcp`,
     );
     console.log(`allowed roots: ${config.allowedRoots.join(", ")}`);
     console.log("auth: oauth owner-token flow required");
@@ -1021,7 +1066,7 @@ if (await isMainModule()) {
   };
   const handleShutdown = () => {
     void shutdown().catch((error) => {
-      console.error("devspace shutdown failed", error);
+      console.error("Flyto2 Runtime shutdown failed", error);
       process.exit(1);
     });
   };

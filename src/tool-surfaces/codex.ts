@@ -184,7 +184,7 @@ function registerCodexProcessTools(context: ToolRegistrationContext): void {
           .max(MAX_PROCESS_YIELD_MS)
           .optional()
           .describe(
-            "Milliseconds to wait before returning a running session. Defaults to 10000, maximum 12000. Use write_stdin for work that runs longer.",
+            "Milliseconds to wait before returning a running session. Defaults to 3000, maximum 12000. Prefer short receipts for long-running work and continue it reactively.",
           ),
         max_output_tokens: z
           .number()

@@ -56,6 +56,8 @@ import { readReviewRef } from "./review-checkpoints.js";
 import { shutdownHttpServer } from "./server-shutdown.js";
 import { logEvent } from "./logger.js";
 import { pruneStaleManagedWorktrees } from "./worktree-prune.js";
+import { Flyto2CloudBridge } from "./flyto2/cloud-bridge.js";
+import { runtimeManifest } from "./flyto2/manifest.js";
 
 type Command =
   | "serve"
@@ -65,6 +67,7 @@ type Command =
   | "worktrees"
   | "agents"
   | "show-changes"
+  | "flyto2"
   | "help"
   | "version";
 const require = createRequire(import.meta.url);
@@ -99,6 +102,9 @@ async function main(argv: string[]): Promise<void> {
     case "show-changes":
       await runShowChanges(args);
       return;
+    case "flyto2":
+      await runFlyto2Command(args);
+      return;
     case "help":
       printHelp();
       return;
@@ -117,6 +123,7 @@ function normalizeCommand(command: string | undefined): Command {
     || command === "worktrees"
     || command === "agents"
     || command === "show-changes"
+    || command === "flyto2"
   ) return command;
   if (command === "help" || command === "--help" || command === "-h") return "help";
   if (command === "version" || command === "--version" || command === "-v") return "version";
@@ -477,13 +484,69 @@ async function runWorktreesCommand(args: string[]): Promise<void> {
   if (result.failed.length > 0) process.exitCode = 1;
 }
 
+async function runFlyto2Command(args: string[]): Promise<void> {
+  const [subcommand, ...rest] = args;
+  const config = loadConfig();
+  const manifest = runtimeManifest(config);
+  const bridge = new Flyto2CloudBridge(config);
+
+  switch (subcommand) {
+    case "manifest":
+    case undefined:
+      if (rest.length > 0) throw new Error("Usage: flyto2-runtime flyto2 manifest");
+      console.log(JSON.stringify(manifest, null, 2));
+      return;
+    case "status":
+      if (rest.length > 0) throw new Error("Usage: flyto2-runtime flyto2 status");
+      console.log(JSON.stringify({
+        product: "Flyto2",
+        runtime: "flyto-runtime",
+        runtime_id: manifest.runtime_id,
+        paired: bridge.paired,
+        device_id: bridge.deviceId,
+        workspace_id: bridge.workspaceId,
+      }, null, 2));
+      return;
+    case "pair": {
+      const cloudIndex = rest.indexOf("--cloud-url");
+      const cloudUrl = cloudIndex >= 0 ? rest[cloudIndex + 1] : undefined;
+      const pairingCode = rest[0];
+      if (!pairingCode || (cloudIndex >= 0 && !cloudUrl)) {
+        throw new Error(
+          "Usage: flyto2-runtime flyto2 pair <pairing-code> [--cloud-url https://api.flyto2.com]",
+        );
+      }
+      const credentials = await bridge.pair(pairingCode, manifest, cloudUrl);
+      console.log(JSON.stringify({
+        ok: true,
+        device_id: credentials.device_id,
+        workspace_id: credentials.workspace_id,
+        workspace_name: credentials.workspace_name,
+        cloud_url: credentials.cloud_url,
+      }, null, 2));
+      return;
+    }
+    case "next": {
+      if (rest.length > 0) throw new Error("Usage: flyto2-runtime flyto2 next");
+      const assignment = await bridge.waitForAssignment();
+      console.log(JSON.stringify({ assignment: assignment ?? null }, null, 2));
+      return;
+    }
+    default:
+      throw new Error(
+        "Usage: flyto2-runtime flyto2 <manifest|status|pair|next>",
+      );
+  }
+}
+
 function printHelp(): void {
   console.log(
     [
-      "DevSpace",
+      "Flyto2 Runtime",
       "",
       "Usage:",
-      "  devspace                 Run first-time setup if needed, then start the server",
+      "  flyto2-runtime           Run first-time setup if needed, then start the server",
+      "  devspace                 Compatibility alias for flyto2-runtime",
       "  devspace serve           Start the server",
       "  devspace init            Create or update ~/.devspace/config.jsonc and auth.json",
       "  devspace doctor          Show config, runtime, and native dependency status",
@@ -491,6 +554,10 @@ function printHelp(): void {
       "  devspace config set publicBaseUrl <url|null>",
       "  devspace worktrees prune Prune managed worktrees unused for 3 days",
       "  devspace show-changes <review-ref> [--json]",
+      "  flyto2-runtime flyto2 manifest",
+      "  flyto2-runtime flyto2 status",
+      "  flyto2-runtime flyto2 pair <pairing-code> [--cloud-url https://api.flyto2.com]",
+      "  flyto2-runtime flyto2 next   Wait for one Cloud assignment without executing it",
       "  devspace agents targets [--json]  List usable subagent providers and profiles",
       "  devspace agents ls       List subagent sessions",
       "  devspace agents run <profile-or-provider> [--model <model>] [--effort <level>] <prompt>",

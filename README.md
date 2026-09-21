@@ -1,92 +1,126 @@
-<p align="center">
-  <picture>
-    <img src="https://raw.githubusercontent.com/Waishnav/devspace/main/docs/assets/devspace-logo-light.png" alt="DevSpace logo" width="140">
-  </picture>
-</p>
+# Flyto2 Runtime
 
-<h1 align="center">DevSpace</h1>
+**Flyto2 Runtime** is a standalone local execution runtime for ChatGPT, Claude, coding agents, and Flyto2 Cloud.
 
-<p align="center">Bring a Codex-style coding workflow to ChatGPT.</p>
+It can be used in two completely separate ways:
 
-<p align="center">
-  <a href="https://www.npmjs.com/package/@waishnav/devspace"><img alt="npm" src="https://img.shields.io/npm/v/%40waishnav%2Fdevspace?style=flat-square" /></a>
-  <a href="https://github.com/Waishnav/devspace/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/Waishnav/devspace/ci.yml?style=flat-square&branch=main" /></a>
-  <a href="https://github.com/Waishnav/devspace/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/npm/l/%40waishnav%2Fdevspace?style=flat-square" /></a>
-</p>
+```text
+Standalone
+ChatGPT / Claude -> MCP -> Flyto2 Runtime -> local workspace / Git / tests / agents
 
-[![DevSpace connected to ChatGPT](https://raw.githubusercontent.com/Waishnav/devspace/main/docs/assets/devspace-screenshot.png)](https://raw.githubusercontent.com/Waishnav/devspace/main/docs/assets/devspace-screenshot.png)
+Optional Flyto2 composition
+ChatGPT -> Flyto2 Cloud -> thin execution protocol -> Flyto2 Runtime
+```
 
-**Give ChatGPT a secure connection to your own machine and Turn ChatGPT into Codex**
+The Runtime never imports `flyto-cloud` and does not require a Cloud account. Cloud integration is an optional outbound bridge layered on top of the same standalone capability manifest. Removing or disabling that bridge does not change the MCP/workspace/runtime core.
 
-DevSpace is a self-hosted MCP server that lets ChatGPT read, edit, search, and run code in your real local projects — your files, your tools, your terminal — without uploading anything to a third party. You run it on your machine, expose it through a tunnel you control, and approve the connection with a password only you have.
+This repository is an independent MIT-licensed fork of [Waishnav/devspace](https://github.com/Waishnav/devspace). The upstream copyright and MIT license are preserved in [LICENSE](LICENSE). See [NOTICE.md](NOTICE.md) for fork attribution and compatibility notes.
 
-The same `/mcp` endpoint serves the 2026-07-28 per-request protocol and automatically supports older 2025-era clients through stateless compatibility handling. There is no protocol mode to configure.
+## Flyto2 execution boundary
 
-## Sponsors and Special Thanks
-<!-- 
+The shared contract is versioned as `flyto2.execution.v1`. Runtime exposes one provider-neutral manifest:
 
-<table>
-  <thead>
-    <tr>
-      <th>Sponsor</th>
-      <th>About</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td align="center" width="220">
-        <a href="https://rebates.ai/">
-          <img
-            src="https://app.rebates.ai/brand/rebates-lockup.svg"
-            alt="Rebates"
-            width="170"
-          >
-        </a>
-      </td>
-      <td>
-        <strong>The ads in your terminal pay you.</strong><br><br>
-        <a href="https://rebates.ai/">Rebates</a> adds one optional
-        sponsored footer to your coding agent and pays you cash back for every
-        session in which it is shown. Turn it off at any time.
-      </td>
-    </tr>
-  </tbody>
-</table>
--->
-<p>
-  DevSpace is open to new sponsors.
-  <a href="https://x.com/wshxnv">Get in touch to become one.</a>
-</p>
+```text
+runtime_manifest
+  -> runtime identity
+  -> roles
+  -> capabilities
+  -> risk / approval metadata
+  -> evidence kinds
+```
+
+Flyto2 Cloud sees only this contract plus assignment/event/evidence/completion envelopes. It does not need to know whether a task is implemented by Codex, Claude, a Git worktree, a local process, or another adapter.
+
+Pairing with Flyto2 Cloud is optional:
+
+```bash
+flyto2-runtime flyto2 manifest
+flyto2-runtime flyto2 status
+flyto2-runtime flyto2 pair <pairing-code>
+flyto2-runtime flyto2 next
+```
+
+The `devspace` binary remains as a compatibility alias while this fork stays merge-friendly with upstream.
+
+The same `/mcp` endpoint serves modern MCP clients and the existing compatibility surface. Durable `operation_id` support prevents a lost-response retry from repeating a side effect.
+
+## Usage
+
+Standalone direct-MCP mode:
+
+```text
+ChatGPT / Claude -> MCP -> Flyto2 Runtime -> local workspace
+```
+
+Optional Flyto2 composition:
+
+```text
+ChatGPT -> Flyto2 Cloud -> flyto2.execution.v1 -> Flyto2 Runtime
+```
+
+Use `runtime_manifest` to inspect the Runtime identity and provider-neutral capabilities. Use `operation_id` on side-effecting MCP calls when a host may retry after a lost response.
+
+## API / MCP surface
+
+The Runtime keeps the upstream workspace/file/process/review tool surfaces and adds a read-only `runtime_manifest` tool. The optional Cloud bridge uses the public paired-device job lifecycle rather than a Runtime-specific Cloud API. The versioned wire contract lives in `src/flyto2/protocol.ts`.
+
+## Architecture
+
+See [ARCHITECTURE.md](ARCHITECTURE.md). The hard rule is standalone-first: `flyto-runtime` never imports Cloud application code, and Cloud integration is a replaceable adapter over `flyto2.execution.v1`.
+
+## Testing
+
+```bash
+TMPDIR=/tmp pnpm test
+pnpm typecheck
+pnpm lint
+pnpm build
+flyto-index verify . --full-scan --strict --json
+```
+
+On macOS, `TMPDIR=/tmp` avoids the Unix-domain socket path-length limit in the upstream local-agent daemon test.
+
+## License
+
+Flyto2 Runtime remains MIT licensed. The original Waishnav copyright and permission notice are preserved unchanged in [LICENSE](LICENSE). Fork attribution and compatibility notes are in [NOTICE.md](NOTICE.md).
+
+## Contributing
+
+Keep Flyto2-owned runtime behavior in TypeScript under `src/flyto2/` when practical, preserve upstream mergeability, and keep Cloud composition behind the versioned protocol rather than repository imports. Follow [AGENTS.md](AGENTS.md) and run the full verification gates before merging.
 
 ## Installation
 
-DevSpace requires Node `>=22.19 <27`.
+Flyto2 Runtime requires Node `>=22.19 <27`.
 
-Install the DevSpace CLI:
+Until a Flyto2 npm release is published, install this fork from source:
 
 ```bash
-npm install -g @waishnav/devspace
+git clone https://github.com/flytohub/flyto-runtime.git
+corepack enable
+pnpm install
+pnpm build
+pnpm link --global
 ```
 
-Then initialize DevSpace:
+Then initialize the standalone runtime:
+
+```bash
+flyto2-runtime init
+```
+
+The compatibility alias remains available:
 
 ```bash
 devspace init
 ```
 
-Or run it without a global install:
-
-```bash
-npx @waishnav/devspace init
-```
-
-During setup, DevSpace asks for:
+During setup, Flyto2 Runtime asks for:
 
 - where you will use it: ChatGPT, Coding Agents, or both
 - which agents DevSpace may use as subagents
 
-The first choice is where you invoke DevSpace from. The subagent choice is
-separate: ChatGPT or another coding agent can delegate work through DevSpace to
+The first choice is where you invoke Flyto2 Runtime from. The subagent choice is
+separate: ChatGPT or another coding agent can delegate work through the Runtime to
 the agents you select there.
 
 If you select ChatGPT, setup also asks which local project folders it may open
@@ -102,17 +136,21 @@ https://your-tunnel-host.example.com
 ```
 
 You will configure your MCP client with the public `/mcp` URL after setup.
-Run `devspace serve` when using ChatGPT. For Coding Agents, setup prints a
+Run `flyto2-runtime serve` (or the `devspace serve` compatibility alias) when using ChatGPT. For Coding Agents, setup prints a
 `skills` command and lets the Skills CLI handle installation.
 
-When the client connects, DevSpace opens an Owner password approval page. Enter
-the Owner password printed by `devspace init`. It is also stored in:
+When the client connects, Flyto2 Runtime opens an Owner password approval page. Enter
+the Owner password printed by `flyto2-runtime init`. It is also stored in:
 
 ```text
 ~/.devspace/auth.json
 ```
 
 Keep that password private.
+
+## Configuration
+
+Flyto2 Runtime keeps the upstream DevSpace configuration/state layout for compatibility. Existing `~/.devspace/config.jsonc`, auth state, worktrees, agent profiles, and skills remain valid. Flyto2 Cloud pairing is optional and stores its device credential separately in the Runtime state directory; it is never required for standalone MCP use.
 
 ## Connect Your MCP Client
 
