@@ -1,5 +1,7 @@
 # Flyto2 Runtime
 
+Desktop setup supports **ChatGPT**, **Codex**, **Claude**, and **Direct MCP / custom client**. Choose **Setup / choose client** to connect; Flyto2 Cloud is optional. See [setup](docs/setup.md).
+
 **Flyto2 Runtime** is a local execution runtime for ChatGPT, Claude, coding agents, and Flyto2.
 
 It solves a simple problem: AI can reason about code, but it still needs a reliable way to work with local files, Git, tests, builds, processes, and long-running tasks.

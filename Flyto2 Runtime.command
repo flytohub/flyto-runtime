@@ -2,7 +2,7 @@
 set -u
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin"
 cd "$ROOT" || exit 1
 
 MODE="${1:-menu}"

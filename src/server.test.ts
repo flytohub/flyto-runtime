@@ -924,6 +924,7 @@ interface HttpServerFixture {
 async function httpServerFixture(
   t: TestContext,
   prefix: string,
+  toolMode: ToolMode = "codex",
 ): Promise<HttpServerFixture> {
   const root = await mkdtemp(join(tmpdir(), prefix));
   const ownerToken = "test-owner-token-that-is-long-enough";
@@ -937,6 +938,7 @@ async function httpServerFixture(
       worktreeRoot: join(root, ".worktrees"),
     },
     storage: { stateDir: join(root, ".state") },
+    tools: { mode: toolMode },
   }));
   const running = createServer(config, { incomingArtifactAdapters: [] });
   const httpServer = running.app.listen(0, "127.0.0.1");
@@ -1236,3 +1238,23 @@ function responseCard(result: Awaited<ReturnType<Client["callTool"]>>): Record<s
   assert.ok(card && typeof card === "object");
   return card as Record<string, unknown>;
 }
+
+
+test("existing ChatGPT camelCase tool calls survive the Runtime migration", async (t) => {
+  const { root, localBaseUrl, accessToken } = await httpServerFixture(t, "runtime-legacy-input-", "claude");
+  const opened = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
+    name: "open_workspace", arguments: { path: root },
+  });
+  const openedBody = await opened.json() as { result: { structuredContent: { workspace_id: string } } };
+  const workspaceId = openedBody.result.structuredContent.workspace_id;
+  const ran = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
+    name: "bash", arguments: { workspaceId, workingDirectory: ".", command: "echo legacy-chatgpt-ok" },
+  });
+  assert.equal(ran.status, 200);
+  assert.match(await ran.text(), /legacy-chatgpt-ok/);
+  const conflict = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
+    name: "bash", arguments: { workspaceId, workspace_id: "another-workspace", command: "echo must-not-run" },
+  });
+  assert.equal(conflict.status, 400);
+  assert.match(await conflict.text(), /Conflicting workspaceId/);
+});

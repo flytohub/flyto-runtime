@@ -1,3 +1,4 @@
+import { normalizeLegacyMcpInput } from "./mcp-legacy-input.js";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { access, realpath } from "node:fs/promises";
@@ -990,8 +991,15 @@ export function createServer(
       method: req.method,
     });
 
+    let requestBody: unknown;
     try {
-      await mcpNodeHandler(req, res, req.body);
+      requestBody = normalizeLegacyMcpInput(req.body);
+    } catch (error) {
+      sendJsonRpcError(res, 400, -32602, error instanceof Error ? error.message : "Invalid tool arguments");
+      return;
+    }
+    try {
+      await mcpNodeHandler(req, res, requestBody);
     } catch (error) {
       logEvent(config.logging, "error", "mcp_request_error", {
         requestId,

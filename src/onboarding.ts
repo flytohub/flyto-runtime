@@ -7,7 +7,7 @@ import {
 export const SUBAGENT_SKILL_INSTALL_COMMAND =
   "npx skills add flytohub/flyto-runtime --skill subagents --global";
 
-export const ONBOARDING_DESTINATIONS = ["chatgpt", "coding-agents"] as const;
+export const ONBOARDING_DESTINATIONS = ["chatgpt", "codex", "claude", "custom", "coding-agents"] as const;
 export type OnboardingDestination = typeof ONBOARDING_DESTINATIONS[number];
 export type OnboardingUsage = OnboardingDestination | "both";
 
@@ -15,9 +15,10 @@ export function resolveOnboardingUsage(
   destinations: readonly OnboardingDestination[],
 ): OnboardingUsage {
   const selected = new Set(destinations);
-  if (selected.has("chatgpt") && selected.has("coding-agents")) return "both";
+  const local = ["codex", "claude", "custom", "coding-agents"].some((id) => selected.has(id as OnboardingDestination));
+  if (selected.has("chatgpt") && local) return "both";
   if (selected.has("chatgpt")) return "chatgpt";
-  if (selected.has("coding-agents")) return "coding-agents";
+  if (local) return "coding-agents";
   throw new Error("Choose ChatGPT, Coding Agents, or both.");
 }
 
@@ -35,7 +36,7 @@ export function updateOnboardingSubagentsConfig(
 ): SubagentsConfig {
   const selected = new Set(selectedProviders);
   return {
-    enabled: true,
+    enabled: selected.size > 0,
     instructions: current.instructions,
     providers: LOCAL_AGENT_PROVIDERS
       .filter((id) => selected.has(id) || current.providers.some((provider) => provider.id === id))
@@ -48,4 +49,25 @@ export function updateOnboardingSubagentsConfig(
         };
       }),
   };
+}
+
+export const ONBOARDING_CLIENT_OPTIONS = [
+  { value: "chatgpt", label: "ChatGPT", hint: "Connect through your public HTTPS tunnel." },
+  { value: "codex", label: "Codex", hint: "Show connection instructions; no client is registered automatically." },
+  { value: "claude", label: "Claude", hint: "Connect Claude Code or another Claude MCP client." },
+  { value: "custom", label: "Direct MCP / custom client", hint: "Use Streamable HTTP with OAuth; Cloud is optional." },
+] satisfies { value: OnboardingDestination; label: string; hint: string }[];
+
+export function clientConnectionInstructions(client: OnboardingDestination, url: string): string {
+  const quoted = "'" + url.replaceAll("'", "'\\''") + "'";
+  switch (client) {
+    case "codex":
+      return `codex mcp add flyto2-runtime --url ${quoted}\ncodex mcp login flyto2-runtime`;
+    case "claude":
+      return `claude mcp add --transport http flyto2-runtime ${quoted}\nOpen /mcp in Claude Code to authorize. Other Claude clients: add the URL as a remote MCP server.`;
+    case "chatgpt":
+      return `Add a custom MCP connection in ChatGPT: ${url}\nChoose OAuth and approve access with your Owner password.`;
+    default:
+      return `Streamable HTTP MCP URL: ${url}\nUse OAuth discovery and approve access with your Owner password. Flyto2 Cloud is not required.`;
+  }
 }

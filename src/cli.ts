@@ -38,6 +38,8 @@ import {
 } from "./local-agent-presentation.js";
 import {
   type OnboardingDestination,
+  ONBOARDING_CLIENT_OPTIONS,
+  clientConnectionInstructions,
   SUBAGENT_SKILL_INSTALL_COMMAND,
   resolveOnboardingUsage,
   updateOnboardingSubagentsConfig,
@@ -173,35 +175,25 @@ async function runInit({ force }: { force: boolean }): Promise<void> {
   }
 
   try {
-    prompts.intro("DevSpace setup");
+    prompts.intro("Flyto2 Runtime setup");
 
     const destinationAnswer = await prompts.multiselect({
-      message: "Where do you want to use DevSpace?",
-      options: [
-        {
-          value: "chatgpt",
-          label: "ChatGPT",
-          hint: "Connect ChatGPT to projects on this computer.",
-        },
-        {
-          value: "coding-agents",
-          label: "Coding Agents",
-          hint: "Use DevSpace from Codex, Claude Code, OpenCode, Pi, and similar tools.",
-        },
-      ],
-      initialValues: files.config.server.publicBaseUrl ? ["chatgpt"] : ["coding-agents"],
+      message: "Where do you want to use Flyto2 Runtime?",
+      options: ONBOARDING_CLIENT_OPTIONS,
+      initialValues: files.config.server.publicBaseUrl ? ["chatgpt"] : [],
       required: true,
     });
     if (prompts.isCancel(destinationAnswer)) throw new SetupCancelledError();
-    const usage = resolveOnboardingUsage(destinationAnswer as OnboardingDestination[]);
+    const destinations = destinationAnswer as OnboardingDestination[];
+    const usage = resolveOnboardingUsage(destinations);
     const useChatGpt = usesChatGpt(usage);
     const useCodingAgents = usesCodingAgents(usage);
 
     let allowedRoots: string[] | undefined;
-    if (useChatGpt) {
+    {
       const defaultRoots = files.config.workspaces.allowedRoots.join(", ") || process.cwd();
       const rootsAnswer = await textPrompt({
-        message: `Which project folders can DevSpace access? Press Enter to use ${defaultRoots}`,
+        message: `Which project folders can Flyto2 Runtime access? Press Enter to use ${defaultRoots}`,
         placeholder: defaultRoots,
         defaultValue: defaultRoots,
         validate: (value) => value?.trim() ? undefined : "Enter at least one project root.",
@@ -243,16 +235,12 @@ async function runInit({ force }: { force: boolean }): Promise<void> {
     const configuredProviders = currentSubagents.providers
       .filter((provider) => provider.enabled)
       .map((provider) => provider.id);
-    const initialValues = configuredProviders.length > 0
-      ? configuredProviders
-      : availability
-          .filter((provider) => provider.available)
-          .map((provider) => provider.name);
+    const initialValues = currentSubagents.enabled ? configuredProviders : [];
     prompts.log.info(
-      "DevSpace can delegate work to these agents from ChatGPT or another coding agent.",
+      "Client selection and optional local subagent providers are independent.",
     );
     const providerAnswer = await prompts.multiselect({
-      message: "Which agents can DevSpace use as subagents?",
+      message: "Optional: which local agents may Runtime use for delegated work?",
       options: availability.map((provider) => ({
         value: provider.name,
         label: provider.name,
@@ -261,7 +249,7 @@ async function runInit({ force }: { force: boolean }): Promise<void> {
           : `unavailable: ${provider.reason ?? "provider preflight failed"}`,
       })),
       initialValues,
-      required: true,
+      required: false,
     });
     if (prompts.isCancel(providerAnswer)) throw new SetupCancelledError();
     const selectedProviders = providerAnswer as LocalAgentProvider[];
@@ -283,25 +271,36 @@ async function runInit({ force }: { force: boolean }): Promise<void> {
         ? [{ path: ["workspaces", "allowedRoots"], value: allowedRoots }]
         : []),
       { path: ["subagents"], value: subagents },
+      ...(destinations.includes("codex")
+        ? [{ path: ["tools", "mode"], value: "codex" }]
+        : destinations.includes("claude") || useChatGpt
+          ? [{ path: ["tools", "mode"], value: "claude" }]
+          : []),
     ]);
     writeDevspaceAuth(auth);
 
     const lines = [
       ...(allowedRoots ? [`Project folders: ${allowedRoots.join(", ")}`] : []),
-      `Subagents: ${selectedProviders.join(", ")}`,
+      `Subagents: ${selectedProviders.join(", ") || "disabled"}`,
       ...(publicBaseUrl ? [`ChatGPT connection URL: ${publicBaseUrl}/mcp`] : []),
     ];
-    prompts.note(lines.join("\n"), "DevSpace is ready");
-    if (useChatGpt) {
+    prompts.note(lines.join("\n"), "Flyto2 Runtime is ready");
+    {
       prompts.note(
         [
-          `Owner password: ${auth.ownerToken}`,
-          "Use this when ChatGPT asks you to approve DevSpace access.",
+          files.auth.ownerToken
+            ? "Your existing Owner password is unchanged."
+            : `Owner password: ${auth.ownerToken}`,
+          "Use this to approve your MCP client in the Runtime OAuth page.",
         ].join("\n"),
         "Owner password",
       );
     }
-    if (useCodingAgents) {
+    const connectionUrl = `${publicBaseUrl ?? files.config.server.publicBaseUrl ?? `http://127.0.0.1:${port}`}/mcp`;
+    for (const destination of destinations) {
+      prompts.note(clientConnectionInstructions(destination, connectionUrl), `Connect ${destination}`);
+    }
+    if (useCodingAgents && selectedProviders.length > 0) {
       prompts.note(
         [
           SUBAGENT_SKILL_INSTALL_COMMAND,
@@ -312,8 +311,8 @@ async function runInit({ force }: { force: boolean }): Promise<void> {
       );
     }
     const nextSteps = [
-      useChatGpt ? "Run `devspace serve`, then connect ChatGPT." : undefined,
-      useCodingAgents ? "Run the skill command above before delegating from your Coding Agents." : undefined,
+      "Choose Start Runtime in the launcher, or run `flyto2-runtime serve`, then authorize your MCP client.",
+      useCodingAgents && selectedProviders.length > 0 ? "The Subagents skill is optional for local CLI delegation." : undefined,
     ].filter(Boolean).join(" ");
     prompts.outro(nextSteps);
   } catch (error) {
@@ -340,11 +339,24 @@ async function serve(): Promise<void> {
   }
 
   const config = loadConfig();
+  // A Desktop launcher can be opened while the background Runtime is already serving.
+  const localHost = ["0.0.0.0", "::"].includes(config.host) ? "127.0.0.1" : config.host;
+  const localUrl = `http://${localHost.includes(":") ? `[${localHost}]` : localHost}:${config.port}`;
+  try {
+    const response = await fetch(`${localUrl}/healthz`, { signal: AbortSignal.timeout(1500) });
+    const health = await response.json() as { ok?: boolean; name?: string };
+    if (health.ok && health.name === "flyto2-runtime") {
+      console.log(`Flyto2 Runtime is already serving at ${localUrl}/mcp`);
+      return;
+    }
+  } catch {
+    // No healthy Runtime on the configured listener; start it below.
+  }
   await runStartupWorktreeCleanup(config);
   const { createServer } = await import("./server.js");
   const { app, close, localAgentProviders } = createServer(config);
   const httpServer = app.listen(config.port, config.host, () => {
-    console.log(`devspace listening on http://${config.host}:${config.port}/mcp`);
+    console.log(`Flyto2 Runtime listening on http://${config.host}:${config.port}/mcp`);
     console.log(`public base url: ${config.publicBaseUrl}`);
     console.log(`allowed roots: ${config.allowedRoots.join(", ")}`);
     console.log(`allowed hosts: ${config.allowedHosts.join(", ")}`);
@@ -537,7 +549,7 @@ async function runInteractiveMenu(): Promise<void> {
         { value: "doctor", label: "Doctor", hint: "Check config and native dependencies" },
         { value: "manifest", label: "Capability manifest" },
         { value: "pair", label: "Pair with Flyto2 Cloud" },
-        { value: "setup", label: "Setup / reconfigure" },
+        { value: "setup", label: "Setup / choose client", hint: "Codex, ChatGPT, Claude, or custom MCP" },
         { value: "launcher", label: "Install Desktop launcher" },
         { value: "quit", label: "Quit" },
       ],

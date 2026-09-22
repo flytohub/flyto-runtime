@@ -1,6 +1,6 @@
 # Setup Guide
 
-This guide covers ChatGPT and Coding Agents using DevSpace with local projects.
+This guide covers Codex, ChatGPT, Claude, and custom MCP clients using Flyto2 Runtime with local projects.
 
 ## Requirements
 
@@ -20,20 +20,19 @@ proxy.
 Run:
 
 ```bash
-npx @waishnav/devspace init
+flyto2-runtime init
 ```
 
 The setup flow asks one question at a time.
 
-First choose where you will use DevSpace: ChatGPT, Coding Agents, or both.
+First choose one or more clients: **Codex**, **ChatGPT**, **Claude**, or **Direct MCP / custom client**.
 DevSpace uses that answer to skip setup that does not apply to you.
 This selects where you invoke DevSpace from. It does not control which agents
 DevSpace may run for delegated work.
 
 ### Project roots
 
-If you selected ChatGPT, choose the project folders it may open through
-DevSpace. Keep this narrow.
+Every MCP client selects the project folders it may open through Runtime. Keep this narrow.
 
 Examples:
 
@@ -49,16 +48,39 @@ Examples:
 C:\Users\alice\dev,C:\Users\alice\work
 ```
 
-A Coding Agents-only setup skips this question. Direct `devspace agents`
-commands use the current Git project, or the current directory outside a
-repository, with the authority of your local shell. MCP workspace operations
-remain limited to the roots configured for ChatGPT.
+All clients share the existing `config.jsonc`, allowed roots, state, and OAuth configuration.
+No Flyto2 Cloud account or public tunnel is required for local MCP use.
+Selecting a local client preserves any existing public tunnel URL.
+
+### Connect Codex
+
+Choose **Setup / choose client** in the Desktop launcher, then **Codex**.
+Setup displays connection instructions and selects the existing Codex tool surface.
+It does not register any client or launch OAuth automatically. Only if you want
+to connect Codex, run the displayed `codex mcp add` command, start Runtime, then
+complete OAuth authorization:
+
+```bash
+codex mcp login flyto2-runtime
+```
+
+Approve access with your Runtime Owner password and reopen Codex to load the
+tools. For ChatGPT-only use, select only ChatGPT and leave optional subagents unselected.
+Codex owns its MCP
+configuration and OAuth credentials; Runtime does not duplicate them.
+
+### Connect Claude or a custom client
+
+Claude setup prints the `claude mcp add --transport http` command. Use `/mcp`
+in Claude Code to authorize. Other clients use the displayed Streamable HTTP
+URL and OAuth discovery. The standalone Runtime works without Flyto2 Cloud.
 
 ### Subagents
 
-Setup detects supported agents and asks which ones DevSpace may use as
+Setup separately detects supported agents and asks which ones Runtime may use as
 subagents. ChatGPT or another coding agent can delegate work through DevSpace
 to the agents selected here.
+You can leave all providers unselected to disable delegation; MCP still works.
 These choices are stored as provider objects under `subagents` in
 `~/.devspace/config.jsonc`.
 
@@ -67,7 +89,7 @@ These choices are stored as provider objects under `subagents` in
 If you selected Coding Agents, setup prints:
 
 ```bash
-npx skills add Waishnav/devspace --skill subagents --global
+npx skills add flytohub/flyto-runtime --skill subagents --global
 ```
 
 The Skills CLI asks which installed Coding Agents should receive the skill.
@@ -172,3 +194,27 @@ pnpm dev
 The source server uses an ignored checkout-local fork of your normal DevSpace
 configuration and SQLite state. See [Development and Manual QA](development.md)
 for worktree switching, ChatGPT testing, and database migration workflows.
+
+## Existing macOS background installation
+
+Desktop launchers preserve the `DEVSPACE_CONFIG_DIR` active when installed.
+To point them at an existing service configuration, set that environment variable
+and run `flyto2-runtime launcher install`. Start Runtime recognizes a healthy
+background Runtime on its configured port.
+
+Before migrating an old DevSpace service, validate this checkout and a copy of
+its existing SQLite state on a separate port. Back up the service settings and
+state, disable the old upstream updater, and point the service entry at this
+checkout's `dist/cli.js` with the same Node runtime used to build dependencies.
+Keep the tunnel configuration, owner credentials, allowed roots and storage paths.
+The legacy Mac Kit supervisor must update the public URL through Runtime's
+`setDevspaceConfigValue` from `dist/user-config.js`: migration replaces the old
+`config.json` with `config.jsonc`, so its old read/write logic must be adapted
+before restarting. Do not maintain a second legacy config copy.
+Restart only the Runtime child after validation; verify `/healthz`, OAuth and MCP
+before treating the migration as complete. Keep the backup for rollback.
+
+Existing ChatGPT connections with cached DevSpace schemas remain supported: the
+ChatGPT setup selects the standard read/write/edit/bash tool surface; this is
+independent of local-agent providers. The HTTP boundary translates legacy `workspaceId`, `workingDirectory`, and `baseRef`
+arguments to their Runtime equivalents. Conflicting old and new values are rejected.

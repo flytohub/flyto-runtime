@@ -1,6 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { devspaceConfigDir } from "../user-config.js";
 import { fileURLToPath } from "node:url";
 
 export interface InstalledMacLaunchers {
@@ -15,6 +16,7 @@ export function flyto2RuntimePackageRoot(): string {
 export function installMacDesktopLaunchers(
   packageRoot = flyto2RuntimePackageRoot(),
   desktopRoot = join(homedir(), "Desktop"),
+  configDirectory = devspaceConfigDir(),
 ): InstalledMacLaunchers {
   if (platform() !== "darwin") {
     throw new Error("Desktop .command launchers are supported on macOS only.");
@@ -43,6 +45,8 @@ export function installMacDesktopLaunchers(
       [
         "#!/bin/bash",
         "set -u",
+        `export PATH=${shellQuote(dirname(process.execPath))}:"$PATH"`,
+        `export DEVSPACE_CONFIG_DIR=${shellQuote(configDirectory)}`,
         `exec ${shellQuote(sourceLauncher)} ${shellQuote(mode)}`,
         "",
       ].join("\n"),
