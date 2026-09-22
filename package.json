@@ -36,7 +36,7 @@
   },
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
-    "build": "pnpm clean && pnpm build:app && tsc -p tsconfig.build.json",
+    "build": "pnpm clean && pnpm build:app && tsc -p tsconfig.build.json && tsx scripts/generate-build-info.ts",
     "build:app": "vite build",
     "lint": "tsx scripts/lint-flyto2.ts",
     "dev": "tsx scripts/dev.ts",

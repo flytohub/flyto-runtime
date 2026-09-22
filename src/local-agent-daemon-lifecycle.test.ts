@@ -57,6 +57,20 @@ try {
     "daemon secrets must be exactly 64 hexadecimal characters",
   );
   removeLocalAgentDaemonFiles(paths);
+
+  const longStateDir = join(
+    root,
+    "a".repeat(70),
+    "b".repeat(70),
+    "state",
+  );
+  const longPaths = localAgentDaemonPaths(longStateDir, "darwin");
+  assert.ok(
+    Buffer.byteLength(longPaths.endpoint, "utf8") <= 90,
+    `Unix socket endpoint is too long: ${longPaths.endpoint}`,
+  );
+  assert.match(longPaths.endpoint, /^\/tmp\/flyto2-agentd-[0-9a-f]{24}\.sock$/);
+  assert.equal(longPaths.socketPath, longPaths.endpoint);
 } finally {
   await rm(root, { recursive: true, force: true });
 }

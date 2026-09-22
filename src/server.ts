@@ -23,6 +23,8 @@ import {
   registerArtifactTools,
 } from "./artifact-tools.js";
 import { loadConfig, type ServerConfig } from "./config.js";
+import { DEVSPACE_CONFIG_VERSION } from "./config-schema.js";
+import { FLYTO2_STATE_SCHEMA_VERSION } from "./db/migrations.js";
 import {
   createOpenAIIncomingArtifactAdapter,
   type IncomingArtifactAdapter,
@@ -47,6 +49,8 @@ import { shutdownHttpServer } from "./server-shutdown.js";
 import { formatPathForPrompt } from "./skills.js";
 import { DEVSPACE_VERSION } from "./version.js";
 import { createWorkspaceStore } from "./workspace-store.js";
+import { flyto2BuildInfo } from "./flyto2/build-info.js";
+import { nativeTunnelStatus } from "./flyto2/macos-tunnel.js";
 import { DurableOperationStore } from "./flyto2/durable-operations.js";
 import { withDurableToolHandlers } from "./flyto2/durable-tools.js";
 import { registerRuntimeTools } from "./flyto2/runtime-tools.js";
@@ -82,6 +86,17 @@ import {
 } from "./tool-surfaces/types.js";
 
 const WORKSPACE_APP_MANIFEST_ENTRY = "workspace-app.html";
+const RUNTIME_TOOL_SURFACE_NAMES = [
+  toolNames.runtimeManifest,
+  toolNames.runtimeEvents,
+  toolNames.runtimeWait,
+  toolNames.runtimeRun,
+  toolNames.runtimeEvidence,
+  toolNames.runtimeSignal,
+  toolNames.runtimeWatch,
+  toolNames.runtimeUnwatch,
+  toolNames.runtimeWatches,
+] as const;
 
 function mcpServerInfo() {
   return {
@@ -143,7 +158,7 @@ function serverInstructions(
     : "";
   const agents = `Follow instructions returned by ${toolNames.openWorkspace}. Before working under a path listed in available_agents_files, use ${toolNames.read} to inspect that instruction file and follow it. `;
   const common = `Call ${toolNames.openWorkspace} when starting work in a project folder or isolated worktree without a usable workspace_id, then reuse the returned workspace_id for subsequent operations in that workspace.`;
-  const reactive = ` For long-running tests, builds, or non-interactive commands, prefer ${toolNames.runtimeRun} followed by one ${toolNames.runtimeWait} for the expected event instead of repeatedly polling process output. When waiting for changes made by an editor, Git, build tool, or another local program, use ${toolNames.runtimeWatch} and ${toolNames.runtimeWait} instead of repeatedly rereading files. Runtime events are shallow; call ${toolNames.runtimeEvidence} only when the event summary is insufficient.`;
+  const reactive = ` For long-running tests, builds, or non-interactive commands, prefer ${toolNames.runtimeRun} followed by one ${toolNames.runtimeWait} for the expected event instead of repeatedly polling process output. If a connection drops after ${toolNames.runtimeRun}, do not rerun the side effect: resume ${toolNames.runtimeWait} with the returned job_id as correlation_id and event_type as type so a persisted completion can be replayed. When waiting for changes made by an editor, Git, build tool, or another local program, use ${toolNames.runtimeWatch} and ${toolNames.runtimeWait} instead of repeatedly rereading files; after reconnect, the same rule applies using the watch_id as correlation_id and its event type. Runtime events are shallow; call ${toolNames.runtimeEvidence} only when the event summary is insufficient.`;
 
   return `${common} ${toolSurface.instructions({ agents, skills })}${reactive}${artifactInstruction}${showChangesInstruction}`;
 }
@@ -214,6 +229,28 @@ function sendJsonRpcError(
     error: { code, message },
     id: null,
   });
+}
+
+function shouldTrustLocalPublicProxy(config: ServerConfig): boolean {
+  if (config.logging.trustProxy) return false;
+  const bindHost = config.host.replace(/^\[|\]$/g, "");
+  if (!["127.0.0.1", "::1", "localhost"].includes(bindHost)) return false;
+  const publicHost = new URL(config.publicBaseUrl).hostname.replace(/^\[|\]$/g, "");
+  return !["127.0.0.1", "::1", "localhost"].includes(publicHost);
+}
+
+function isChatGptRequest(req: Request): boolean {
+  const fingerprint = [
+    req.header("user-agent"),
+    req.header("origin"),
+    req.header("referer"),
+    req.header("x-openai-host"),
+    req.header("x-chatgpt-client"),
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join(" ")
+    .toLowerCase();
+  return fingerprint.includes("chatgpt") || fingerprint.includes("openai");
 }
 
 function requestLogFields(req: Request, config: ServerConfig): Record<string, unknown> {
@@ -869,9 +906,18 @@ export function createServer(
     getLocalAgentProviderAvailabilitySnapshot(process.env, config.subagents),
   );
   const modernToolSurface = getToolSurface(config.toolMode);
+  const registeredToolNames = new Set<string>();
   const bindModernMcpSurface = compileMcpRegistrationSurface((target) => {
+    const observedTarget: McpRegistrationTarget = {
+      registerTool: ((...args: unknown[]) => {
+        const [name] = args;
+        if (typeof name === "string") registeredToolNames.add(name);
+        return (target.registerTool as (...callArgs: unknown[]) => unknown)(...args);
+      }) as McpRegistrationTarget["registerTool"],
+      registerResource: target.registerResource,
+    };
     registerMcpSurface(
-      target,
+      observedTarget,
       config,
       workspaces,
       reviewCheckpoints,
@@ -885,6 +931,10 @@ export function createServer(
       toolActivities.track,
     );
   });
+  const buildInfo = flyto2BuildInfo();
+  const processStartedAt = new Date().toISOString();
+  let lastMcpSuccessAt: string | null = null;
+  let lastChatGptSuccessAt: string | null = null;
   const logMcpHandlerError = (error: Error) => logEvent(
     config.logging,
     "error",
@@ -906,8 +956,17 @@ export function createServer(
     onerror: logMcpHandlerError,
   });
 
+  const proxyTrustMode = config.logging.trustProxy
+    ? "configured"
+    : shouldTrustLocalPublicProxy(config)
+      ? "loopback-public-proxy"
+      : "disabled";
   if (config.logging.trustProxy) {
     app.set("trust proxy", true);
+  } else if (proxyTrustMode === "loopback-public-proxy") {
+    // Runtime binds to loopback while a local tunnel/reverse proxy owns the public edge.
+    // Trust only loopback peers so proxy-aware middleware can safely interpret forwarded headers.
+    app.set("trust proxy", "loopback");
   }
 
   app.use((req, res, next) => {
@@ -960,7 +1019,62 @@ export function createServer(
   );
 
   app.get("/healthz", (_req, res) => {
-    res.json({ ok: true, name: "flyto2-runtime", product: "Flyto2" });
+    const reactive = reactiveCommands.health();
+    const watches = workspaceWatches.health();
+    const registeredTools = Array.from(registeredToolNames).sort();
+    const runtimeToolsLoaded = RUNTIME_TOOL_SURFACE_NAMES.every(
+      (name) => registeredToolNames.has(name),
+    );
+    const publicMcpUrl = new URL("/mcp", config.publicBaseUrl).toString();
+    const publicUrl = new URL(config.publicBaseUrl);
+    const tunnelConfigured = !["localhost", "127.0.0.1", "::1", "[::1]"]
+      .includes(publicUrl.hostname);
+    const nativeTunnel = nativeTunnelStatus();
+
+    res.json({
+      ok: true,
+      name: "flyto2-runtime",
+      product: "Flyto2",
+      runtime: {
+        version: DEVSPACE_VERSION,
+        git_sha: buildInfo.git_sha,
+        build_timestamp: buildInfo.built_at,
+        git_dirty: buildInfo.git_dirty,
+        build_info_source: buildInfo.source,
+        pid: process.pid,
+        started_at: processStartedAt,
+      },
+      schema: {
+        config: DEVSPACE_CONFIG_VERSION,
+        state: FLYTO2_STATE_SCHEMA_VERSION,
+      },
+      tunnel: {
+        configured: tunnelConfigured,
+        public_base_url: config.publicBaseUrl,
+        native_service: {
+          supported: nativeTunnel.supported,
+          configured: nativeTunnel.configured,
+          loaded: nativeTunnel.loaded,
+          label: nativeTunnel.label,
+          ...(nativeTunnel.state ? { state: nativeTunnel.state } : {}),
+          ...(nativeTunnel.hostname ? { hostname: nativeTunnel.hostname } : {}),
+        },
+      },
+      mcp: {
+        status: "ready",
+        endpoint: publicMcpUrl,
+        tool_mode: config.toolMode,
+        proxy_trust: proxyTrustMode,
+        registered_tools: registeredTools,
+        registered_tool_count: registeredTools.length,
+        runtime_tools_expected: [...RUNTIME_TOOL_SURFACE_NAMES],
+        full_runtime_tools_loaded: runtimeToolsLoaded,
+        last_successful_request_at: lastMcpSuccessAt,
+        last_chatgpt_success_at: lastChatGptSuccessAt,
+      },
+      reactive_jobs: reactive,
+      watchers: watches,
+    });
   });
 
   app.all("/mcp", async (req, res) => {
@@ -1000,6 +1114,9 @@ export function createServer(
     }
     try {
       await mcpNodeHandler(req, res, requestBody);
+      const now = new Date().toISOString();
+      lastMcpSuccessAt = now;
+      if (isChatGptRequest(req)) lastChatGptSuccessAt = now;
     } catch (error) {
       logEvent(config.logging, "error", "mcp_request_error", {
         requestId,
@@ -1058,7 +1175,9 @@ if (await isMainModule()) {
     console.log(`logging: ${config.logging.level} ${config.logging.format}`);
     console.log(`request logging: ${config.logging.requests ? "enabled" : "disabled"}`);
     console.log(`asset logging: ${config.logging.assets ? "enabled" : "disabled"}`);
-    console.log(`trust proxy: ${config.logging.trustProxy ? "enabled" : "disabled"}`);
+    console.log(
+      `trust proxy: ${config.logging.trustProxy ? "configured" : shouldTrustLocalPublicProxy(config) ? "loopback-public-proxy" : "disabled"}`,
+    );
     const artifactDownloadStatus = !config.artifactsEnabled
       ? "disabled"
       : isArtifactDownloadSupportedPlatform()

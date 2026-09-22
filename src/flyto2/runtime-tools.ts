@@ -80,6 +80,7 @@ export function registerRuntimeTools(
         after_sequence: z.number().int().nonnegative().optional(),
         workspace_id: z.string().optional(),
         type: z.string().optional(),
+        correlation_id: z.string().optional(),
         limit: z.number().int().min(1).max(200).optional(),
       },
       outputSchema: {
@@ -89,11 +90,12 @@ export function registerRuntimeTools(
       },
       annotations: { readOnlyHint: true },
     },
-    async ({ after_sequence, workspace_id, type, limit }) => {
+    async ({ after_sequence, workspace_id, type, correlation_id, limit }) => {
       const events = runtimeEvents.list({
         after_sequence,
         workspace_id,
         type,
+        correlation_id,
         limit,
       });
       const nextSequence =
@@ -125,11 +127,12 @@ export function registerRuntimeTools(
     {
       title: "Wait for Runtime event",
       description:
-        "Wait once for the next matching shallow Runtime event instead of repeatedly polling. Omit after_sequence to wait only for future events; pass the last seen sequence to resume after reconnect.",
+        "Wait once for the next matching shallow Runtime event instead of repeatedly polling. Pass the last seen after_sequence to resume a stream. After a disconnect where a wait response may have been lost, pass the returned job/watch id as correlation_id together with its event type; without after_sequence Runtime will replay an already-persisted matching event before waiting for a future one.",
       inputSchema: {
         after_sequence: z.number().int().nonnegative().optional(),
         workspace_id: z.string().optional(),
         type: z.string().optional(),
+        correlation_id: z.string().optional(),
         timeout_ms: z.number().int().min(0).max(25_000).optional(),
       },
       outputSchema: {
@@ -139,12 +142,13 @@ export function registerRuntimeTools(
       },
       annotations: { readOnlyHint: true },
     },
-    async ({ after_sequence, workspace_id, type, timeout_ms }) => {
-      const cursor = after_sequence ?? runtimeEvents.latestSequence();
+    async ({ after_sequence, workspace_id, type, correlation_id, timeout_ms }) => {
+      const cursor = after_sequence ?? (correlation_id ? 0 : runtimeEvents.latestSequence());
       const event = await runtimeEvents.wait({
         after_sequence: cursor,
         workspace_id,
         type,
+        correlation_id,
         timeout_ms,
       });
       const nextCursor = event?.sequence ?? cursor;
@@ -204,7 +208,7 @@ export function registerRuntimeTools(
         event_type,
       });
       const result =
-        `Reactive job ${receipt.job_id} started. Wait for ${receipt.event_type} with runtime_wait; load ${receipt.evidence_ref} only if details are needed.`;
+        `Reactive job ${receipt.job_id} started. Wait for ${receipt.event_type} with runtime_wait. If the connection drops, resume with correlation_id=${receipt.job_id} and type=${receipt.event_type} instead of rerunning the command; load ${receipt.evidence_ref} only if details are needed.`;
       return {
         content: [textBlock(result)],
         structuredContent: {

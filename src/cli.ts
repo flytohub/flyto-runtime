@@ -72,6 +72,7 @@ type Command =
   | "flyto2"
   | "menu"
   | "launcher"
+  | "service"
   | "help"
   | "version";
 const require = createRequire(import.meta.url);
@@ -115,6 +116,9 @@ async function main(argv: string[]): Promise<void> {
     case "launcher":
       await runLauncherCommand(args);
       return;
+    case "service":
+      await runServiceCommand(args);
+      return;
     case "help":
       printHelp();
       return;
@@ -136,6 +140,7 @@ function normalizeCommand(command: string | undefined): Command {
     || command === "flyto2"
     || command === "menu"
     || command === "launcher"
+    || command === "service"
   ) return command;
   if (command === "help" || command === "--help" || command === "-h") return "help";
   if (command === "version" || command === "--version" || command === "-v") return "version";
@@ -444,6 +449,17 @@ async function runDoctor(): Promise<void> {
     );
     console.log(`Subagents: ${config.subagents.enabled ? "enabled" : "disabled"}`);
     console.log(`Subagent providers: ${formatLocalAgentProviderStatusSummary(providers)}`);
+    if (process.platform === "darwin") {
+      const service = await import("./flyto2/macos-service.js");
+      const runtimeService = service.macRuntimeServiceStatus();
+      const legacyService = service.legacyMacKitStatus();
+      console.log(
+        `Background service: ${runtimeService.loaded ? "running" : runtimeService.installed ? "installed" : "not installed"} (${runtimeService.label})`,
+      );
+      console.log(
+        `Legacy Mac Kit: service=${legacyService.serviceLoaded ? "loaded" : "stopped"}, updater=${legacyService.updaterLoaded ? "loaded" : "stopped"}`,
+      );
+    }
   } catch (error) {
     console.log(`Config status: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -506,6 +522,129 @@ async function runWorktreesCommand(args: string[]): Promise<void> {
   if (result.failed.length > 0) process.exitCode = 1;
 }
 
+async function runServiceCommand(args: string[]): Promise<void> {
+  const [subcommand = "status", ...rest] = args;
+  const usage =
+    "Usage: flyto2-runtime service <stage|install|start|stop|restart|status|update|rollback|uninstall|legacy-status|disable-legacy-updater|restore-legacy|tunnel-migrate|tunnel-start|tunnel-stop|tunnel-status>";
+  if (rest.length > 0) throw new Error(usage);
+
+  const service = await import("./flyto2/macos-service.js");
+  const tunnel = await import("./flyto2/macos-tunnel.js");
+  const startTunnelIfConfigured = () =>
+    tunnel.loadNativeTunnelProfile()
+      ? tunnel.startNativeTunnelService()
+      : tunnel.nativeTunnelStatus();
+  const stopTunnelIfConfigured = () =>
+    tunnel.loadNativeTunnelProfile()
+      ? tunnel.stopNativeTunnelService()
+      : tunnel.nativeTunnelStatus();
+
+  switch (subcommand) {
+    case "stage": {
+      const configDirectory = loadDevspaceFiles().dir;
+      const profile = tunnel.loadNativeTunnelProfile()
+        ?? tunnel.migrateLegacyCloudflareTunnel(configDirectory);
+      const tunnelStatus = tunnel.installNativeTunnelService(undefined, false);
+      const runtime = service.installMacRuntimeService({
+        configDirectory,
+        start: false,
+      });
+      console.log(JSON.stringify({
+        runtime,
+        tunnel: tunnelStatus,
+        tunnel_profile: profile,
+        legacy: service.legacyMacKitStatus(),
+      }, null, 2));
+      return;
+    }
+    case "install": {
+      const runtime = service.installMacRuntimeService();
+      const nativeTunnel = startTunnelIfConfigured();
+      console.log(JSON.stringify({ runtime, tunnel: nativeTunnel }, null, 2));
+      return;
+    }
+    case "start": {
+      const runtime = service.startMacRuntimeService();
+      const nativeTunnel = startTunnelIfConfigured();
+      console.log(JSON.stringify({ runtime, tunnel: nativeTunnel }, null, 2));
+      return;
+    }
+    case "stop": {
+      const nativeTunnel = stopTunnelIfConfigured();
+      const runtime = service.stopMacRuntimeService();
+      console.log(JSON.stringify({ runtime, tunnel: nativeTunnel }, null, 2));
+      return;
+    }
+    case "restart": {
+      const runtime = service.restartMacRuntimeService();
+      const nativeTunnel = startTunnelIfConfigured();
+      console.log(JSON.stringify({ runtime, tunnel: nativeTunnel }, null, 2));
+      return;
+    }
+    case "status":
+      console.log(JSON.stringify({
+        runtime: service.macRuntimeServiceStatus(),
+        tunnel: tunnel.nativeTunnelStatus(),
+        legacy: service.legacyMacKitStatus(),
+      }, null, 2));
+      return;
+    case "update": {
+      const updater = await import("./flyto2/github-release-updater.js");
+      const release = await updater.installLatestFlyto2Release();
+      const runtime = service.installMacRuntimeService({
+        packageRoot: release.package_root,
+        configDirectory: loadDevspaceFiles().dir,
+        start: false,
+      });
+      console.log(JSON.stringify({
+        runtime,
+        release,
+        update_source: "https://github.com/flytohub/flyto-runtime/releases/latest",
+        staged: true,
+        activation_command: "flyto2-runtime service restart",
+      }, null, 2));
+      return;
+    }
+    case "rollback":
+      console.log(JSON.stringify(service.rollbackMacRuntimeService(), null, 2));
+      return;
+    case "uninstall": {
+      const nativeTunnel = stopTunnelIfConfigured();
+      const runtime = service.uninstallMacRuntimeService();
+      console.log(JSON.stringify({ runtime, tunnel: nativeTunnel }, null, 2));
+      return;
+    }
+    case "legacy-status":
+      console.log(JSON.stringify(service.legacyMacKitStatus(), null, 2));
+      return;
+    case "disable-legacy-updater":
+      console.log(JSON.stringify(service.stopLegacyMacKitUpdater(), null, 2));
+      return;
+    case "restore-legacy":
+      console.log(JSON.stringify(service.restoreLegacyMacKit(), null, 2));
+      return;
+    case "tunnel-migrate": {
+      const profile = tunnel.migrateLegacyCloudflareTunnel(
+        loadDevspaceFiles().dir,
+      );
+      const status = tunnel.installNativeTunnelService(undefined, false);
+      console.log(JSON.stringify({ profile, status }, null, 2));
+      return;
+    }
+    case "tunnel-start":
+      console.log(JSON.stringify(tunnel.startNativeTunnelService(), null, 2));
+      return;
+    case "tunnel-stop":
+      console.log(JSON.stringify(tunnel.stopNativeTunnelService(), null, 2));
+      return;
+    case "tunnel-status":
+      console.log(JSON.stringify(tunnel.nativeTunnelStatus(), null, 2));
+      return;
+    default:
+      throw new Error(usage);
+  }
+}
+
 async function runLauncherCommand(args: string[]): Promise<void> {
   const [subcommand = "status", ...rest] = args;
   if (rest.length > 0) {
@@ -563,7 +702,12 @@ async function runInteractiveMenu(): Promise<void> {
     switch (action) {
       case "start":
         await ensureConfigured();
-        prompts.outro("Starting Flyto2 Runtime. Keep this window open while using direct MCP mode.");
+        if (process.platform === "darwin") {
+          await runServiceCommand(["start"]);
+          prompts.outro("Flyto2 Runtime background service is running.");
+          return;
+        }
+        prompts.outro("Starting Flyto2 Runtime.");
         await serve();
         return;
       case "status":
@@ -683,6 +827,7 @@ function printHelp(): void {
       "  flyto2-runtime flyto2 next   Wait for one Cloud assignment without executing it",
       "  flyto2-runtime menu          Open the interactive Flyto2 Runtime launcher",
       "  flyto2-runtime launcher install|status|remove",
+      "  flyto2-runtime service install|start|stop|restart|status|update|rollback|uninstall",
       "  devspace agents targets [--json]  List usable subagent providers and profiles",
       "  devspace agents ls       List subagent sessions",
       "  devspace agents run <profile-or-provider> [--model <model>] [--effort <level>] <prompt>",

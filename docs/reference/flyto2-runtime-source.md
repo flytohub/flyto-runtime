@@ -30,11 +30,27 @@ This reference documents the Flyto2-owned TypeScript surface layered on the upst
 - [`asRecord`](../../src/flyto2/durable-tools.ts#L85)
 
 ## macOS launcher
-- [`flyto2RuntimePackageRoot`](../../src/flyto2/macos-launcher.ts#L11)
-- [`installMacDesktopLaunchers`](../../src/flyto2/macos-launcher.ts#L15)
-- [`removeMacDesktopLaunchers`](../../src/flyto2/macos-launcher.ts#L58)
-- [`macDesktopLauncherStatus`](../../src/flyto2/macos-launcher.ts#L69)
-- [`shellQuote`](../../src/flyto2/macos-launcher.ts#L79)
+- [`flyto2RuntimePackageRoot`](../../src/flyto2/macos-launcher.ts)
+- [`installMacDesktopLaunchers`](../../src/flyto2/macos-launcher.ts)
+- [`removeMacDesktopLaunchers`](../../src/flyto2/macos-launcher.ts)
+- [`macDesktopLauncherStatus`](../../src/flyto2/macos-launcher.ts)
+
+## Native macOS Runtime service
+- [`installMacRuntimeService`](../../src/flyto2/macos-service.ts) — installs `local.flyto2.runtime` directly against the Flyto2 Runtime CLI.
+- [`startMacRuntimeService`](../../src/flyto2/macos-service.ts)
+- [`restartMacRuntimeService`](../../src/flyto2/macos-service.ts)
+- [`rollbackMacRuntimeService`](../../src/flyto2/macos-service.ts)
+- [`macRuntimeServiceStatus`](../../src/flyto2/macos-service.ts)
+- [`legacyMacKitStatus`](../../src/flyto2/macos-service.ts) — reports legacy service/updater state during migration without making them Runtime dependencies.
+
+## Native Cloudflare tunnel migration
+- [`migrateLegacyCloudflareTunnel`](../../src/flyto2/macos-tunnel.ts) — copies the existing fixed tunnel into Flyto2-owned storage without exposing credentials.
+- [`installNativeTunnelService`](../../src/flyto2/macos-tunnel.ts)
+- [`startNativeTunnelService`](../../src/flyto2/macos-tunnel.ts)
+- [`nativeTunnelStatus`](../../src/flyto2/macos-tunnel.ts)
+
+## Build identity
+- [`flyto2BuildInfo`](../../src/flyto2/build-info.ts) — resolves Runtime version, source Git SHA, and build timestamp for the auditable health surface.
 
 ## Runtime manifest
 - [`runtimeManifest`](../../src/flyto2/manifest.ts#L34)

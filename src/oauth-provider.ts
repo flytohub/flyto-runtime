@@ -28,6 +28,7 @@ interface AuthorizationCodeRecord {
 }
 
 const CODE_TTL_MS = 5 * 60 * 1000;
+export const OAUTH_REFRESH_RETRY_GRACE_SECONDS = 15 * 60;
 
 function randomToken(): string {
   return randomBytes(32).toString("base64url");
@@ -316,7 +317,13 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
           resource: resource?.href,
         },
       },
-      consumedRefreshTokenHash,
+      consumedRefreshTokenHash
+        ? {
+            tokenHash: consumedRefreshTokenHash,
+            now,
+            retryUntil: now + OAUTH_REFRESH_RETRY_GRACE_SECONDS,
+          }
+        : undefined,
     );
     if (!saved) {
       throw new InvalidGrantError("Invalid refresh token");

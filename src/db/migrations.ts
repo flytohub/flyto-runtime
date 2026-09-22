@@ -64,6 +64,9 @@ const migrations: Migration[] = [
   },
 ];
 
+export const FLYTO2_STATE_SCHEMA_VERSION =
+  migrations.at(-1)?.version ?? 0;
+
 export function migrateDatabase(sqlite: Database.Database): void {
   const migrate = sqlite.transaction(() => {
     sqlite.exec(`

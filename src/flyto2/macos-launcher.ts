@@ -46,6 +46,7 @@ export function installMacDesktopLaunchers(
         "#!/bin/bash",
         "set -u",
         `export PATH=${shellQuote(dirname(process.execPath))}:"$PATH"`,
+        `export FLYTO2_RUNTIME_CONFIG_DIR=${shellQuote(configDirectory)}`,
         `export DEVSPACE_CONFIG_DIR=${shellQuote(configDirectory)}`,
         `exec ${shellQuote(sourceLauncher)} ${shellQuote(mode)}`,
         "",

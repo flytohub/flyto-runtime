@@ -135,8 +135,11 @@ jobs:
           test -n "$filename"
           tarball=".release/$filename"
           integrity="sha512-$(openssl dgst -sha512 -binary "$tarball" | openssl base64 -A)"
+          checksum="$tarball.sha256"
+          (cd .release && sha256sum "$filename" > "$filename.sha256")
           echo "filename=$filename" >> "$GITHUB_OUTPUT"
           echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
+          echo "checksum=$checksum" >> "$GITHUB_OUTPUT"
           echo "integrity=$integrity" >> "$GITHUB_OUTPUT"
 
       - name: Inspect existing publication
@@ -229,7 +232,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.release.outputs.tag }}
           TARBALL: ${{ steps.pack.outputs.tarball }}
-        run: gh release upload "$TAG" "$TARBALL" --clobber
+          CHECKSUM: ${{ steps.pack.outputs.checksum }}
+        run: gh release upload "$TAG" "$TARBALL" "$CHECKSUM" --clobber
 
       - name: Setup npm trusted publishing
         if: steps.publication.outputs.complete != 'true' && steps.publication.outputs.npm_exists != 'true'

@@ -34,7 +34,11 @@ export function localAgentDaemonPaths(
   platform: NodeJS.Platform = process.platform,
 ): LocalAgentDaemonPaths {
   const resolvedStateDir = resolve(stateDir);
-  const socketPath = join(resolvedStateDir, LOCAL_AGENT_DAEMON_SOCKET_NAME);
+  const defaultSocketPath = join(resolvedStateDir, LOCAL_AGENT_DAEMON_SOCKET_NAME);
+  const socketPath = platform !== "win32"
+    && Buffer.byteLength(defaultSocketPath, "utf8") > 90
+    ? join("/tmp", `flyto2-agentd-${hashStateDir(resolvedStateDir)}.sock`)
+    : defaultSocketPath;
   return {
     stateDir: resolvedStateDir,
     socketPath,

@@ -31,6 +31,7 @@ test("macOS launcher install creates executable desktop shortcuts to one Runtime
     assert.equal(mode, 0o700);
     const body = await readFile(launcher, "utf8");
     assert.match(body, /Flyto2 Runtime\.command/);
+    assert.ok(body.includes(`export FLYTO2_RUNTIME_CONFIG_DIR='${configDirectory}'`));
     assert.ok(body.includes(`export DEVSPACE_CONFIG_DIR='${configDirectory}'`));
     assert.match(body, /^#!\/bin\/bash/m);
   }

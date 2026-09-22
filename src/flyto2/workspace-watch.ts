@@ -38,6 +38,13 @@ export interface WorkspaceWatchRecord {
   updated_at: string;
 }
 
+export interface WorkspaceWatchHealth {
+  native_active: number;
+  active: number;
+  stopped: number;
+  error: number;
+}
+
 interface WorkspaceWatchRow {
   id: string;
   workspace_id: string;
@@ -196,6 +203,23 @@ export class WorkspaceWatchRegistry {
           .all();
 
     return (rows as WorkspaceWatchRow[]).map(watchRecordFromRow);
+  }
+
+  health(): WorkspaceWatchHealth {
+    const rows = this.database.sqlite
+      .prepare(
+        `select status, count(*) as count
+         from flyto2_workspace_watches
+         group by status`,
+      )
+      .all() as Array<{ status: WorkspaceWatchRecord["status"]; count: number }>;
+    const counts = new Map(rows.map((row) => [row.status, Number(row.count)]));
+    return {
+      native_active: this.active.size,
+      active: counts.get("active") ?? 0,
+      stopped: counts.get("stopped") ?? 0,
+      error: counts.get("error") ?? 0,
+    };
   }
 
   shutdown(): void {

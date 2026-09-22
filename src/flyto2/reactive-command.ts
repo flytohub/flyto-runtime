@@ -47,6 +47,14 @@ export interface ReactiveJobRecord {
   signal?: string;
 }
 
+export interface ReactiveRunnerHealth {
+  active_processes: number;
+  running: number;
+  completed: number;
+  failed: number;
+  orphaned: number;
+}
+
 interface ReactiveJobRow {
   id: string;
   workspace_id: string;
@@ -190,6 +198,24 @@ export class ReactiveCommandRunner {
       )
       .get(jobId) as ReactiveJobRow | undefined;
     return row ? reactiveJobFromRow(row) : undefined;
+  }
+
+  health(): ReactiveRunnerHealth {
+    const rows = this.database.sqlite
+      .prepare(
+        `select status, count(*) as count
+         from flyto2_reactive_jobs
+         group by status`,
+      )
+      .all() as Array<{ status: ReactiveJobRecord["status"]; count: number }>;
+    const counts = new Map(rows.map((row) => [row.status, Number(row.count)]));
+    return {
+      active_processes: this.active.size,
+      running: counts.get("running") ?? 0,
+      completed: counts.get("completed") ?? 0,
+      failed: counts.get("failed") ?? 0,
+      orphaned: counts.get("orphaned") ?? 0,
+    };
   }
 
   readEvidence(

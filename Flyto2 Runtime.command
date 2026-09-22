@@ -52,7 +52,7 @@ case "$MODE" in
     node dist/cli.js menu
     ;;
   start)
-    node dist/cli.js serve
+    node dist/cli.js service start
     ;;
   doctor)
     node dist/cli.js doctor
@@ -62,6 +62,9 @@ case "$MODE" in
     ;;
   launcher-install)
     node dist/cli.js launcher install
+    ;;
+  install)
+    node dist/cli.js service install && node dist/cli.js launcher install
     ;;
   *)
     node dist/cli.js "$MODE"

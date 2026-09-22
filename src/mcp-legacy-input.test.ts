@@ -14,6 +14,30 @@ test("legacy normalization preserves canonical payloads, operation IDs and metad
   assert.deepEqual(normalizeLegacyMcpInput(normalized), normalized);
 });
 
+test("legacy edit entries survive cached ChatGPT camelCase schemas", () => {
+  const body = { method: "tools/call", params: { name: "edit", arguments: {
+    workspaceId: "ws_a",
+    path: "example.txt",
+    edits: [{ oldText: "before", newText: "after" }],
+  } } };
+  assert.deepEqual(normalizeLegacyMcpInput(body), { method: "tools/call", params: { name: "edit", arguments: {
+    workspace_id: "ws_a",
+    path: "example.txt",
+    edits: [{ old_text: "before", new_text: "after" }],
+  } } });
+});
+
+test("legacy edit translation rejects conflicting cached and canonical fields", () => {
+  assert.throws(
+    () => normalizeLegacyMcpInput({ method: "tools/call", params: { name: "edit", arguments: {
+      workspaceId: "ws_a",
+      path: "example.txt",
+      edits: [{ oldText: "before", old_text: "different", newText: "after" }],
+    } } }),
+    /Conflicting edits\[0\]\.oldText and edits\[0\]\.old_text arguments/,
+  );
+});
+
 test("legacy translation is restricted to known tool arguments", () => {
   const body = { method: "tools/call", params: { name: "runtime_run", arguments: { workspaceId: "ws_a" } } };
   assert.equal(normalizeLegacyMcpInput(body), body);

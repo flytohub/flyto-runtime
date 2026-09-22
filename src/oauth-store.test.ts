@@ -152,7 +152,9 @@ function testTransactionalTokenRotation(stateDir: string): void {
     const client = new SqliteOAuthClientsStore(store, oauthConfig.allowedRedirectHosts).registerClient({
       redirect_uris: [redirectUri],
     });
-    const expiresAt = Math.floor(Date.now() / 1000) + 3600;
+    const now = Math.floor(Date.now() / 1000);
+    const expiresAt = now + 3600;
+    const retryUntil = now + 60;
     store.saveRefreshToken("old-refresh-hash", {
       clientId: client.client_id,
       scopes: ["devspace"],
@@ -167,11 +169,11 @@ function testTransactionalTokenRotation(stateDir: string): void {
           refreshTokenHash: "new-refresh-hash",
           refreshToken: { clientId: client.client_id, scopes: ["devspace"], expiresAt },
         },
-        "old-refresh-hash",
+        { tokenHash: "old-refresh-hash", now, retryUntil },
       ),
       true,
     );
-    assert.equal(store.getRefreshToken("old-refresh-hash"), undefined);
+    assert.equal(store.getRefreshToken("old-refresh-hash")?.expiresAt, retryUntil);
     assert.ok(store.getAccessToken("new-access-hash"));
     assert.ok(store.getRefreshToken("new-refresh-hash"));
 
@@ -183,7 +185,11 @@ function testTransactionalTokenRotation(stateDir: string): void {
           refreshTokenHash: "losing-refresh-hash",
           refreshToken: { clientId: client.client_id, scopes: ["devspace"], expiresAt },
         },
-        "old-refresh-hash",
+        {
+          tokenHash: "old-refresh-hash",
+          now: retryUntil + 1,
+          retryUntil: retryUntil + 61,
+        },
       ),
       false,
     );
@@ -270,6 +276,16 @@ async function testProviderRestartRotationAndRevocation(stateDir: string): Promi
     assert.ok(inherited.refresh_token);
     assert.equal((await secondProvider.verifyAccessToken(inherited.access_token)).resource?.href, tunnelUrl.href);
 
+    const responseLossRetry = await secondProvider.exchangeRefreshToken(
+      client,
+      issued.refresh_token,
+      ["devspace"],
+      tunnelUrl,
+    );
+    assert.ok(responseLossRetry.refresh_token);
+    assert.notEqual(responseLossRetry.refresh_token, issued.refresh_token);
+
+    await secondProvider.revokeToken(client, { token: issued.refresh_token });
     await assert.rejects(
       secondProvider.exchangeRefreshToken(client, issued.refresh_token, ["devspace"], tunnelUrl),
       InvalidGrantError,

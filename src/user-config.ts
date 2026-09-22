@@ -51,7 +51,11 @@ export interface DevspaceConfigEdit {
 }
 
 export function devspaceConfigDir(env: NodeJS.ProcessEnv = process.env): string {
-  return resolve(expandHomePath(env.DEVSPACE_CONFIG_DIR ?? join(homedir(), ".devspace")));
+  return resolve(expandHomePath(
+    env.FLYTO2_RUNTIME_CONFIG_DIR
+    ?? env.DEVSPACE_CONFIG_DIR
+    ?? join(homedir(), ".devspace"),
+  ));
 }
 
 export function devspaceConfigPath(env: NodeJS.ProcessEnv = process.env): string {

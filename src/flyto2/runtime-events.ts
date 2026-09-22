@@ -40,6 +40,7 @@ export interface RuntimeEventQuery {
   after_sequence?: number;
   workspace_id?: string;
   type?: string;
+  correlation_id?: string;
   limit?: number;
 }
 
@@ -125,6 +126,10 @@ export class RuntimeEventStore {
     if (query.type) {
       clauses.push("type = ?");
       params.push(query.type);
+    }
+    if (query.correlation_id) {
+      clauses.push("correlation_id = ?");
+      params.push(query.correlation_id);
     }
 
     params.push(limit);

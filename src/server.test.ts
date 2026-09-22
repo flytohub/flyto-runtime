@@ -53,6 +53,61 @@ test("tool modes expose the expected host-facing tool surface", async (t) => {
   }
 });
 
+test("healthz exposes an auditable Runtime truth card", async (t) => {
+  const context = await httpServerFixture(t, "flyto2-health-");
+  const response = await fetch(`${context.localBaseUrl}/healthz`);
+  assert.equal(response.status, 200);
+  const health = await response.json() as {
+    ok: boolean;
+    runtime: {
+      version: string;
+      git_sha: string | null;
+      build_timestamp: string | null;
+      pid: number;
+      started_at: string;
+    };
+    schema: { config: number; state: number };
+    tunnel: { configured: boolean; public_base_url: string };
+    mcp: {
+      status: string;
+      registered_tools: string[];
+      full_runtime_tools_loaded: boolean;
+      last_successful_request_at: string | null;
+      last_chatgpt_success_at: string | null;
+    };
+    reactive_jobs: { active_processes: number; running: number };
+    watchers: { native_active: number; active: number; error: number };
+  };
+
+  assert.equal(health.ok, true);
+  assert.match(health.runtime.version, /^\d+\.\d+\.\d+/);
+  assert.equal(health.runtime.pid, process.pid);
+  assert.ok(Date.parse(health.runtime.started_at));
+  assert.equal(health.schema.config, 1);
+  assert.ok(health.schema.state >= 11);
+  assert.equal(health.tunnel.public_base_url, "https://example.test");
+  assert.equal(health.mcp.status, "ready");
+  assert.equal(health.mcp.full_runtime_tools_loaded, true);
+  for (const tool of [
+    "runtime_manifest",
+    "runtime_events",
+    "runtime_wait",
+    "runtime_run",
+    "runtime_evidence",
+    "runtime_signal",
+    "runtime_watch",
+    "runtime_unwatch",
+    "runtime_watches",
+  ]) {
+    assert.ok(health.mcp.registered_tools.includes(tool), tool);
+  }
+  assert.equal(health.reactive_jobs.active_processes, 0);
+  assert.equal(health.reactive_jobs.running, 0);
+  assert.equal(health.watchers.native_active, 0);
+  assert.equal(health.watchers.active, 0);
+  assert.equal(health.watchers.error, 0);
+});
+
 test("model-facing tool schemas use snake_case recursively", async (t) => {
   for (const toolMode of ["claude", "codex"] as const) {
     await t.test(toolMode, async (nested) => {
@@ -226,6 +281,21 @@ test("reactive MCP command wakes once with shallow event and lazy evidence", asy
   assert.equal(event.type, "test.completed");
   assert.equal((event.payload as Record<string, unknown>).success, true);
   assert.doesNotMatch(JSON.stringify(event), /reactive-e2e-output/);
+
+  const resumedAfterLostResponse = structuredContent(await context.client.callTool({
+    name: "runtime_wait",
+    arguments: {
+      workspace_id: workspaceId,
+      type: "test.completed",
+      correlation_id: receipt.job_id,
+      timeout_ms: 0,
+    },
+  }));
+  assert.equal(
+    (resumedAfterLostResponse.event as Record<string, unknown>).sequence,
+    event.sequence,
+    "a reconnect without the prior cursor must replay the persisted correlated completion",
+  );
 
   const evidence = structuredContent(await context.client.callTool({
     name: "runtime_evidence",
@@ -828,6 +898,75 @@ test("HTTP endpoint serves modern MCP and stateless legacy clients", async (t) =
   assert.equal(legacyTools.status, 200, await legacyTools.clone().text());
   assert.equal(legacyTools.headers.get("mcp-session-id"), null);
   assert.match(await legacyTools.text(), /"open_workspace"/);
+});
+
+test("OAuth access and workspace identity survive a full Runtime restart", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "flyto2-restart-resume-"));
+  const ownerToken = "test-owner-token-that-is-long-enough";
+  await writeFile(join(root, "resume.txt"), "resume-after-restart\n");
+  const config = loadConfig(writeTestDevspaceConfig(join(root, ".config"), {
+    server: {
+      port: 1,
+      publicBaseUrl: "https://example.test",
+    },
+    workspaces: {
+      allowedRoots: [root],
+      worktreeRoot: join(root, ".worktrees"),
+    },
+    storage: { stateDir: join(root, ".state") },
+    tools: { mode: "claude" },
+  }));
+
+  const startRuntime = async () => {
+    const running = createServer(config, { incomingArtifactAdapters: [] });
+    const listener = running.app.listen(0, "127.0.0.1");
+    await new Promise<void>((resolve) => listener.once("listening", resolve));
+    const address = listener.address();
+    assert.ok(address && typeof address === "object");
+    return {
+      running,
+      listener,
+      localBaseUrl: `http://127.0.0.1:${address.port}`,
+    };
+  };
+  const stopRuntime = async (runtime: Awaited<ReturnType<typeof startRuntime>>) => {
+    await new Promise<void>((resolve, reject) => {
+      runtime.listener.close((error) => error ? reject(error) : resolve());
+    });
+    await runtime.running.close();
+  };
+
+  let runtime = await startRuntime();
+  const accessToken = await issueTestAccessToken(
+    runtime.localBaseUrl,
+    config.publicBaseUrl,
+    ownerToken,
+  );
+  const opened = await postModernMcp(runtime.localBaseUrl, accessToken, "tools/call", {
+    name: "open_workspace",
+    arguments: { path: root },
+    _meta: { "openai/session": "restart-resume-chat" },
+  });
+  assert.equal(opened.status, 200, await opened.clone().text());
+  const openedBody = await opened.json() as {
+    result?: { structuredContent?: { workspace_id?: string } };
+  };
+  const workspaceId = openedBody.result?.structuredContent?.workspace_id;
+  assert.equal(typeof workspaceId, "string");
+
+  await stopRuntime(runtime);
+  runtime = await startRuntime();
+
+  const resumed = await postModernMcp(runtime.localBaseUrl, accessToken, "tools/call", {
+    name: "read",
+    arguments: { workspace_id: workspaceId, path: "resume.txt" },
+    _meta: { "openai/session": "restart-resume-chat" },
+  });
+  assert.equal(resumed.status, 200, await resumed.clone().text());
+  assert.match(await resumed.text(), /resume-after-restart/);
+
+  await stopRuntime(runtime);
+  await rm(root, { recursive: true, force: true });
 });
 
 test("server shutdown waits for an active MCP tool call", async (t) => {

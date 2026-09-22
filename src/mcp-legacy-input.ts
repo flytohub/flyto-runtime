@@ -18,7 +18,29 @@ export function normalizeLegacyMcpInput(body: unknown): unknown {
     args[canonical] = args[legacy];
     delete args[legacy];
   }
+
+  if (params.name === "edit" && Array.isArray(args.edits)) {
+    args.edits = args.edits.map((entry, index) => normalizeLegacyEditEntry(entry, index));
+  }
+
   return { ...body, params: { ...params, arguments: args } };
+}
+
+function normalizeLegacyEditEntry(value: unknown, index: number): unknown {
+  if (!isRecord(value)) return value;
+  const entry = { ...value };
+  for (const [legacy, canonical] of [
+    ["oldText", "old_text"],
+    ["newText", "new_text"],
+  ] as const) {
+    if (!Object.hasOwn(entry, legacy)) continue;
+    if (Object.hasOwn(entry, canonical) && entry[canonical] !== entry[legacy]) {
+      throw new Error(`Conflicting edits[${index}].${legacy} and edits[${index}].${canonical} arguments`);
+    }
+    entry[canonical] = entry[legacy];
+    delete entry[legacy];
+  }
+  return entry;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add native macOS `local.flyto2.runtime` service lifecycle with install/start/stop/restart/status/update/rollback commands and direct `dist/cli.js serve` LaunchAgent execution.
+- Add migration of existing fixed Cloudflare tunnels into Runtime-owned storage and the native `local.flyto2.runtime.tunnel` LaunchAgent.
+- Expand `/healthz` into an auditable truth card with build Git SHA/timestamp, config/state schema versions, exact MCP tool surface, recent MCP/ChatGPT activity, tunnel state, reactive jobs, and watcher health.
+- Prefer `FLYTO2_RUNTIME_CONFIG_DIR` while preserving `DEVSPACE_CONFIG_DIR` as a compatibility alias.
+- Bound long Unix-domain socket endpoints with a deterministic short `/tmp/flyto2-agentd-<hash>.sock` fallback so macOS daemon startup remains reliable under long temporary/state paths.
+
 - Add a durable Flyto2 Runtime event reactor with monotonic cursors, event dedupe/fail-closed drift handling, bounded retention, filtering, and one-shot waits.
 - Add `runtime_run`, `runtime_wait`, `runtime_events`, `runtime_evidence`, and `runtime_signal` MCP tools so long tests/builds can complete without model-driven process polling.
 - Store reactive process logs as bounded local evidence; shallow events contain only status/digest/evidence references, and interrupted jobs become explicit `process.orphaned` events after restart.
