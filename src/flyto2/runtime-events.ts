@@ -170,7 +170,6 @@ export class RuntimeEventStore {
         if (event) finish(event);
       };
       const timer = setTimeout(() => finish(), timeoutMs);
-      timer.unref();
       this.emitter.on("event", onEvent);
 
       const raced = this.list({ ...query, limit: 1 })[0];

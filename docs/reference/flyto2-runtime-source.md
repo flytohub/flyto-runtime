@@ -57,14 +57,14 @@ This reference documents the Flyto2-owned TypeScript surface layered on the upst
 
 ## Durable Runtime event stream
 - [`RuntimeEventStore`](../../src/flyto2/runtime-events.ts#L63)
-- [`normalizeEventInput`](../../src/flyto2/runtime-events.ts#L211)
-- [`matchesNormalizedEvent`](../../src/flyto2/runtime-events.ts#L242)
-- [`runtimeEventFromRow`](../../src/flyto2/runtime-events.ts#L257)
-- [`normalizeSequence`](../../src/flyto2/runtime-events.ts#L272)
-- [`normalizeLimit`](../../src/flyto2/runtime-events.ts#L280)
-- [`normalizeWait`](../../src/flyto2/runtime-events.ts#L288)
-- [`boundedToken`](../../src/flyto2/runtime-events.ts#L296)
-- [`optionalToken`](../../src/flyto2/runtime-events.ts#L304)
+- [`normalizeEventInput`](../../src/flyto2/runtime-events.ts#L210)
+- [`matchesNormalizedEvent`](../../src/flyto2/runtime-events.ts#L241)
+- [`runtimeEventFromRow`](../../src/flyto2/runtime-events.ts#L256)
+- [`normalizeSequence`](../../src/flyto2/runtime-events.ts#L271)
+- [`normalizeLimit`](../../src/flyto2/runtime-events.ts#L279)
+- [`normalizeWait`](../../src/flyto2/runtime-events.ts#L287)
+- [`boundedToken`](../../src/flyto2/runtime-events.ts#L295)
+- [`optionalToken`](../../src/flyto2/runtime-events.ts#L303)
 
 ## Flyto2-native MCP surface
 - [`registerRuntimeTools`](../../src/flyto2/runtime-tools.ts#L26) — registers manifest, event, reactive execution, evidence, signal, and persistent filesystem-watch tools outside upstream server code.
