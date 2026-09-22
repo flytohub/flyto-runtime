@@ -1,6 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ProcessSessionManager } from "../process-sessions.js";
 import type { ServerConfig } from "../config.js";
+import type { RuntimeEventStore } from "../flyto2/runtime-events.js";
+import type { ReactiveCommandRunner } from "../flyto2/reactive-command.js";
 import type { WorkspaceRegistry } from "../workspaces.js";
 
 export const WORKSPACE_APP_URI = "ui://devspace/workspace-app.html";
@@ -58,6 +60,7 @@ export interface ToolLogFields {
   command?: string;
   commandLength?: number;
   sessionId?: number;
+  jobId?: string;
   running?: boolean;
   exitCode?: number;
   success: boolean;
@@ -90,6 +93,8 @@ export interface ToolRegistrationContext {
   config: ServerConfig;
   workspaces: WorkspaceRegistry;
   processSessions: ProcessSessionManager;
+  runtimeEvents: RuntimeEventStore;
+  reactiveCommands: ReactiveCommandRunner;
 }
 
 export interface ToolInstructionContext {

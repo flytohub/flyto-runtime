@@ -185,6 +185,15 @@ export class RuntimeEventStore {
     });
   }
 
+  removeByCorrelationId(correlationId: string): number {
+    const value = correlationId.trim();
+    if (!value) return 0;
+    const result = this.database.sqlite
+      .prepare("delete from flyto2_runtime_events where correlation_id = ?")
+      .run(value);
+    return Number(result.changes);
+  }
+
   close(): void {
     this.emitter.removeAllListeners();
     this.database.close();

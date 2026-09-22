@@ -158,7 +158,7 @@ function serverInstructions(
     : "";
   const agents = `Follow instructions returned by ${toolNames.openWorkspace}. Before working under a path listed in available_agents_files, use ${toolNames.read} to inspect that instruction file and follow it. `;
   const common = `Call ${toolNames.openWorkspace} when starting work in a project folder or isolated worktree without a usable workspace_id, then reuse the returned workspace_id for subsequent operations in that workspace.`;
-  const reactive = ` For long-running tests, builds, or non-interactive commands, prefer ${toolNames.runtimeRun} followed by one ${toolNames.runtimeWait} for the expected event instead of repeatedly polling process output. If a connection drops after ${toolNames.runtimeRun}, do not rerun the side effect: resume ${toolNames.runtimeWait} with the returned job_id as correlation_id and event_type as type so a persisted completion can be replayed. When waiting for changes made by an editor, Git, build tool, or another local program, use ${toolNames.runtimeWatch} and ${toolNames.runtimeWait} instead of repeatedly rereading files; after reconnect, the same rule applies using the watch_id as correlation_id and its event type. Runtime events are shallow; call ${toolNames.runtimeEvidence} only when the event summary is insufficient.`;
+  const reactive = ` For long-running tests, builds, or non-interactive commands, prefer ${toolNames.runtimeRun} followed by one ${toolNames.runtimeWait} for the expected event instead of repeatedly polling process output. If the host has cached an older tool catalog without the Runtime tools, ${toolNames.shell} automatically yields long commands into durable Runtime jobs; follow the returned @flyto2/job command later and never rerun the original side effect just because it is still running. If a connection drops after ${toolNames.runtimeRun}, do not rerun the side effect: resume ${toolNames.runtimeWait} with the returned job_id as correlation_id and event_type as type so a persisted completion can be replayed. When waiting for changes made by an editor, Git, build tool, or another local program, use ${toolNames.runtimeWatch} and ${toolNames.runtimeWait} instead of repeatedly rereading files; after reconnect, the same rule applies using the watch_id as correlation_id and its event type. Runtime events are shallow; call ${toolNames.runtimeEvidence} only when the event summary is insufficient.`;
 
   return `${common} ${toolSurface.instructions({ agents, skills })}${reactive}${artifactInstruction}${showChangesInstruction}`;
 }
@@ -572,13 +572,17 @@ function registerMcpSurface(
         : workspace.mode === "worktree"
           ? "Use this workspace_id for subsequent work in this isolated worktree. Keep reusing it while working in this worktree. Follow the project instructions, nested instruction files, skills, agent profiles, and diagnostics returned for it."
           : cardInstruction;
-      const instruction = preloadedSubagentInstructions && includeBootstrapContext
-        ? [
-            workspaceInstruction,
-            "Subagent workflow instructions:",
-            preloadedSubagentInstructions,
-          ].join("\n\n")
-        : workspaceInstruction;
+      const legacyReactiveInstruction = config.toolMode === "claude"
+        ? "If this host does not expose runtime_run/runtime_wait, long bash commands automatically yield into durable Flyto2 Runtime jobs. Follow any returned @flyto2/job <job_id> command later; do not rerun the original side effect while it is still running."
+        : undefined;
+      const instructionParts = [
+        workspaceInstruction,
+        legacyReactiveInstruction,
+        ...(preloadedSubagentInstructions && includeBootstrapContext
+          ? ["Subagent workflow instructions:", preloadedSubagentInstructions]
+          : []),
+      ].filter((part): part is string => Boolean(part));
+      const instruction = instructionParts.join("\n\n");
       const resultContent: ToolContent[] = [
         {
           type: "text" as const,
@@ -769,6 +773,8 @@ function registerMcpSurface(
     config,
     workspaces,
     processSessions,
+    runtimeEvents,
+    reactiveCommands,
   });
 
   registerAppTool(

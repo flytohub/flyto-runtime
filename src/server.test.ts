@@ -433,6 +433,67 @@ test("Claude edit and bash tools accept snake_case runtime inputs", async (t) =>
   assert.match(shell.result as string, /nested/i);
 });
 
+test("legacy Claude bash yields long commands into a durable Runtime job", async (t) => {
+  const context = await fixture(t, { toolMode: "claude", uiEnabled: false });
+  const workspaceId = structuredContent(
+    await callOpen(context.client, context.project, "legacy-reactive-bash"),
+  ).workspace_id;
+  assert.equal(typeof workspaceId, "string");
+
+  const startedAt = performance.now();
+  const first = structuredContent(await context.client.callTool({
+    name: "bash",
+    arguments: {
+      workspace_id: workspaceId,
+      command: "node -e \"setTimeout(() => console.log('legacy-reactive-done'), 2200)\"",
+      timeout: 10,
+    },
+  }));
+  assert.ok(
+    performance.now() - startedAt < 2_100,
+    "legacy bash should yield before a long command finishes",
+  );
+  assert.match(first.result as string, /still running as Flyto2 Runtime job/i);
+  assert.match(first.result as string, /Do not rerun/i);
+
+  const jobId = /job_[A-Za-z0-9]+/.exec(first.result as string)?.[0];
+  assert.ok(jobId);
+
+  const resumed = structuredContent(await context.client.callTool({
+    name: "bash",
+    arguments: {
+      workspace_id: workspaceId,
+      command: `@flyto2/job ${jobId}`,
+    },
+  }));
+  assert.match(resumed.result as string, /legacy-reactive-done/);
+  assert.doesNotMatch(resumed.result as string, /still running/i);
+});
+
+test("legacy Claude bash preserves timeout while using the reactive runner", async (t) => {
+  const context = await fixture(t, { toolMode: "claude", uiEnabled: false });
+  const workspaceId = structuredContent(
+    await callOpen(context.client, context.project, "legacy-reactive-timeout"),
+  ).workspace_id;
+  assert.equal(typeof workspaceId, "string");
+
+  const result = await context.client.callTool({
+    name: "bash",
+    arguments: {
+      workspace_id: workspaceId,
+      command: "node -e \"setInterval(() => {}, 1000)\"",
+      timeout: 0.2,
+    },
+  });
+  assert.equal(result.isError, true);
+  assert.match(
+    ((result.content ?? []) as Array<{ type?: string; text?: string }>)
+      .map((item) => item.type === "text" ? item.text ?? "" : "")
+      .join("\n"),
+    /timed out after 0\.2 seconds/i,
+  );
+});
+
 test("read rejects a symlink that leaves the workspace", async (t) => {
   const context = await fixture(t, { toolMode: "claude", uiEnabled: false });
   const outside = await mkdtemp(join(tmpdir(), "devspace-server-outside-test-"));
@@ -1391,6 +1452,36 @@ test("existing ChatGPT camelCase tool calls survive the Runtime migration", asyn
   });
   assert.equal(ran.status, 200);
   assert.match(await ran.text(), /legacy-chatgpt-ok/);
+
+  const longStartedAt = performance.now();
+  const yielded = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
+    name: "bash",
+    arguments: {
+      workspaceId,
+      command: "node -e \"setTimeout(() => console.log('legacy-http-done'), 2200)\"",
+      timeout: 10,
+    },
+  });
+  assert.equal(yielded.status, 200);
+  assert.ok(
+    performance.now() - longStartedAt < 2_100,
+    "cached ChatGPT bash must not hold the HTTP request until command completion",
+  );
+  const yieldedText = await yielded.text();
+  assert.match(yieldedText, /still running as Flyto2 Runtime job/i);
+  const yieldedJobId = /job_[A-Za-z0-9]+/.exec(yieldedText)?.[0];
+  assert.ok(yieldedJobId);
+
+  const resumed = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
+    name: "bash",
+    arguments: {
+      workspaceId,
+      command: `@flyto2/job ${yieldedJobId}`,
+    },
+  });
+  assert.equal(resumed.status, 200);
+  assert.match(await resumed.text(), /legacy-http-done/);
+
   const conflict = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
     name: "bash", arguments: { workspaceId, workspace_id: "another-workspace", command: "echo must-not-run" },
   });

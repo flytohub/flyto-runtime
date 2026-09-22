@@ -6,6 +6,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  unlinkSync,
   writeSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -23,6 +24,7 @@ export interface ReactiveCommandInput {
   command: string;
   cwd: string;
   event_type?: string;
+  timeout_seconds?: number;
 }
 
 export interface ReactiveJobReceipt {
@@ -74,6 +76,9 @@ interface ActiveReactiveJob {
   evidenceBytes: number;
   truncated: boolean;
   finished: boolean;
+  timedOut: boolean;
+  timeoutTimer?: NodeJS.Timeout;
+  killTimer?: NodeJS.Timeout;
 }
 
 export class ReactiveCommandRunner {
@@ -144,8 +149,44 @@ export class ReactiveCommandRunner {
       evidenceBytes: 0,
       truncated: false,
       finished: false,
+      timedOut: false,
     };
     this.active.set(jobId, active);
+
+    const timeoutSeconds = normalizeTimeoutSeconds(input.timeout_seconds);
+    if (timeoutSeconds !== undefined) {
+      active.timeoutTimer = setTimeout(() => {
+        if (active.finished || this.closed) return;
+        active.timedOut = true;
+        this.appendEvidence(
+          active,
+          Buffer.from(`Flyto2 Runtime: command timed out after ${timeoutSeconds} seconds.\n`, "utf8"),
+        );
+        try {
+          terminateProcessTree(
+            active.child,
+            "SIGTERM",
+            process.platform !== "win32",
+          );
+        } catch {
+          // The close/error handlers below will reconcile the final state.
+        }
+        active.killTimer = setTimeout(() => {
+          if (active.finished || this.closed) return;
+          try {
+            terminateProcessTree(
+              active.child,
+              "SIGKILL",
+              process.platform !== "win32",
+            );
+          } catch {
+            // The next Runtime startup will reconcile a still-running row.
+          }
+        }, 1_000);
+        active.killTimer.unref();
+      }, timeoutSeconds * 1_000);
+      active.timeoutTimer.unref();
+    }
 
     const append = (data: Buffer) => this.appendEvidence(active, data);
     child.stdout?.on("data", append);
@@ -198,6 +239,31 @@ export class ReactiveCommandRunner {
       )
       .get(jobId) as ReactiveJobRow | undefined;
     return row ? reactiveJobFromRow(row) : undefined;
+  }
+
+  discardTerminal(jobId: string): boolean {
+    if (this.active.has(jobId)) return false;
+    const row = this.database.sqlite
+      .prepare(
+        `select id, workspace_id, command_digest, event_type, status,
+                evidence_path, started_at, completed_at, exit_code, signal
+         from flyto2_reactive_jobs where id = ?`,
+      )
+      .get(jobId) as ReactiveJobRow | undefined;
+    if (!row || row.status === "running") return false;
+
+    this.database.sqlite
+      .prepare("delete from flyto2_reactive_jobs where id = ? and status != 'running'")
+      .run(jobId);
+    this.events.removeByCorrelationId(jobId);
+    if (existsSync(row.evidence_path)) {
+      try {
+        unlinkSync(row.evidence_path);
+      } catch {
+        // A leftover 0600 evidence file is safer than failing a completed tool response.
+      }
+    }
+    return true;
   }
 
   health(): ReactiveRunnerHealth {
@@ -258,6 +324,8 @@ export class ReactiveCommandRunner {
     if (this.closed) return;
     this.closed = true;
     for (const active of this.active.values()) {
+      if (active.timeoutTimer) clearTimeout(active.timeoutTimer);
+      if (active.killTimer) clearTimeout(active.killTimer);
       if (!active.finished) {
         try {
           terminateProcessTree(
@@ -291,11 +359,13 @@ export class ReactiveCommandRunner {
     const active = this.active.get(jobId);
     if (!active || active.finished || this.closed) return;
     active.finished = true;
+    if (active.timeoutTimer) clearTimeout(active.timeoutTimer);
+    if (active.killTimer) clearTimeout(active.killTimer);
     closeSync(active.evidenceFd);
     this.active.delete(jobId);
 
     const completedAt = new Date().toISOString();
-    const success = exitCode === 0 && signal === undefined;
+    const success = !active.timedOut && exitCode === 0 && signal === undefined;
     this.database.sqlite
       .prepare(
         `update flyto2_reactive_jobs
@@ -327,6 +397,7 @@ export class ReactiveCommandRunner {
         duration_ms: Math.max(0, Date.parse(completedAt) - Date.parse(startedAt)),
         command_digest: commandDigest,
         log_truncated: active.truncated,
+        timed_out: active.timedOut,
       },
       evidence: [evidence],
     });
@@ -438,6 +509,14 @@ function reactiveEnvironment(
     DEVSPACE_WORKSPACE_ROOT: workspaceRoot,
     FLYTO2_RUNTIME: "1",
   };
+}
+
+function normalizeTimeoutSeconds(value: number | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isFinite(value) || value <= 0 || value > 300) {
+    throw new Error("timeout_seconds must be greater than 0 and at most 300.");
+  }
+  return value;
 }
 
 function normalizeEventType(value: string | undefined): string {
