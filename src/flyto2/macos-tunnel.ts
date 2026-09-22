@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { homedir, platform } from "node:os";
 import { dirname, join } from "node:path";
+import { restartLaunchAgentWithRecovery } from "./macos-service.js";
 
 export const FLYTO2_RUNTIME_TUNNEL_LABEL = "local.flyto2.runtime.tunnel";
 
@@ -45,6 +46,7 @@ export interface NativeTunnelStatus {
   label: string;
   state?: string;
   pid?: number;
+  lastExitStatus?: number;
   hostname?: string;
   tunnel_id?: string;
   profile_path: string;
@@ -213,7 +215,7 @@ export function renderNativeTunnelLaunchAgent(
     "  <key>KeepAlive</key>",
     "  <true/>",
     "  <key>ThrottleInterval</key>",
-    "  <integer>5</integer>",
+    "  <integer>1</integer>",
     "  <key>StandardOutPath</key>",
     `  <string>${xmlEscape(join(logsDirectory, "tunnel.log"))}</string>`,
     "  <key>StandardErrorPath</key>",
@@ -250,16 +252,30 @@ export function installNativeTunnelService(
   );
   mkdirSync(dirname(plistPath), { recursive: true, mode: 0o700 });
   mkdirSync(logsDirectory, { recursive: true, mode: 0o700 });
-  writeAtomic(
-    plistPath,
-    renderNativeTunnelLaunchAgent(profile, homeDirectory),
-    0o600,
-  );
+  const nextPlist = renderNativeTunnelLaunchAgent(profile, homeDirectory);
+  const previousPlistPath = `${plistPath}.previous`;
+  const activePlistPath = `${plistPath}.active`;
+  let requiresReload = false;
+
+  if (existsSync(plistPath)) {
+    const currentPlist = readFileSync(plistPath, "utf8");
+    if (
+      !existsSync(activePlistPath)
+      && launchctlPrint() !== undefined
+    ) {
+      copyFileSync(plistPath, activePlistPath);
+    }
+    if (currentPlist !== nextPlist) {
+      copyFileSync(plistPath, previousPlistPath);
+      requiresReload = true;
+    }
+  }
+
+  writeAtomic(plistPath, nextPlist, 0o600);
 
   if (start) {
-    bootout();
-    runLaunchctl(["bootstrap", launchAgentDomain(), plistPath]);
-    runLaunchctl(["kickstart", "-k", launchAgentTarget()]);
+    if (requiresReload) return reloadNativeTunnelService(homeDirectory);
+    return startNativeTunnelService(homeDirectory);
   }
   return nativeTunnelStatus(homeDirectory);
 }
@@ -279,12 +295,14 @@ export function startNativeTunnelService(
   const plistPath = nativeTunnelPlistPath(homeDirectory);
   if (!existsSync(plistPath)) return installNativeTunnelService(homeDirectory, true);
   const detail = launchctlPrint();
-  if (detail) {
+  const activePlistPath = `${plistPath}.active`;
+  const activePlistMatches = !existsSync(activePlistPath)
+    || readFileSync(activePlistPath, "utf8") === readFileSync(plistPath, "utf8");
+
+  if (detail?.pid !== undefined && activePlistMatches) {
     return nativeTunnelStatus(homeDirectory);
-  } else {
-    runLaunchctl(["bootstrap", launchAgentDomain(), plistPath]);
   }
-  return nativeTunnelStatus(homeDirectory);
+  return reloadNativeTunnelService(homeDirectory);
 }
 
 export function nativeTunnelStatus(
@@ -313,6 +331,9 @@ export function nativeTunnelStatus(
     label: FLYTO2_RUNTIME_TUNNEL_LABEL,
     ...(detail?.state ? { state: detail.state } : {}),
     ...(detail?.pid !== undefined ? { pid: detail.pid } : {}),
+    ...(detail?.lastExitStatus !== undefined
+      ? { lastExitStatus: detail.lastExitStatus }
+      : {}),
     ...(profile
       ? { hostname: profile.hostname, tunnel_id: profile.tunnel_id }
       : {}),
@@ -321,12 +342,67 @@ export function nativeTunnelStatus(
   };
 }
 
+function reloadNativeTunnelService(
+  homeDirectory = homedir(),
+): NativeTunnelStatus {
+  const plistPath = nativeTunnelPlistPath(homeDirectory);
+  const previousPlistPath = `${plistPath}.previous`;
+  const activePlistPath = `${plistPath}.active`;
+  const hasPreviousPlist = existsSync(previousPlistPath);
+
+  restartLaunchAgentWithRecovery({
+    bootout,
+    isLoaded: () => launchctlPrint() !== undefined,
+    activate: () => activateNativeTunnelLaunchAgent(plistPath),
+    isHealthy: tunnelProcessHealthy,
+    rollback: () => {
+      if (hasPreviousPlist) {
+        copyFileSync(previousPlistPath, plistPath);
+      }
+    },
+    sleep: sleepSync,
+  }, {
+    name: "Flyto2 Runtime tunnel",
+    healthDescription: "launchd process check",
+  });
+
+  copyFileSync(plistPath, activePlistPath);
+  return nativeTunnelStatus(homeDirectory);
+}
+
+function activateNativeTunnelLaunchAgent(plistPath: string): void {
+  if (!launchctlPrint()) {
+    runLaunchctl(["bootstrap", launchAgentDomain(), plistPath]);
+  }
+  runLaunchctl(["enable", launchAgentTarget()]);
+  runLaunchctl(["kickstart", "-k", launchAgentTarget()]);
+}
+
+function tunnelProcessHealthy(): boolean {
+  const detail = launchctlPrint();
+  return detail?.pid !== undefined;
+}
+
+function sleepSync(milliseconds: number): void {
+  if (milliseconds <= 0) return;
+  Atomics.wait(
+    new Int32Array(new SharedArrayBuffer(4)),
+    0,
+    0,
+    milliseconds,
+  );
+}
+
 function bootout(): void {
   if (!launchctlPrint()) return;
   runLaunchctl(["bootout", launchAgentTarget()]);
 }
 
-function launchctlPrint(): { state?: string; pid?: number } | undefined {
+function launchctlPrint(): {
+  state?: string;
+  pid?: number;
+  lastExitStatus?: number;
+} | undefined {
   if (platform() !== "darwin") return undefined;
   const result = spawnSync(
     "launchctl",
@@ -337,9 +413,11 @@ function launchctlPrint(): { state?: string; pid?: number } | undefined {
   const output = result.stdout ?? "";
   const state = /^\s*state = (.+)$/m.exec(output)?.[1]?.trim();
   const pidText = /^\s*pid = (\d+)$/m.exec(output)?.[1];
+  const lastExitText = /^\s*last exit code = (-?\d+)$/m.exec(output)?.[1];
   return {
     ...(state ? { state } : {}),
     ...(pidText ? { pid: Number(pidText) } : {}),
+    ...(lastExitText ? { lastExitStatus: Number(lastExitText) } : {}),
   };
 }
 

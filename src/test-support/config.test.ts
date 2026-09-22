@@ -22,7 +22,10 @@ export function writeTestDevspaceConfig(
   overrides: SectionOverrides = {},
 ): NodeJS.ProcessEnv {
   const defaults = defaultDevspaceConfig();
-  const env = { DEVSPACE_CONFIG_DIR: configDir };
+  const env = {
+    FLYTO2_RUNTIME_CONFIG_DIR: configDir,
+    DEVSPACE_CONFIG_DIR: configDir,
+  };
   writeDevspaceConfig({
     ...defaults,
     server: { ...defaults.server, ...overrides.server },

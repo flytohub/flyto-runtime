@@ -138,7 +138,10 @@ function withConfigDir(
   test: (configDir: string, env: NodeJS.ProcessEnv) => void,
 ): void {
   const configDir = mkdtempSync(join(tmpdir(), "devspace-user-config-test-"));
-  const env = { DEVSPACE_CONFIG_DIR: configDir };
+  const env = {
+    FLYTO2_RUNTIME_CONFIG_DIR: configDir,
+    DEVSPACE_CONFIG_DIR: configDir,
+  };
   try {
     test(configDir, env);
   } finally {
@@ -172,7 +175,11 @@ async function migrateInChildProcess(
       process.execPath,
       ["--import", "tsx", "--input-type=module", "--eval", source],
       {
-        env: { ...process.env, DEVSPACE_CONFIG_DIR: configDir },
+        env: {
+          ...process.env,
+          FLYTO2_RUNTIME_CONFIG_DIR: configDir,
+          DEVSPACE_CONFIG_DIR: configDir,
+        },
         stdio: ["ignore", "pipe", "pipe"],
       },
     );

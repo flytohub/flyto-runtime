@@ -29,6 +29,7 @@ test("native tunnel launch agent is independent of the legacy Mac Kit supervisor
   assert.match(plist, /cloudflared/);
   assert.match(plist, /--no-autoupdate/);
   assert.match(plist, /tunnel-123/);
+  assert.match(plist, /<key>ThrottleInterval<\/key>\s*<integer>1<\/integer>/);
   assert.doesNotMatch(plist, /service\.mjs/);
   assert.doesNotMatch(plist, /local\.devspace\.mac-kit/);
 });
@@ -87,4 +88,19 @@ test("legacy fixed tunnel assets migrate into Flyto2 Runtime-owned storage", {
   assert.equal(status.configured, true);
   assert.equal(status.loaded, loadedBeforeStage);
   assert.equal(status.plist_path, nativeTunnelPlistPath(home));
+
+  const initialPlist = await readFile(status.plist_path, "utf8");
+  await writeFile(
+    status.plist_path,
+    initialPlist.replace("<integer>1</integer>", "<integer>9</integer>"),
+  );
+  installNativeTunnelService(home, false);
+  assert.match(
+    await readFile(`${status.plist_path}.previous`, "utf8"),
+    /<integer>9<\/integer>/,
+  );
+  assert.match(
+    await readFile(status.plist_path, "utf8"),
+    /<key>ThrottleInterval<\/key>\s*<integer>1<\/integer>/,
+  );
 });

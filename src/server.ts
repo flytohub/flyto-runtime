@@ -1057,6 +1057,10 @@ export function createServer(
           loaded: nativeTunnel.loaded,
           label: nativeTunnel.label,
           ...(nativeTunnel.state ? { state: nativeTunnel.state } : {}),
+          ...(nativeTunnel.pid !== undefined ? { pid: nativeTunnel.pid } : {}),
+          ...(nativeTunnel.lastExitStatus !== undefined
+            ? { last_exit_status: nativeTunnel.lastExitStatus }
+            : {}),
           ...(nativeTunnel.hostname ? { hostname: nativeTunnel.hostname } : {}),
         },
       },

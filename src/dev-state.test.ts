@@ -88,6 +88,7 @@ async function runDevState(command: "seed" | "reset"): Promise<void> {
         cwd: checkoutRoot,
         env: {
           ...process.env,
+          FLYTO2_RUNTIME_CONFIG_DIR: sourceConfigDir,
           DEVSPACE_CONFIG_DIR: sourceConfigDir,
           DEVSPACE_OAUTH_OWNER_TOKEN: "",
         },

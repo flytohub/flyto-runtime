@@ -28,7 +28,11 @@ const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.me
 for (const flag of ["-v", "--version"]) {
   const output = execFileSync("node", ["--import", "tsx", "src/cli.ts", flag], {
     encoding: "utf8",
-    env: { ...process.env, DEVSPACE_CONFIG_DIR: "/tmp/devspace-cli-version-test" },
+    env: {
+      ...process.env,
+      FLYTO2_RUNTIME_CONFIG_DIR: "/tmp/devspace-cli-version-test",
+      DEVSPACE_CONFIG_DIR: "/tmp/devspace-cli-version-test",
+    },
   }).trim();
 
   assert.equal(output, packageJson.version);

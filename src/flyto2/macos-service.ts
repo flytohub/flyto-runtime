@@ -66,6 +66,8 @@ export interface LaunchAgentRestartOperations {
 }
 
 export interface LaunchAgentRestartPolicy {
+  name?: string;
+  healthDescription?: string;
   unloadTimeoutMs?: number;
   activationAttempts?: number;
   activationRetryDelayMs?: number;
@@ -310,6 +312,8 @@ export function restartLaunchAgentWithRecovery(
   operations: LaunchAgentRestartOperations,
   policy: LaunchAgentRestartPolicy = {},
 ): void {
+  const name = policy.name ?? "Flyto2 Runtime";
+  const healthDescription = policy.healthDescription ?? "/healthz";
   const unloadTimeoutMs = policy.unloadTimeoutMs ?? 2_000;
   const activationAttempts = policy.activationAttempts ?? 21;
   const activationRetryDelayMs = policy.activationRetryDelayMs ?? 250;
@@ -332,7 +336,7 @@ export function restartLaunchAgentWithRecovery(
   const unload = (): void => {
     operations.bootout();
     if (!waitUntil(() => !operations.isLoaded(), unloadTimeoutMs, 50)) {
-      throw new Error("Flyto2 Runtime LaunchAgent did not finish unloading.");
+      throw new Error(`${name} LaunchAgent did not finish unloading.`);
     }
   };
 
@@ -349,12 +353,12 @@ export function restartLaunchAgentWithRecovery(
     }
     throw lastError instanceof Error
       ? lastError
-      : new Error("Flyto2 Runtime LaunchAgent activation failed.");
+      : new Error(`${name} LaunchAgent activation failed.`);
   };
 
   const waitForHealth = (): void => {
     if (!waitUntil(operations.isHealthy, healthTimeoutMs, healthPollIntervalMs)) {
-      throw new Error("Flyto2 Runtime did not pass /healthz after activation.");
+      throw new Error(`${name} did not pass ${healthDescription} after activation.`);
     }
   };
 
@@ -371,11 +375,11 @@ export function restartLaunchAgentWithRecovery(
     } catch (rollbackError) {
       throw new AggregateError(
         [restartError, rollbackError],
-        "Flyto2 Runtime restart and automatic rollback both failed.",
+        `${name} restart and automatic rollback both failed.`,
       );
     }
     throw new Error(
-      `Flyto2 Runtime restart failed and the previous service was restored: ${errorMessage(restartError)}`,
+      `${name} restart failed and the previous service was restored: ${errorMessage(restartError)}`,
       { cause: restartError },
     );
   }
