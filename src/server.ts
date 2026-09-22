@@ -1062,6 +1062,16 @@ export function createServer(
             ? { last_exit_status: nativeTunnel.lastExitStatus }
             : {}),
           ...(nativeTunnel.hostname ? { hostname: nativeTunnel.hostname } : {}),
+          connector_count: nativeTunnel.connector_count,
+          running_connectors: nativeTunnel.running_connectors,
+          redundant: nativeTunnel.redundant,
+          connectors: nativeTunnel.connectors.map((connector) => ({
+            label: connector.label,
+            loaded: connector.loaded,
+            ...(connector.state ? { state: connector.state } : {}),
+            ...(connector.pid !== undefined ? { pid: connector.pid } : {}),
+            metrics_url: connector.metrics_url,
+          })),
         },
       },
       mcp: {

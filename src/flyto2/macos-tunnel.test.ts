@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import {
   FLYTO2_RUNTIME_TUNNEL_LABEL,
+  FLYTO2_RUNTIME_TUNNEL_STANDBY_LABEL,
   loadNativeTunnelProfile,
   migrateLegacyCloudflareTunnel,
   nativeTunnelStatus,
@@ -88,6 +89,20 @@ test("legacy fixed tunnel assets migrate into Flyto2 Runtime-owned storage", {
   assert.equal(status.configured, true);
   assert.equal(status.loaded, loadedBeforeStage);
   assert.equal(status.plist_path, nativeTunnelPlistPath(home));
+  assert.equal(status.connector_count, 2);
+  assert.equal(status.connectors.length, 2);
+  const standbyPlistPath = nativeTunnelPlistPath(
+    home,
+    FLYTO2_RUNTIME_TUNNEL_STANDBY_LABEL,
+  );
+  assert.match(
+    await readFile(standbyPlistPath, "utf8"),
+    /local\.flyto2\.runtime\.tunnel\.standby/,
+  );
+  assert.match(
+    await readFile(standbyPlistPath, "utf8"),
+    /127\.0\.0\.1:20242/,
+  );
 
   const initialPlist = await readFile(status.plist_path, "utf8");
   await writeFile(

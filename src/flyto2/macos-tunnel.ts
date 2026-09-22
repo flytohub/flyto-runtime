@@ -13,6 +13,18 @@ import { dirname, join } from "node:path";
 import { restartLaunchAgentWithRecovery } from "./macos-service.js";
 
 export const FLYTO2_RUNTIME_TUNNEL_LABEL = "local.flyto2.runtime.tunnel";
+export const FLYTO2_RUNTIME_TUNNEL_STANDBY_LABEL = "local.flyto2.runtime.tunnel.standby";
+
+interface TunnelConnectorSpec {
+  label: string;
+  metricsPort: number;
+  logSuffix: string;
+}
+
+const TUNNEL_CONNECTORS: readonly TunnelConnectorSpec[] = [
+  { label: FLYTO2_RUNTIME_TUNNEL_LABEL, metricsPort: 20_241, logSuffix: "" },
+  { label: FLYTO2_RUNTIME_TUNNEL_STANDBY_LABEL, metricsPort: 20_242, logSuffix: "-standby" },
+];
 
 interface LegacyMacKitSettings {
   cloudflared?: unknown;
@@ -39,6 +51,16 @@ export interface NativeTunnelProfile {
   migrated_at: string;
 }
 
+export interface NativeTunnelConnectorStatus {
+  label: string;
+  loaded: boolean;
+  state?: string;
+  pid?: number;
+  lastExitStatus?: number;
+  metrics_url: string;
+  plist_path: string;
+}
+
 export interface NativeTunnelStatus {
   supported: boolean;
   configured: boolean;
@@ -49,6 +71,10 @@ export interface NativeTunnelStatus {
   lastExitStatus?: number;
   hostname?: string;
   tunnel_id?: string;
+  connector_count: number;
+  running_connectors: number;
+  redundant: boolean;
+  connectors: NativeTunnelConnectorStatus[];
   profile_path: string;
   plist_path: string;
 }
@@ -72,12 +98,13 @@ export function nativeTunnelProfilePath(
 
 export function nativeTunnelPlistPath(
   homeDirectory = homedir(),
+  label = FLYTO2_RUNTIME_TUNNEL_LABEL,
 ): string {
   return join(
     homeDirectory,
     "Library",
     "LaunchAgents",
-    `${FLYTO2_RUNTIME_TUNNEL_LABEL}.plist`,
+    `${label}.plist`,
   );
 }
 
@@ -184,6 +211,7 @@ export function loadNativeTunnelProfile(
 export function renderNativeTunnelLaunchAgent(
   profile: NativeTunnelProfile,
   homeDirectory = homedir(),
+  connector: TunnelConnectorSpec = TUNNEL_CONNECTORS[0]!,
 ): string {
   const logsDirectory = join(
     homeDirectory,
@@ -197,7 +225,7 @@ export function renderNativeTunnelLaunchAgent(
     '<plist version="1.0">',
     "<dict>",
     "  <key>Label</key>",
-    `  <string>${FLYTO2_RUNTIME_TUNNEL_LABEL}</string>`,
+    `  <string>${xmlEscape(connector.label)}</string>`,
     "  <key>ProgramArguments</key>",
     "  <array>",
     `    <string>${xmlEscape(profile.binary_path)}</string>`,
@@ -207,6 +235,8 @@ export function renderNativeTunnelLaunchAgent(
     "    <string>--no-autoupdate</string>",
     "    <string>--protocol</string>",
     "    <string>http2</string>",
+    "    <string>--metrics</string>",
+    `    <string>127.0.0.1:${connector.metricsPort}</string>`,
     "    <string>run</string>",
     `    <string>${xmlEscape(profile.tunnel_id)}</string>`,
     "  </array>",
@@ -217,9 +247,9 @@ export function renderNativeTunnelLaunchAgent(
     "  <key>ThrottleInterval</key>",
     "  <integer>1</integer>",
     "  <key>StandardOutPath</key>",
-    `  <string>${xmlEscape(join(logsDirectory, "tunnel.log"))}</string>`,
+    `  <string>${xmlEscape(join(logsDirectory, `tunnel${connector.logSuffix}.log`))}</string>`,
     "  <key>StandardErrorPath</key>",
-    `  <string>${xmlEscape(join(logsDirectory, "tunnel-error.log"))}</string>`,
+    `  <string>${xmlEscape(join(logsDirectory, `tunnel${connector.logSuffix}-error.log`))}</string>`,
     "</dict>",
     "</plist>",
     "",
@@ -231,10 +261,105 @@ export function installNativeTunnelService(
   start = true,
 ): NativeTunnelStatus {
   assertMacOs();
+  const profile = requireNativeTunnelProfile(homeDirectory);
+  assertTunnelAssets(profile);
+
+  const logsDirectory = join(
+    homeDirectory,
+    "Library",
+    "Logs",
+    "Flyto2 Runtime",
+  );
+  mkdirSync(
+    dirname(nativeTunnelPlistPath(homeDirectory)),
+    { recursive: true, mode: 0o700 },
+  );
+  mkdirSync(logsDirectory, { recursive: true, mode: 0o700 });
+
+  const staged = TUNNEL_CONNECTORS.map((connector) =>
+    stageTunnelConnector(profile, homeDirectory, connector)
+  );
+
+  if (start) {
+    for (const connector of [...staged].reverse()) {
+      ensureTunnelConnector(homeDirectory, connector.spec, connector.requiresReload);
+    }
+  }
+  return nativeTunnelStatus(homeDirectory);
+}
+
+export function stopNativeTunnelService(
+  homeDirectory = homedir(),
+): NativeTunnelStatus {
+  assertMacOs();
+  for (const connector of [...TUNNEL_CONNECTORS].reverse()) {
+    bootoutConnector(connector.label);
+  }
+  return nativeTunnelStatus(homeDirectory);
+}
+
+export function startNativeTunnelService(
+  homeDirectory = homedir(),
+): NativeTunnelStatus {
+  assertMacOs();
+  if (
+    TUNNEL_CONNECTORS.some((connector) =>
+      !existsSync(nativeTunnelPlistPath(homeDirectory, connector.label))
+    )
+  ) {
+    return installNativeTunnelService(homeDirectory, true);
+  }
+
+  for (const connector of [...TUNNEL_CONNECTORS].reverse()) {
+    ensureTunnelConnector(homeDirectory, connector);
+  }
+  return nativeTunnelStatus(homeDirectory);
+}
+
+export function nativeTunnelStatus(
+  homeDirectory = homedir(),
+): NativeTunnelStatus {
+  const profile = loadNativeTunnelProfile(homeDirectory);
+  const connectors = TUNNEL_CONNECTORS.map((connector) =>
+    tunnelConnectorStatus(homeDirectory, connector)
+  );
+  const primary = connectors[0]!;
+  const runningConnectors = connectors.filter(
+    (connector) => connector.pid !== undefined,
+  ).length;
+  const plistPath = nativeTunnelPlistPath(homeDirectory);
+
+  return {
+    supported: platform() === "darwin",
+    configured: profile !== undefined,
+    loaded: primary.loaded,
+    label: FLYTO2_RUNTIME_TUNNEL_LABEL,
+    ...(primary.state ? { state: primary.state } : {}),
+    ...(primary.pid !== undefined ? { pid: primary.pid } : {}),
+    ...(primary.lastExitStatus !== undefined
+      ? { lastExitStatus: primary.lastExitStatus }
+      : {}),
+    ...(profile
+      ? { hostname: profile.hostname, tunnel_id: profile.tunnel_id }
+      : {}),
+    connector_count: connectors.length,
+    running_connectors: runningConnectors,
+    redundant: runningConnectors >= 2,
+    connectors,
+    profile_path: nativeTunnelProfilePath(homeDirectory),
+    plist_path: plistPath,
+  };
+}
+
+function requireNativeTunnelProfile(homeDirectory: string): NativeTunnelProfile {
   const profile = loadNativeTunnelProfile(homeDirectory);
   if (!profile) {
     throw new Error("Flyto2 Runtime tunnel profile is not configured.");
   }
+  return profile;
+}
+
+function assertTunnelAssets(profile: NativeTunnelProfile): void {
   for (const path of [
     profile.binary_path,
     profile.config_path,
@@ -242,17 +367,15 @@ export function installNativeTunnelService(
   ]) {
     if (!existsSync(path)) throw new Error(`Tunnel asset is missing: ${path}`);
   }
+}
 
-  const plistPath = nativeTunnelPlistPath(homeDirectory);
-  const logsDirectory = join(
-    homeDirectory,
-    "Library",
-    "Logs",
-    "Flyto2 Runtime",
-  );
-  mkdirSync(dirname(plistPath), { recursive: true, mode: 0o700 });
-  mkdirSync(logsDirectory, { recursive: true, mode: 0o700 });
-  const nextPlist = renderNativeTunnelLaunchAgent(profile, homeDirectory);
+function stageTunnelConnector(
+  profile: NativeTunnelProfile,
+  homeDirectory: string,
+  spec: TunnelConnectorSpec,
+): { spec: TunnelConnectorSpec; requiresReload: boolean } {
+  const plistPath = nativeTunnelPlistPath(homeDirectory, spec.label);
+  const nextPlist = renderNativeTunnelLaunchAgent(profile, homeDirectory, spec);
   const previousPlistPath = `${plistPath}.previous`;
   const activePlistPath = `${plistPath}.active`;
   let requiresReload = false;
@@ -261,7 +384,7 @@ export function installNativeTunnelService(
     const currentPlist = readFileSync(plistPath, "utf8");
     if (
       !existsSync(activePlistPath)
-      && launchctlPrint() !== undefined
+      && launchctlPrint(spec.label) !== undefined
     ) {
       copyFileSync(plistPath, activePlistPath);
     }
@@ -272,115 +395,102 @@ export function installNativeTunnelService(
   }
 
   writeAtomic(plistPath, nextPlist, 0o600);
-
-  if (start) {
-    if (requiresReload) return reloadNativeTunnelService(homeDirectory);
-    return startNativeTunnelService(homeDirectory);
-  }
-  return nativeTunnelStatus(homeDirectory);
+  return { spec, requiresReload };
 }
 
-export function stopNativeTunnelService(
-  homeDirectory = homedir(),
-): NativeTunnelStatus {
-  assertMacOs();
-  bootout();
-  return nativeTunnelStatus(homeDirectory);
-}
-
-export function startNativeTunnelService(
-  homeDirectory = homedir(),
-): NativeTunnelStatus {
-  assertMacOs();
-  const plistPath = nativeTunnelPlistPath(homeDirectory);
-  if (!existsSync(plistPath)) return installNativeTunnelService(homeDirectory, true);
-  const detail = launchctlPrint();
+function ensureTunnelConnector(
+  homeDirectory: string,
+  spec: TunnelConnectorSpec,
+  forceReload = false,
+): void {
+  const plistPath = nativeTunnelPlistPath(homeDirectory, spec.label);
   const activePlistPath = `${plistPath}.active`;
+  const detail = launchctlPrint(spec.label);
   const activePlistMatches = !existsSync(activePlistPath)
     || readFileSync(activePlistPath, "utf8") === readFileSync(plistPath, "utf8");
 
-  if (detail?.pid !== undefined && activePlistMatches) {
-    return nativeTunnelStatus(homeDirectory);
+  if (
+    !forceReload
+    && detail?.pid !== undefined
+    && activePlistMatches
+    && tunnelConnectorReady(spec)
+  ) {
+    return;
   }
-  return reloadNativeTunnelService(homeDirectory);
+  reloadTunnelConnector(homeDirectory, spec);
 }
 
-export function nativeTunnelStatus(
-  homeDirectory = homedir(),
-): NativeTunnelStatus {
-  const profile = loadNativeTunnelProfile(homeDirectory);
-  const plistPath = nativeTunnelPlistPath(homeDirectory);
-  if (platform() !== "darwin") {
-    return {
-      supported: false,
-      configured: profile !== undefined,
-      loaded: false,
-      label: FLYTO2_RUNTIME_TUNNEL_LABEL,
-      profile_path: nativeTunnelProfilePath(homeDirectory),
-      plist_path: plistPath,
-      ...(profile
-        ? { hostname: profile.hostname, tunnel_id: profile.tunnel_id }
-        : {}),
-    };
-  }
-  const detail = launchctlPrint();
-  return {
-    supported: true,
-    configured: profile !== undefined,
-    loaded: detail !== undefined,
-    label: FLYTO2_RUNTIME_TUNNEL_LABEL,
-    ...(detail?.state ? { state: detail.state } : {}),
-    ...(detail?.pid !== undefined ? { pid: detail.pid } : {}),
-    ...(detail?.lastExitStatus !== undefined
-      ? { lastExitStatus: detail.lastExitStatus }
-      : {}),
-    ...(profile
-      ? { hostname: profile.hostname, tunnel_id: profile.tunnel_id }
-      : {}),
-    profile_path: nativeTunnelProfilePath(homeDirectory),
-    plist_path: plistPath,
-  };
-}
-
-function reloadNativeTunnelService(
-  homeDirectory = homedir(),
-): NativeTunnelStatus {
-  const plistPath = nativeTunnelPlistPath(homeDirectory);
+function reloadTunnelConnector(
+  homeDirectory: string,
+  spec: TunnelConnectorSpec,
+): void {
+  const plistPath = nativeTunnelPlistPath(homeDirectory, spec.label);
   const previousPlistPath = `${plistPath}.previous`;
   const activePlistPath = `${plistPath}.active`;
   const hasPreviousPlist = existsSync(previousPlistPath);
 
   restartLaunchAgentWithRecovery({
-    bootout,
-    isLoaded: () => launchctlPrint() !== undefined,
-    activate: () => activateNativeTunnelLaunchAgent(plistPath),
-    isHealthy: tunnelProcessHealthy,
+    bootout: () => bootoutConnector(spec.label),
+    isLoaded: () => launchctlPrint(spec.label) !== undefined,
+    activate: () => activateTunnelConnector(spec.label, plistPath),
+    isHealthy: () => tunnelConnectorReady(spec),
     rollback: () => {
-      if (hasPreviousPlist) {
-        copyFileSync(previousPlistPath, plistPath);
-      }
+      if (hasPreviousPlist) copyFileSync(previousPlistPath, plistPath);
     },
     sleep: sleepSync,
   }, {
-    name: "Flyto2 Runtime tunnel",
-    healthDescription: "launchd process check",
+    name: spec.label === FLYTO2_RUNTIME_TUNNEL_LABEL
+      ? "Flyto2 Runtime tunnel"
+      : "Flyto2 Runtime tunnel standby",
+    healthDescription: "cloudflared /ready",
   });
 
   copyFileSync(plistPath, activePlistPath);
-  return nativeTunnelStatus(homeDirectory);
 }
 
-function activateNativeTunnelLaunchAgent(plistPath: string): void {
-  if (!launchctlPrint()) {
+function activateTunnelConnector(label: string, plistPath: string): void {
+  if (!launchctlPrint(label)) {
     runLaunchctl(["bootstrap", launchAgentDomain(), plistPath]);
   }
-  runLaunchctl(["enable", launchAgentTarget()]);
-  runLaunchctl(["kickstart", "-k", launchAgentTarget()]);
+  runLaunchctl(["enable", launchAgentTarget(label)]);
+  runLaunchctl(["kickstart", "-k", launchAgentTarget(label)]);
 }
 
-function tunnelProcessHealthy(): boolean {
-  const detail = launchctlPrint();
-  return detail?.pid !== undefined;
+function tunnelConnectorReady(spec: TunnelConnectorSpec): boolean {
+  if (launchctlPrint(spec.label)?.pid === undefined) return false;
+  const url = `http://127.0.0.1:${spec.metricsPort}/ready`;
+  const script = [
+    "const url = process.argv[1];",
+    "fetch(url, { signal: AbortSignal.timeout(800), cache: 'no-store' })",
+    "  .then(async (response) => {",
+    "    if (!response.ok) process.exit(1);",
+    "    const body = await response.json();",
+    "    process.exit(Number(body?.readyConnections ?? 0) > 0 ? 0 : 1);",
+    "  })",
+    "  .catch(() => process.exit(1));",
+  ].join("\n");
+  return spawnSync(process.execPath, ["-e", script, url], {
+    encoding: "utf8",
+    timeout: 1_000,
+  }).status === 0;
+}
+
+function tunnelConnectorStatus(
+  homeDirectory: string,
+  spec: TunnelConnectorSpec,
+): NativeTunnelConnectorStatus {
+  const detail = launchctlPrint(spec.label);
+  return {
+    label: spec.label,
+    loaded: detail !== undefined,
+    ...(detail?.state ? { state: detail.state } : {}),
+    ...(detail?.pid !== undefined ? { pid: detail.pid } : {}),
+    ...(detail?.lastExitStatus !== undefined
+      ? { lastExitStatus: detail.lastExitStatus }
+      : {}),
+    metrics_url: `http://127.0.0.1:${spec.metricsPort}/ready`,
+    plist_path: nativeTunnelPlistPath(homeDirectory, spec.label),
+  };
 }
 
 function sleepSync(milliseconds: number): void {
@@ -393,12 +503,12 @@ function sleepSync(milliseconds: number): void {
   );
 }
 
-function bootout(): void {
-  if (!launchctlPrint()) return;
-  runLaunchctl(["bootout", launchAgentTarget()]);
+function bootoutConnector(label: string): void {
+  if (!launchctlPrint(label)) return;
+  runLaunchctl(["bootout", launchAgentTarget(label)]);
 }
 
-function launchctlPrint(): {
+function launchctlPrint(label: string): {
   state?: string;
   pid?: number;
   lastExitStatus?: number;
@@ -406,7 +516,7 @@ function launchctlPrint(): {
   if (platform() !== "darwin") return undefined;
   const result = spawnSync(
     "launchctl",
-    ["print", launchAgentTarget()],
+    ["print", launchAgentTarget(label)],
     { encoding: "utf8" },
   );
   if (result.status !== 0) return undefined;
@@ -435,8 +545,8 @@ function launchAgentDomain(): string {
   return `gui/${uid}`;
 }
 
-function launchAgentTarget(): string {
-  return `${launchAgentDomain()}/${FLYTO2_RUNTIME_TUNNEL_LABEL}`;
+function launchAgentTarget(label: string): string {
+  return `${launchAgentDomain()}/${label}`;
 }
 
 function requiredString(value: unknown, field: string): string {
