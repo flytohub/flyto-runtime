@@ -48,6 +48,35 @@ test("a checkout exposes initial and nested instruction context", async (t) => {
 
 });
 
+test("Git workspaces discover nested instruction files through the fast path", async (t) => {
+  const context = await fixture(t);
+  const gitRoot = await createGitProject(context.root);
+  await mkdir(join(gitRoot, "nested"));
+  await writeFile(join(gitRoot, "nested", "CLAUDE.md"), "nested git instructions\n");
+
+  const opened = await context.registry.openWorkspace(gitRoot);
+
+  assert.deepEqual(
+    opened.availableAgentsFiles.map((file) => file.path),
+    [join(gitRoot, "nested", "CLAUDE.md")],
+  );
+});
+
+test("Git fast path preserves ignored nested instruction files", async (t) => {
+  const context = await fixture(t);
+  const gitRoot = await createGitProject(context.root);
+  await writeFile(join(gitRoot, ".gitignore"), "ignored/\n");
+  await mkdir(join(gitRoot, "ignored"));
+  await writeFile(join(gitRoot, "ignored", "AGENTS.md"), "ignored instructions\n");
+
+  const opened = await context.registry.openWorkspace(gitRoot);
+
+  assert.deepEqual(
+    opened.availableAgentsFiles.map((file) => file.path),
+    [join(gitRoot, "ignored", "AGENTS.md")],
+  );
+});
+
 test("global instruction symlinks may target user-managed files outside agentDir", {
   skip: platform() === "win32",
 }, async (t) => {

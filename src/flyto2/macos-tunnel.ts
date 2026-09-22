@@ -61,6 +61,14 @@ export interface NativeTunnelConnectorStatus {
   plist_path: string;
 }
 
+export interface NativeTunnelReadiness {
+  supported: boolean;
+  configured: boolean;
+  connector_count: number;
+  ready_connectors: number;
+  connectors: Array<{ label: string; ready: boolean }>;
+}
+
 export interface NativeTunnelStatus {
   supported: boolean;
   configured: boolean;
@@ -316,6 +324,48 @@ export function startNativeTunnelService(
   return nativeTunnelStatus(homeDirectory);
 }
 
+export async function nativeTunnelReadiness(
+  homeDirectory = homedir(),
+): Promise<NativeTunnelReadiness> {
+  const supported = platform() === "darwin";
+  const profile = loadNativeTunnelProfile(homeDirectory);
+  if (!supported || !profile) {
+    return {
+      supported,
+      configured: profile !== undefined,
+      connector_count: TUNNEL_CONNECTORS.length,
+      ready_connectors: 0,
+      connectors: TUNNEL_CONNECTORS.map((connector) => ({
+        label: connector.label,
+        ready: false,
+      })),
+    };
+  }
+
+  const connectors = await Promise.all(
+    TUNNEL_CONNECTORS.map(async (connector) => ({
+      label: connector.label,
+      ready: await tunnelConnectorReadyAsync(connector),
+    })),
+  );
+  return {
+    supported,
+    configured: true,
+    connector_count: connectors.length,
+    ready_connectors: connectors.filter((connector) => connector.ready).length,
+    connectors,
+  };
+}
+
+export function shouldRepairNativeTunnelRedundancy(
+  readiness: NativeTunnelReadiness,
+): boolean {
+  return readiness.configured
+    && readiness.connector_count >= 2
+    && readiness.ready_connectors > 0
+    && readiness.ready_connectors < readiness.connector_count;
+}
+
 export function nativeTunnelStatus(
   homeDirectory = homedir(),
 ): NativeTunnelStatus {
@@ -454,6 +504,22 @@ function activateTunnelConnector(label: string, plistPath: string): void {
   }
   runLaunchctl(["enable", launchAgentTarget(label)]);
   runLaunchctl(["kickstart", "-k", launchAgentTarget(label)]);
+}
+
+async function tunnelConnectorReadyAsync(spec: TunnelConnectorSpec): Promise<boolean> {
+  if (launchctlPrint(spec.label)?.pid === undefined) return false;
+  const url = `http://127.0.0.1:${spec.metricsPort}/ready`;
+  try {
+    const response = await fetch(url, {
+      signal: AbortSignal.timeout(800),
+      cache: "no-store",
+    });
+    if (!response.ok) return false;
+    const body = await response.json() as { readyConnections?: unknown };
+    return Number(body.readyConnections ?? 0) > 0;
+  } catch {
+    return false;
+  }
 }
 
 function tunnelConnectorReady(spec: TunnelConnectorSpec): boolean {

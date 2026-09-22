@@ -1,4 +1,5 @@
 import { normalizeLegacyMcpInput } from "./mcp-legacy-input.js";
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { access, realpath } from "node:fs/promises";
@@ -23,8 +24,6 @@ import {
   registerArtifactTools,
 } from "./artifact-tools.js";
 import { loadConfig, type ServerConfig } from "./config.js";
-import { DEVSPACE_CONFIG_VERSION } from "./config-schema.js";
-import { FLYTO2_STATE_SCHEMA_VERSION } from "./db/migrations.js";
 import {
   createOpenAIIncomingArtifactAdapter,
   type IncomingArtifactAdapter,
@@ -49,9 +48,11 @@ import { shutdownHttpServer } from "./server-shutdown.js";
 import { formatPathForPrompt } from "./skills.js";
 import { DEVSPACE_VERSION } from "./version.js";
 import { createWorkspaceStore } from "./workspace-store.js";
-import { flyto2BuildInfo } from "./flyto2/build-info.js";
-import { nativeTunnelStatus } from "./flyto2/macos-tunnel.js";
 import { DurableOperationStore } from "./flyto2/durable-operations.js";
+import {
+  nativeTunnelReadiness,
+  shouldRepairNativeTunnelRedundancy,
+} from "./flyto2/macos-tunnel.js";
 import { withDurableToolHandlers } from "./flyto2/durable-tools.js";
 import { registerRuntimeTools } from "./flyto2/runtime-tools.js";
 import { RuntimeEventStore } from "./flyto2/runtime-events.js";
@@ -86,18 +87,6 @@ import {
 } from "./tool-surfaces/types.js";
 
 const WORKSPACE_APP_MANIFEST_ENTRY = "workspace-app.html";
-const RUNTIME_TOOL_SURFACE_NAMES = [
-  toolNames.runtimeManifest,
-  toolNames.runtimeEvents,
-  toolNames.runtimeWait,
-  toolNames.runtimeRun,
-  toolNames.runtimeEvidence,
-  toolNames.runtimeSignal,
-  toolNames.runtimeWatch,
-  toolNames.runtimeUnwatch,
-  toolNames.runtimeWatches,
-] as const;
-
 function mcpServerInfo() {
   return {
     name: "flyto2-runtime",
@@ -237,20 +226,6 @@ function shouldTrustLocalPublicProxy(config: ServerConfig): boolean {
   if (!["127.0.0.1", "::1", "localhost"].includes(bindHost)) return false;
   const publicHost = new URL(config.publicBaseUrl).hostname.replace(/^\[|\]$/g, "");
   return !["127.0.0.1", "::1", "localhost"].includes(publicHost);
-}
-
-function isChatGptRequest(req: Request): boolean {
-  const fingerprint = [
-    req.header("user-agent"),
-    req.header("origin"),
-    req.header("referer"),
-    req.header("x-openai-host"),
-    req.header("x-chatgpt-client"),
-  ]
-    .filter((value): value is string => Boolean(value))
-    .join(" ")
-    .toLowerCase();
-  return fingerprint.includes("chatgpt") || fingerprint.includes("openai");
 }
 
 function requestLogFields(req: Request, config: ServerConfig): Record<string, unknown> {
@@ -869,8 +844,65 @@ function withTrackedToolHandlers(
   };
 }
 
+function startNativeTunnelWatchdog(
+  config: ServerConfig,
+  enabled: boolean,
+): () => void {
+  if (!enabled || process.platform !== "darwin") return () => {};
+
+  let stopped = false;
+  let checking = false;
+  let lastRepairAt = 0;
+
+  const check = async () => {
+    if (stopped || checking) return;
+    checking = true;
+    try {
+      const readiness = await nativeTunnelReadiness();
+      if (!shouldRepairNativeTunnelRedundancy(readiness)) return;
+      if (Date.now() - lastRepairAt < 30_000) return;
+      const cliPath = process.argv[1];
+      if (!cliPath) return;
+
+      lastRepairAt = Date.now();
+      const child = spawn(
+        process.execPath,
+        [cliPath, "service", "tunnel-start"],
+        {
+          detached: true,
+          stdio: "ignore",
+          env: process.env,
+        },
+      );
+      child.unref();
+      logEvent(config.logging, "warn", "tunnel_repair_started", {
+        readyConnectors: readiness.ready_connectors,
+        connectorCount: readiness.connector_count,
+      });
+    } catch (error) {
+      logEvent(config.logging, "warn", "tunnel_watchdog_check_failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      checking = false;
+    }
+  };
+
+  const initial = setTimeout(() => void check(), 5_000);
+  const interval = setInterval(() => void check(), 15_000);
+  initial.unref();
+  interval.unref();
+
+  return () => {
+    stopped = true;
+    clearTimeout(initial);
+    clearInterval(interval);
+  };
+}
+
 export interface CreateServerOptions {
   incomingArtifactAdapters?: readonly IncomingArtifactAdapter[];
+  nativeTunnelWatchdog?: boolean;
 }
 
 export function createServer(
@@ -907,23 +939,20 @@ export function createServer(
     config.subagents,
     getLocalAgentProviderAvailabilitySnapshot(process.env, config.subagents),
   );
-  const resolveLocalAgentProviders = () => buildLocalAgentProviderStatuses(
-    config.subagents,
-    getLocalAgentProviderAvailabilitySnapshot(process.env, config.subagents),
+  const stopNativeTunnelWatchdog = startNativeTunnelWatchdog(
+    config,
+    options.nativeTunnelWatchdog === true,
   );
+  const resolveLocalAgentProviders = config.subagents.enabled
+    ? () => buildLocalAgentProviderStatuses(
+        config.subagents,
+        getLocalAgentProviderAvailabilitySnapshot(process.env, config.subagents),
+      )
+    : () => localAgentProviders;
   const modernToolSurface = getToolSurface(config.toolMode);
-  const registeredToolNames = new Set<string>();
   const bindModernMcpSurface = compileMcpRegistrationSurface((target) => {
-    const observedTarget: McpRegistrationTarget = {
-      registerTool: ((...args: unknown[]) => {
-        const [name] = args;
-        if (typeof name === "string") registeredToolNames.add(name);
-        return (target.registerTool as (...callArgs: unknown[]) => unknown)(...args);
-      }) as McpRegistrationTarget["registerTool"],
-      registerResource: target.registerResource,
-    };
     registerMcpSurface(
-      observedTarget,
+      target,
       config,
       workspaces,
       reviewCheckpoints,
@@ -937,10 +966,6 @@ export function createServer(
       toolActivities.track,
     );
   });
-  const buildInfo = flyto2BuildInfo();
-  const processStartedAt = new Date().toISOString();
-  let lastMcpSuccessAt: string | null = null;
-  let lastChatGptSuccessAt: string | null = null;
   const logMcpHandlerError = (error: Error) => logEvent(
     config.logging,
     "error",
@@ -1025,75 +1050,11 @@ export function createServer(
   );
 
   app.get("/healthz", (_req, res) => {
-    const reactive = reactiveCommands.health();
-    const watches = workspaceWatches.health();
-    const registeredTools = Array.from(registeredToolNames).sort();
-    const runtimeToolsLoaded = RUNTIME_TOOL_SURFACE_NAMES.every(
-      (name) => registeredToolNames.has(name),
-    );
-    const publicMcpUrl = new URL("/mcp", config.publicBaseUrl).toString();
-    const publicUrl = new URL(config.publicBaseUrl);
-    const tunnelConfigured = !["localhost", "127.0.0.1", "::1", "[::1]"]
-      .includes(publicUrl.hostname);
-    const nativeTunnel = nativeTunnelStatus();
-
+    res.setHeader("Cache-Control", "no-store");
     res.json({
       ok: true,
       name: "flyto2-runtime",
       product: "Flyto2",
-      runtime: {
-        version: DEVSPACE_VERSION,
-        git_sha: buildInfo.git_sha,
-        build_timestamp: buildInfo.built_at,
-        git_dirty: buildInfo.git_dirty,
-        build_info_source: buildInfo.source,
-        pid: process.pid,
-        started_at: processStartedAt,
-      },
-      schema: {
-        config: DEVSPACE_CONFIG_VERSION,
-        state: FLYTO2_STATE_SCHEMA_VERSION,
-      },
-      tunnel: {
-        configured: tunnelConfigured,
-        public_base_url: config.publicBaseUrl,
-        native_service: {
-          supported: nativeTunnel.supported,
-          configured: nativeTunnel.configured,
-          loaded: nativeTunnel.loaded,
-          label: nativeTunnel.label,
-          ...(nativeTunnel.state ? { state: nativeTunnel.state } : {}),
-          ...(nativeTunnel.pid !== undefined ? { pid: nativeTunnel.pid } : {}),
-          ...(nativeTunnel.lastExitStatus !== undefined
-            ? { last_exit_status: nativeTunnel.lastExitStatus }
-            : {}),
-          ...(nativeTunnel.hostname ? { hostname: nativeTunnel.hostname } : {}),
-          connector_count: nativeTunnel.connector_count,
-          running_connectors: nativeTunnel.running_connectors,
-          redundant: nativeTunnel.redundant,
-          connectors: nativeTunnel.connectors.map((connector) => ({
-            label: connector.label,
-            loaded: connector.loaded,
-            ...(connector.state ? { state: connector.state } : {}),
-            ...(connector.pid !== undefined ? { pid: connector.pid } : {}),
-            metrics_url: connector.metrics_url,
-          })),
-        },
-      },
-      mcp: {
-        status: "ready",
-        endpoint: publicMcpUrl,
-        tool_mode: config.toolMode,
-        proxy_trust: proxyTrustMode,
-        registered_tools: registeredTools,
-        registered_tool_count: registeredTools.length,
-        runtime_tools_expected: [...RUNTIME_TOOL_SURFACE_NAMES],
-        full_runtime_tools_loaded: runtimeToolsLoaded,
-        last_successful_request_at: lastMcpSuccessAt,
-        last_chatgpt_success_at: lastChatGptSuccessAt,
-      },
-      reactive_jobs: reactive,
-      watchers: watches,
     });
   });
 
@@ -1134,9 +1095,6 @@ export function createServer(
     }
     try {
       await mcpNodeHandler(req, res, requestBody);
-      const now = new Date().toISOString();
-      lastMcpSuccessAt = now;
-      if (isChatGptRequest(req)) lastChatGptSuccessAt = now;
     } catch (error) {
       logEvent(config.logging, "error", "mcp_request_error", {
         requestId,
@@ -1163,6 +1121,7 @@ export function createServer(
           });
         }
         await toolActivities.waitForIdle();
+        stopNativeTunnelWatchdog();
         processSessions.shutdown();
         workspaceWatches.shutdown();
         reactiveCommands.shutdown();

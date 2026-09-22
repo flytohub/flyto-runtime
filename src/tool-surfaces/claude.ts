@@ -35,7 +35,8 @@ export function registerClaudeTools(context: ToolRegistrationContext): void {
   registerShellTool(context);
 }
 
-const LEGACY_BASH_YIELD_MS = 1_500;
+const LEGACY_BASH_YIELD_MS = 750;
+const LEGACY_BASH_RESUME_WAIT_MS = 1_500;
 const LEGACY_BASH_EVENT_TYPE = "legacy_bash.exited";
 const LEGACY_JOB_COMMAND_PREFIX = "@flyto2/job";
 const CLAUDE_SHELL_DESCRIPTION =
@@ -230,7 +231,7 @@ function registerShellTool(context: ToolRegistrationContext): void {
           context,
           workspaceId,
           existingJobId,
-          LEGACY_BASH_YIELD_MS,
+          LEGACY_BASH_RESUME_WAIT_MS,
         );
         response = outcome.response;
         responseJobStatus = outcome.status;

@@ -53,59 +53,28 @@ test("tool modes expose the expected host-facing tool surface", async (t) => {
   }
 });
 
-test("healthz exposes an auditable Runtime truth card", async (t) => {
+test("healthz exposes only minimal public liveness", async (t) => {
   const context = await httpServerFixture(t, "flyto2-health-");
   const response = await fetch(`${context.localBaseUrl}/healthz`);
   assert.equal(response.status, 200);
-  const health = await response.json() as {
-    ok: boolean;
-    runtime: {
-      version: string;
-      git_sha: string | null;
-      build_timestamp: string | null;
-      pid: number;
-      started_at: string;
-    };
-    schema: { config: number; state: number };
-    tunnel: { configured: boolean; public_base_url: string };
-    mcp: {
-      status: string;
-      registered_tools: string[];
-      full_runtime_tools_loaded: boolean;
-      last_successful_request_at: string | null;
-      last_chatgpt_success_at: string | null;
-    };
-    reactive_jobs: { active_processes: number; running: number };
-    watchers: { native_active: number; active: number; error: number };
-  };
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  const health = await response.json() as Record<string, unknown>;
 
-  assert.equal(health.ok, true);
-  assert.match(health.runtime.version, /^\d+\.\d+\.\d+/);
-  assert.equal(health.runtime.pid, process.pid);
-  assert.ok(Date.parse(health.runtime.started_at));
-  assert.equal(health.schema.config, 1);
-  assert.ok(health.schema.state >= 11);
-  assert.equal(health.tunnel.public_base_url, "https://example.test");
-  assert.equal(health.mcp.status, "ready");
-  assert.equal(health.mcp.full_runtime_tools_loaded, true);
-  for (const tool of [
-    "runtime_manifest",
-    "runtime_events",
-    "runtime_wait",
-    "runtime_run",
-    "runtime_evidence",
-    "runtime_signal",
-    "runtime_watch",
-    "runtime_unwatch",
-    "runtime_watches",
+  assert.deepEqual(health, {
+    ok: true,
+    name: "flyto2-runtime",
+    product: "Flyto2",
+  });
+  for (const sensitiveField of [
+    "runtime",
+    "schema",
+    "tunnel",
+    "mcp",
+    "reactive_jobs",
+    "watchers",
   ]) {
-    assert.ok(health.mcp.registered_tools.includes(tool), tool);
+    assert.equal(sensitiveField in health, false, sensitiveField);
   }
-  assert.equal(health.reactive_jobs.active_processes, 0);
-  assert.equal(health.reactive_jobs.running, 0);
-  assert.equal(health.watchers.native_active, 0);
-  assert.equal(health.watchers.active, 0);
-  assert.equal(health.watchers.error, 0);
 });
 
 test("model-facing tool schemas use snake_case recursively", async (t) => {

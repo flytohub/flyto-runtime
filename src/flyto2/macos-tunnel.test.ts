@@ -12,7 +12,41 @@ import {
   nativeTunnelPlistPath,
   renderNativeTunnelLaunchAgent,
   installNativeTunnelService,
+  shouldRepairNativeTunnelRedundancy,
 } from "./macos-tunnel.js";
+
+test("tunnel redundancy repair triggers only for a partial connector failure", () => {
+  assert.equal(shouldRepairNativeTunnelRedundancy({
+    supported: true,
+    configured: true,
+    connector_count: 2,
+    ready_connectors: 1,
+    connectors: [
+      { label: FLYTO2_RUNTIME_TUNNEL_LABEL, ready: true },
+      { label: FLYTO2_RUNTIME_TUNNEL_STANDBY_LABEL, ready: false },
+    ],
+  }), true);
+  assert.equal(shouldRepairNativeTunnelRedundancy({
+    supported: true,
+    configured: true,
+    connector_count: 2,
+    ready_connectors: 0,
+    connectors: [
+      { label: FLYTO2_RUNTIME_TUNNEL_LABEL, ready: false },
+      { label: FLYTO2_RUNTIME_TUNNEL_STANDBY_LABEL, ready: false },
+    ],
+  }), false);
+  assert.equal(shouldRepairNativeTunnelRedundancy({
+    supported: true,
+    configured: true,
+    connector_count: 2,
+    ready_connectors: 2,
+    connectors: [
+      { label: FLYTO2_RUNTIME_TUNNEL_LABEL, ready: true },
+      { label: FLYTO2_RUNTIME_TUNNEL_STANDBY_LABEL, ready: true },
+    ],
+  }), false);
+});
 
 test("native tunnel launch agent is independent of the legacy Mac Kit supervisor", () => {
   const profile = {

@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import type { Stats } from "node:fs";
 import { Result, type Result as BetterResult } from "better-result";
@@ -7,8 +8,9 @@ import type {
   WorkspaceSession,
   WorkspaceStore,
 } from "./workspace-store.js";
-import { mkdir, opendir, readFile, realpath, stat } from "node:fs/promises";
+import { lstat, mkdir, opendir, readFile, realpath, stat } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { promisify } from "node:util";
 import { loadProjectContextFiles } from "@earendil-works/pi-coding-agent";
 import type { ServerConfig } from "./config.js";
 import {
@@ -97,6 +99,7 @@ type DirectoryOps = {
   mkdir: (path: string, options: { recursive: true }) => Promise<unknown>;
 };
 
+const execFileAsync = promisify(execFile);
 const MAX_CACHED_WORKSPACES = 32;
 
 export class WorkspaceRegistry {
@@ -617,19 +620,17 @@ export class WorkspaceRegistry {
       const realPath = await tryRealpath(file.path);
       if (realPath) loadedRealPaths.add(realPath);
     }
-    const discovered: AvailableAgentsFile[] = [];
 
-    await walkWorkspace(root, async (path, entry) => {
-      if (!entry.isFile()) return;
-      if (!CONTEXT_FILE_NAMES.has(entry.name)) return;
-      if (loadedPaths.has(path)) return;
+    const discovered = await findGitContextFiles(root) ?? await findContextFilesByWalking(root);
+    const available: AvailableAgentsFile[] = [];
+    for (const path of discovered) {
+      if (loadedPaths.has(path)) continue;
       const realPath = await tryRealpath(path);
-      if (realPath && loadedRealPaths.has(realPath)) return;
+      if (realPath && loadedRealPaths.has(realPath)) continue;
+      available.push({ path });
+    }
 
-      discovered.push({ path });
-    });
-
-    return discovered.sort((a, b) => a.path.localeCompare(b.path));
+    return available.sort((a, b) => a.path.localeCompare(b.path));
   }
 }
 
@@ -721,6 +722,77 @@ async function tryRealpath(path: string): Promise<string | undefined> {
   } catch {
     return undefined;
   }
+}
+
+async function findGitContextFiles(root: string): Promise<string[] | undefined> {
+  const pathspecs = [
+    "AGENTS.md",
+    "AGENTS.MD",
+    "CLAUDE.md",
+    "CLAUDE.MD",
+    ":(glob)**/AGENTS.md",
+    ":(glob)**/AGENTS.MD",
+    ":(glob)**/CLAUDE.md",
+    ":(glob)**/CLAUDE.MD",
+  ];
+
+  try {
+    const { stdout: prefix } = await execFileAsync(
+      "git",
+      ["-C", root, "rev-parse", "--show-prefix"],
+      { encoding: "utf8", maxBuffer: 4_096 },
+    );
+    // Preserve the old subtree-scanning semantics for a workspace opened below
+    // the repository root rather than translating Git-root-relative paths here.
+    if (prefix.trim()) return undefined;
+
+    const [visible, ignored] = await Promise.all([
+      execFileAsync(
+        "git",
+        ["-C", root, "ls-files", "-co", "--exclude-standard", "-z", "--", ...pathspecs],
+        { encoding: "utf8", maxBuffer: 4 * 1024 * 1024 },
+      ),
+      execFileAsync(
+        "git",
+        ["-C", root, "ls-files", "-oi", "--exclude-standard", "-z", "--", ...pathspecs],
+        { encoding: "utf8", maxBuffer: 4 * 1024 * 1024 },
+      ),
+    ]);
+
+    const candidates = (visible.stdout + ignored.stdout)
+      .split("\0")
+      .filter(Boolean)
+      .filter((relativePath) => !hasSkippedContextSegment(relativePath))
+      .map((relativePath) => resolve(root, relativePath));
+    const files = await Promise.all(
+      candidates.map(async (path) => {
+        try {
+          return (await lstat(path)).isFile() ? path : undefined;
+        } catch {
+          return undefined;
+        }
+      }),
+    );
+    return Array.from(new Set(files.filter((path): path is string => Boolean(path))));
+  } catch {
+    return undefined;
+  }
+}
+
+async function findContextFilesByWalking(root: string): Promise<string[]> {
+  const discovered: string[] = [];
+  await walkWorkspace(root, async (path, entry) => {
+    if (!entry.isFile()) return;
+    if (!CONTEXT_FILE_NAMES.has(entry.name)) return;
+    discovered.push(path);
+  });
+  return discovered;
+}
+
+function hasSkippedContextSegment(relativePath: string): boolean {
+  return relativePath
+    .split(/[\\/]+/)
+    .some((segment) => SKIPPED_CONTEXT_DIRS.has(segment));
 }
 
 async function walkWorkspace(

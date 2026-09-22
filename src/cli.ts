@@ -359,7 +359,9 @@ async function serve(): Promise<void> {
   }
   await runStartupWorktreeCleanup(config);
   const { createServer } = await import("./server.js");
-  const { app, close, localAgentProviders } = createServer(config);
+  const { app, close, localAgentProviders } = createServer(config, {
+    nativeTunnelWatchdog: true,
+  });
   const httpServer = app.listen(config.port, config.host, () => {
     console.log(`Flyto2 Runtime listening on http://${config.host}:${config.port}/mcp`);
     console.log(`public base url: ${config.publicBaseUrl}`);
