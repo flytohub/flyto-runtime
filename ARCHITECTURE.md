@@ -72,6 +72,12 @@ Compatibility choices are deliberate:
 - user-facing identity is Flyto2 Runtime;
 - source-native Flyto2 functionality lives in TypeScript, not compiled-JavaScript string patches.
 
+## Event-driven execution
+
+Flyto2 Runtime owns one durable local event stream for standalone MCP use and optional Cloud composition. File mutations performed through durable MCP tools emit shallow workspace events; long non-interactive commands can run through `runtime_run`, which stores bounded evidence locally and emits a completion event. Consumers use a monotonic sequence cursor and one-shot `runtime_wait` instead of model-driven busy polling. Cloud assignment lifecycle events use the same stream and correlation IDs.
+
+Evidence is lazy by design: shallow events contain status, digests and evidence references, never full process output. `runtime_evidence` expands a referenced log only when needed. Runtime restart marks unresolved reactive jobs `orphaned` and explicitly reports the outcome as uncertain rather than replaying the command.
+
 ## Invariants
 
 1. Cloud is optional.

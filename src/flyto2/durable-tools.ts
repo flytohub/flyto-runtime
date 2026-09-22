@@ -7,9 +7,20 @@ import {
 
 const ALWAYS_DURABLE_TOOLS = new Set(["open_workspace"]);
 
+export interface DurableToolCompletion {
+  tool: string;
+  input: Record<string, unknown>;
+  result: unknown;
+}
+
+export interface DurableToolHandlerOptions {
+  onCompleted?: (completion: DurableToolCompletion) => void | Promise<void>;
+}
+
 export function withDurableToolHandlers(
   server: McpRegistrationTarget,
   store: DurableOperationStore,
+  options: DurableToolHandlerOptions = {},
 ): McpRegistrationTarget {
   return {
     registerTool: ((...args: unknown[]) => {
@@ -50,6 +61,13 @@ export function withDurableToolHandlers(
             },
             () => Promise.resolve(handler(toolInput, extra)),
           );
+          if (!result.replayed) {
+            await options.onCompleted?.({
+              tool: name,
+              input: toolInput,
+              result: result.value,
+            });
+          }
           return result.value;
         },
       );

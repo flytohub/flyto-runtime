@@ -62,7 +62,7 @@ Use `runtime_manifest` to inspect the Runtime identity and provider-neutral capa
 
 ## API / MCP surface
 
-The Runtime keeps the upstream workspace/file/process/review tool surfaces and adds a read-only `runtime_manifest` tool. The optional Cloud bridge uses the public paired-device job lifecycle rather than a Runtime-specific Cloud API. The versioned wire contract lives in `src/flyto2/protocol.ts`.
+The Runtime keeps the upstream workspace/file/process/review tool surfaces and adds Flyto2-native Runtime tools: `runtime_manifest`, `runtime_events`, `runtime_wait`, `runtime_run`, `runtime_evidence`, and `runtime_signal`. Long non-interactive tests/builds should use `runtime_run` and wait once for the expected shallow event with `runtime_wait`; full logs remain local evidence until `runtime_evidence` is explicitly requested. The optional Cloud bridge uses the public paired-device job lifecycle rather than a Runtime-specific Cloud API. The versioned wire contract lives in `src/flyto2/protocol.ts`.
 
 ## Architecture
 

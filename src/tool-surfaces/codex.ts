@@ -147,7 +147,7 @@ function registerCodexProcessTools(context: ToolRegistrationContext): void {
     {
       title: "Execute command",
       description:
-        "Run a shell command in a workspace with the user's local permissions. Returns the result when it exits during the yield window, otherwise returns a session_id for write_stdin.",
+        "Run an interactive or short shell command in a workspace with the user's local permissions. For long non-interactive tests/builds, prefer runtime_run + runtime_wait so the model does not poll. Returns the result when it exits during the yield window, otherwise returns a session_id for write_stdin.",
       inputSchema: {
         workspace_id: z.string().describe(workspaceIdDescription),
         cmd: z.string().min(1).describe("Shell command to execute."),
@@ -252,7 +252,7 @@ function registerCodexProcessTools(context: ToolRegistrationContext): void {
     {
       title: "Write to process",
       description:
-        "Poll or write characters to a process returned by exec_command. Omit chars or pass an empty string to poll. Pass \\u0003 to send Ctrl-C.",
+        "Interact with a process returned by exec_command. Use this for PTY/input-driven sessions; for long non-interactive work prefer runtime_run + runtime_wait instead of repeated polling. Pass \\u0003 to send Ctrl-C.",
       inputSchema: {
         workspace_id: z
           .string()

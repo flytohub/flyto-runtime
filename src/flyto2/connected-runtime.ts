@@ -2,6 +2,7 @@ import type {
   Flyto2Assignment,
   Flyto2RuntimeManifest,
 } from "./protocol.js";
+import type { RuntimeEventStore } from "./runtime-events.js";
 import type {
   Flyto2ClaimReceipt,
   Flyto2Completion,
@@ -46,6 +47,7 @@ export interface Flyto2AssignmentExecutor {
 
 export interface ConnectedFlyto2RuntimeOptions {
   leaseRenewIntervalMs?: number;
+  events?: RuntimeEventStore;
   onAssignmentError?: (
     assignment: Flyto2Assignment,
     error: unknown,
@@ -90,7 +92,9 @@ export class ConnectedFlyto2Runtime {
     assignment: Flyto2Assignment,
     signal?: AbortSignal,
   ): Promise<void> {
+    this.emitAssignmentEvent("assignment.received", assignment, "Cloud assignment received.");
     const claim = await this.transport.claim(assignment.assignment_id, signal);
+    this.emitAssignmentEvent("assignment.claimed", assignment, "Cloud assignment lease claimed.");
     const leaseAbort = new AbortController();
     const combinedSignal = signal
       ? AbortSignal.any([signal, leaseAbort.signal])
@@ -107,13 +111,27 @@ export class ConnectedFlyto2Runtime {
         manifest: this.manifest,
         leaseId: claim.lease_id,
         signal: combinedSignal,
-        reportProgress: (progress) =>
-          this.transport.reportProgress(
+        reportProgress: async (progress) => {
+          const result = await this.transport.reportProgress(
             assignment.assignment_id,
             claim.lease_id,
             progress,
             combinedSignal,
-          ),
+          );
+          this.emitAssignmentEvent(
+            "assignment.progress",
+            assignment,
+            "Cloud assignment progress reported.",
+            {
+              status: progress.status,
+              current_step_index: progress.current_step_index,
+              total_steps: progress.total_steps,
+              current_node_id: progress.current_node_id,
+              cancel_requested: result.cancel_requested,
+            },
+          );
+          return result;
+        },
       });
     } catch (error) {
       completion = {
@@ -131,6 +149,39 @@ export class ConnectedFlyto2Runtime {
       completion,
       signal,
     );
+    this.emitAssignmentEvent(
+      completion.status === "success" ? "assignment.completed" : "assignment.failed",
+      assignment,
+      completion.status === "success"
+        ? "Cloud assignment completed successfully."
+        : "Cloud assignment completed with failure.",
+      {
+        status: completion.status,
+        error_message: completion.error_message,
+        failure_code: completion.failure?.code,
+      },
+    );
+  }
+
+  private emitAssignmentEvent(
+    type: string,
+    assignment: Flyto2Assignment,
+    summary: string,
+    payload: Record<string, unknown> = {},
+  ): void {
+    this.options.events?.append({
+      type,
+      source: "flyto-cloud",
+      workspace_id: assignment.workspace_id,
+      correlation_id: assignment.assignment_id,
+      summary,
+      payload: {
+        assignment_id: assignment.assignment_id,
+        trace_id: assignment.trace_id,
+        kind: assignment.kind,
+        ...payload,
+      },
+    });
   }
 
   private async renewLeaseUntilStopped(

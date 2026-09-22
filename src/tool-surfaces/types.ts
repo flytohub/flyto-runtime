@@ -12,6 +12,11 @@ export const toolNames = {
   edit: "edit",
   shell: "bash",
   runtimeManifest: "runtime_manifest",
+  runtimeEvents: "runtime_events",
+  runtimeWait: "runtime_wait",
+  runtimeRun: "runtime_run",
+  runtimeEvidence: "runtime_evidence",
+  runtimeSignal: "runtime_signal",
 } as const;
 
 export const workspaceIdDescription =

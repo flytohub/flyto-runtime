@@ -15,6 +15,8 @@ import type { SubagentsConfig } from "./local-agent-config.js";
 import { createReviewCheckpointManager } from "./review-checkpoints.js";
 import { ProcessSessionManager } from "./process-sessions.js";
 import { DurableOperationStore } from "./flyto2/durable-operations.js";
+import { RuntimeEventStore } from "./flyto2/runtime-events.js";
+import { ReactiveCommandRunner } from "./flyto2/reactive-command.js";
 import { createMcpServer, createServer } from "./server.js";
 import { SqliteWorkspaceStore } from "./workspace-store.js";
 import { WorkspaceRegistry } from "./workspaces.js";
@@ -29,11 +31,11 @@ test("tool modes expose the expected host-facing tool surface", async (t) => {
   }> = [
     {
       mode: "claude",
-      expected: ["open_workspace", "read", "write", "edit", "bash", "runtime_manifest", "show_changes"],
+      expected: ["open_workspace", "read", "write", "edit", "bash", "runtime_manifest", "runtime_events", "runtime_wait", "runtime_run", "runtime_evidence", "runtime_signal", "show_changes"],
     },
     {
       mode: "codex",
-      expected: ["open_workspace", "read", "apply_patch", "exec_command", "write_stdin", "runtime_manifest", "show_changes"],
+      expected: ["open_workspace", "read", "apply_patch", "exec_command", "write_stdin", "runtime_manifest", "runtime_events", "runtime_wait", "runtime_run", "runtime_evidence", "runtime_signal", "show_changes"],
     },
   ];
 
@@ -139,6 +141,117 @@ test("durable operation_id replays a lost write response without repeating the s
       .join("\n"),
     /different arguments/i,
   );
+});
+
+test("durable file mutation emits one workspace event and replay emits none", async (t) => {
+  const context = await fixture(t, { toolMode: "claude", uiEnabled: false });
+  const workspaceId = structuredContent(
+    await callOpen(context.client, context.project, "evented-write"),
+  ).workspace_id;
+  assert.equal(typeof workspaceId, "string");
+
+  const before = structuredContent(await context.client.callTool({
+    name: "runtime_events",
+    arguments: { workspace_id: workspaceId },
+  }));
+  const cursor = before.next_sequence as number;
+
+  const args = {
+    workspace_id: workspaceId,
+    path: "evented.txt",
+    content: "one\n",
+    operation_id: "op.evented.write.0001",
+  };
+  await context.client.callTool({ name: "write", arguments: args });
+  const changed = structuredContent(await context.client.callTool({
+    name: "runtime_events",
+    arguments: {
+      after_sequence: cursor,
+      workspace_id: workspaceId,
+      type: "workspace.changed",
+    },
+  }));
+  const events = changed.events as Array<Record<string, unknown>>;
+  assert.equal(events.length, 1);
+  assert.equal(events[0]?.type, "workspace.changed");
+  const changedCursor = changed.next_sequence as number;
+
+  await context.client.callTool({ name: "write", arguments: args });
+  const replayEvents = structuredContent(await context.client.callTool({
+    name: "runtime_events",
+    arguments: {
+      after_sequence: changedCursor,
+      workspace_id: workspaceId,
+      type: "workspace.changed",
+    },
+  }));
+  assert.deepEqual(replayEvents.events, []);
+});
+
+test("reactive MCP command wakes once with shallow event and lazy evidence", async (t) => {
+  const context = await fixture(t, { toolMode: "codex", uiEnabled: false });
+  const workspaceId = structuredContent(
+    await callOpen(context.client, context.project, "reactive-e2e"),
+  ).workspace_id;
+  assert.equal(typeof workspaceId, "string");
+
+  const cursor = structuredContent(await context.client.callTool({
+    name: "runtime_events",
+    arguments: { workspace_id: workspaceId },
+  })).next_sequence as number;
+
+  const receipt = structuredContent(await context.client.callTool({
+    name: "runtime_run",
+    arguments: {
+      workspace_id: workspaceId,
+      command: "printf 'reactive-e2e-output\\n'",
+      event_type: "test.completed",
+      operation_id: "op.runtime.run.0001",
+    },
+  }));
+  assert.equal(receipt.status, "running");
+  assert.match(receipt.evidence_ref as string, /^flyto2:\/\/evidence\/job_/);
+
+  const waited = structuredContent(await context.client.callTool({
+    name: "runtime_wait",
+    arguments: {
+      after_sequence: cursor,
+      workspace_id: workspaceId,
+      type: "test.completed",
+      timeout_ms: 2_000,
+    },
+  }));
+  const event = waited.event as Record<string, unknown>;
+  assert.equal(event.type, "test.completed");
+  assert.equal((event.payload as Record<string, unknown>).success, true);
+  assert.doesNotMatch(JSON.stringify(event), /reactive-e2e-output/);
+
+  const evidence = structuredContent(await context.client.callTool({
+    name: "runtime_evidence",
+    arguments: { reference: receipt.evidence_ref },
+  }));
+  assert.match(evidence.text as string, /reactive-e2e-output/);
+
+  const replay = structuredContent(await context.client.callTool({
+    name: "runtime_run",
+    arguments: {
+      workspace_id: workspaceId,
+      command: "printf 'reactive-e2e-output\\n'",
+      event_type: "test.completed",
+      operation_id: "op.runtime.run.0001",
+    },
+  }));
+  assert.equal(replay.job_id, receipt.job_id);
+
+  const noDuplicate = structuredContent(await context.client.callTool({
+    name: "runtime_events",
+    arguments: {
+      after_sequence: waited.cursor,
+      workspace_id: workspaceId,
+      type: "test.completed",
+    },
+  }));
+  assert.deepEqual(noDuplicate.events, []);
 });
 
 test("Claude edit and bash tools accept snake_case runtime inputs", async (t) => {
@@ -850,6 +963,8 @@ async function fixture(
   const store = new SqliteWorkspaceStore(stateDir);
   const workspaces = new WorkspaceRegistry(config, store);
   const durableOperations = new DurableOperationStore(stateDir);
+  const runtimeEvents = new RuntimeEventStore(stateDir);
+  const reactiveCommands = new ReactiveCommandRunner(stateDir, runtimeEvents);
   const server = createMcpServer(
     config,
     workspaces,
@@ -858,6 +973,8 @@ async function fixture(
     resolveLocalAgentProviders,
     [],
     durableOperations,
+    runtimeEvents,
+    reactiveCommands,
   );
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "devspace-test-client", version: "1.0.0" });
@@ -872,7 +989,9 @@ async function fixture(
     closed = true;
     await client.close();
     await server.close();
+    reactiveCommands.shutdown();
     durableOperations.close();
+    runtimeEvents.close();
     store.close();
   };
 

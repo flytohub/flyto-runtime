@@ -52,6 +52,11 @@ const migrations: Migration[] = [
     name: "durable-operations",
     up: migrateDurableOperations,
   },
+  {
+    version: 10,
+    name: "flyto2-runtime-events",
+    up: migrateFlyto2RuntimeEvents,
+  },
 ];
 
 export function migrateDatabase(sqlite: Database.Database): void {
@@ -309,6 +314,45 @@ function migrateDurableOperations(sqlite: Database.Database): void {
 
     create index if not exists durable_operations_status_idx
       on durable_operations(status, updated_at desc);
+  `);
+}
+
+function migrateFlyto2RuntimeEvents(sqlite: Database.Database): void {
+  sqlite.exec(`
+    create table if not exists flyto2_runtime_events (
+      sequence integer primary key autoincrement,
+      event_id text not null unique,
+      type text not null,
+      source text not null,
+      workspace_id text,
+      correlation_id text,
+      summary text not null,
+      payload_json text not null,
+      evidence_json text not null,
+      occurred_at text not null
+    );
+
+    create index if not exists flyto2_runtime_events_workspace_sequence_idx
+      on flyto2_runtime_events(workspace_id, sequence);
+
+    create index if not exists flyto2_runtime_events_type_sequence_idx
+      on flyto2_runtime_events(type, sequence);
+
+    create table if not exists flyto2_reactive_jobs (
+      id text primary key,
+      workspace_id text not null,
+      command_digest text not null,
+      event_type text not null,
+      status text not null,
+      evidence_path text not null,
+      started_at text not null,
+      completed_at text,
+      exit_code integer,
+      signal text
+    );
+
+    create index if not exists flyto2_reactive_jobs_status_idx
+      on flyto2_reactive_jobs(status, started_at);
   `);
 }
 

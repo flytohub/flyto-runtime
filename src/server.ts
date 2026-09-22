@@ -49,6 +49,9 @@ import { createWorkspaceStore } from "./workspace-store.js";
 import { DurableOperationStore } from "./flyto2/durable-operations.js";
 import { withDurableToolHandlers } from "./flyto2/durable-tools.js";
 import { runtimeManifest } from "./flyto2/manifest.js";
+import { RuntimeEventStore } from "./flyto2/runtime-events.js";
+import { ReactiveCommandRunner } from "./flyto2/reactive-command.js";
+import { emitDurableToolEvent } from "./flyto2/tool-events.js";
 import { formatAgentsPath, WorkspaceRegistry } from "./workspaces.js";
 import {
   getLocalAgentProviderAvailabilitySnapshot,
@@ -77,6 +80,26 @@ import {
 } from "./tool-surfaces/types.js";
 
 const WORKSPACE_APP_MANIFEST_ENTRY = "workspace-app.html";
+
+function runtimeEventOutputShape(): z.ZodRawShape {
+  return {
+    sequence: z.number().int().nonnegative(),
+    event_id: z.string(),
+    type: z.string(),
+    source: z.string(),
+    workspace_id: z.string().optional(),
+    correlation_id: z.string().optional(),
+    summary: z.string(),
+    payload: z.record(z.string(), z.unknown()),
+    evidence: z.array(z.object({
+      kind: z.string(),
+      ref: z.string(),
+      sha256: z.string().optional(),
+      size: z.number().int().nonnegative().optional(),
+    })),
+    occurred_at: z.string(),
+  };
+}
 
 function mcpServerInfo() {
   return {
@@ -138,8 +161,9 @@ function serverInstructions(
     : "";
   const agents = `Follow instructions returned by ${toolNames.openWorkspace}. Before working under a path listed in available_agents_files, use ${toolNames.read} to inspect that instruction file and follow it. `;
   const common = `Call ${toolNames.openWorkspace} when starting work in a project folder or isolated worktree without a usable workspace_id, then reuse the returned workspace_id for subsequent operations in that workspace.`;
+  const reactive = ` For long-running tests, builds, or non-interactive commands, prefer ${toolNames.runtimeRun} followed by one ${toolNames.runtimeWait} for the expected event instead of repeatedly polling process output. Runtime events are shallow; call ${toolNames.runtimeEvidence} only when the event summary is insufficient.`;
 
-  return `${common} ${toolSurface.instructions({ agents, skills })}${artifactInstruction}${showChangesInstruction}`;
+  return `${common} ${toolSurface.instructions({ agents, skills })}${reactive}${artifactInstruction}${showChangesInstruction}`;
 }
 
 function formatVisibleAgent(agent: {
@@ -316,6 +340,8 @@ export function createMcpServer(
   resolveLocalAgentProviders: () => LocalAgentProviderStatus[],
   incomingArtifactAdapters: readonly IncomingArtifactAdapter[],
   durableOperations: DurableOperationStore,
+  runtimeEvents: RuntimeEventStore,
+  reactiveCommands: ReactiveCommandRunner,
   trackToolActivity?: TrackToolActivity,
 ): McpServer {
   const toolSurface = getToolSurface(config.toolMode);
@@ -335,6 +361,8 @@ export function createMcpServer(
     resolveLocalAgentProviders,
     incomingArtifactAdapters,
     durableOperations,
+    runtimeEvents,
+    reactiveCommands,
     trackToolActivity,
   );
   return server;
@@ -349,12 +377,20 @@ function registerMcpSurface(
   resolveLocalAgentProviders: () => LocalAgentProviderStatus[],
   incomingArtifactAdapters: readonly IncomingArtifactAdapter[],
   durableOperations: DurableOperationStore,
+  runtimeEvents: RuntimeEventStore,
+  reactiveCommands: ReactiveCommandRunner,
   trackToolActivity?: TrackToolActivity,
 ): void {
   const trackedTarget = trackToolActivity
     ? withTrackedToolHandlers(server, trackToolActivity)
     : server;
-  const registrationTarget = withDurableToolHandlers(trackedTarget, durableOperations);
+  const registrationTarget = withDurableToolHandlers(
+    trackedTarget,
+    durableOperations,
+    {
+      onCompleted: (completion) => emitDurableToolEvent(runtimeEvents, completion),
+    },
+  );
   const toolSurface = getToolSurface(config.toolMode);
 
   registerAppResource(
@@ -732,6 +768,227 @@ function registerMcpSurface(
     },
   );
 
+  registrationTarget.registerTool(
+    toolNames.runtimeEvents,
+    {
+      title: "Runtime events",
+      description:
+        "Read shallow Flyto2 Runtime events after a cursor. Use this for recovery or inspection, not for busy polling.",
+      inputSchema: {
+        after_sequence: z.number().int().nonnegative().optional(),
+        workspace_id: z.string().optional(),
+        type: z.string().optional(),
+        limit: z.number().int().min(1).max(200).optional(),
+      },
+      outputSchema: {
+        result: z.string(),
+        events: z.array(z.object(runtimeEventOutputShape())),
+        next_sequence: z.number().int().nonnegative(),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ after_sequence, workspace_id, type, limit }) => {
+      const events = runtimeEvents.list({
+        after_sequence,
+        workspace_id,
+        type,
+        limit,
+      });
+      const nextSequence = events.at(-1)?.sequence ?? after_sequence ?? runtimeEvents.latestSequence();
+      return {
+        content: [textBlock(
+          events.length === 0
+            ? `No Runtime events after sequence ${after_sequence ?? 0}.`
+            : `Runtime events: ${events.length}; next_sequence=${nextSequence}.`,
+        )],
+        structuredContent: {
+          result:
+            events.length === 0
+              ? "No matching Runtime events."
+              : events.map((event) => `#${event.sequence} ${event.type}: ${event.summary}`).join("\n"),
+          events,
+          next_sequence: nextSequence,
+        },
+      };
+    },
+  );
+
+  registrationTarget.registerTool(
+    toolNames.runtimeWait,
+    {
+      title: "Wait for Runtime event",
+      description:
+        "Wait once for the next matching shallow Runtime event instead of repeatedly polling. Omit after_sequence to wait only for future events; pass the last seen sequence to resume after reconnect.",
+      inputSchema: {
+        after_sequence: z.number().int().nonnegative().optional(),
+        workspace_id: z.string().optional(),
+        type: z.string().optional(),
+        timeout_ms: z.number().int().min(0).max(25_000).optional(),
+      },
+      outputSchema: {
+        result: z.string(),
+        event: z.object(runtimeEventOutputShape()).nullable(),
+        cursor: z.number().int().nonnegative(),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ after_sequence, workspace_id, type, timeout_ms }) => {
+      const cursor = after_sequence ?? runtimeEvents.latestSequence();
+      const event = await runtimeEvents.wait({
+        after_sequence: cursor,
+        workspace_id,
+        type,
+        timeout_ms,
+      });
+      const nextCursor = event?.sequence ?? cursor;
+      const result = event
+        ? `#${event.sequence} ${event.type}: ${event.summary}`
+        : `No matching event before timeout; cursor=${nextCursor}.`;
+      return {
+        content: [textBlock(result)],
+        structuredContent: {
+          result,
+          event: event ?? null,
+          cursor: nextCursor,
+        },
+      };
+    },
+  );
+
+  registrationTarget.registerTool(
+    toolNames.runtimeRun,
+    {
+      title: "Run reactive command",
+      description:
+        "Start a long-running command in the background and return immediately. Completion is published as a shallow Runtime event with an evidence reference; use runtime_wait instead of polling process output.",
+      inputSchema: {
+        workspace_id: z.string().describe(workspaceIdDescription),
+        command: z.string().min(1),
+        working_directory: z.string().optional(),
+        event_type: z.string().max(128).optional(),
+      },
+      outputSchema: {
+        result: z.string(),
+        job_id: z.string(),
+        status: z.literal("running"),
+        event_type: z.string(),
+        evidence_ref: z.string(),
+        command_digest: z.string(),
+        started_at: z.string(),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+    },
+    async ({ workspace_id, command, working_directory, event_type }) => {
+      const workspace = await workspaces.getWorkspace(workspace_id);
+      const cwd = await workspaces.resolveWorkingDirectory(workspace, working_directory);
+      const receipt = reactiveCommands.start({
+        workspace_id,
+        workspace_root: workspace.root,
+        command,
+        cwd,
+        event_type,
+      });
+      const result =
+        `Reactive job ${receipt.job_id} started. Wait for ${receipt.event_type} with runtime_wait; load ${receipt.evidence_ref} only if details are needed.`;
+      return {
+        content: [textBlock(result)],
+        structuredContent: {
+          result,
+          ...receipt,
+        },
+      };
+    },
+  );
+
+  registrationTarget.registerTool(
+    toolNames.runtimeEvidence,
+    {
+      title: "Read Runtime evidence",
+      description:
+        "Read bounded local evidence for a Flyto2 Runtime event only when the shallow event is insufficient.",
+      inputSchema: {
+        reference: z.string(),
+        max_characters: z.number().int().min(256).max(256_000).optional(),
+      },
+      outputSchema: {
+        result: z.string(),
+        job: z.object({
+          job_id: z.string(),
+          workspace_id: z.string(),
+          command_digest: z.string(),
+          event_type: z.string(),
+          status: z.enum(["running", "completed", "failed", "orphaned"]),
+          evidence_ref: z.string(),
+          started_at: z.string(),
+          completed_at: z.string().optional(),
+          exit_code: z.number().int().optional(),
+          signal: z.string().optional(),
+        }),
+        text: z.string(),
+        truncated: z.boolean(),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ reference, max_characters }) => {
+      const evidence = reactiveCommands.readEvidence(reference, max_characters);
+      const result =
+        `Evidence for ${evidence.job.job_id} (${evidence.job.status})${evidence.truncated ? " [truncated]" : ""}.\n${evidence.text}`;
+      return {
+        content: [textBlock(result)],
+        structuredContent: {
+          result,
+          ...evidence,
+        },
+      };
+    },
+  );
+
+  registrationTarget.registerTool(
+    toolNames.runtimeSignal,
+    {
+      title: "Signal Runtime event",
+      description:
+        "Publish a shallow custom event into the durable Flyto2 Runtime event stream. Use stable operation_id when retrying a lost response.",
+      inputSchema: {
+        type: z.string().min(1).max(128),
+        workspace_id: z.string().optional(),
+        correlation_id: z.string().max(128).optional(),
+        summary: z.string().max(1200).optional(),
+        payload: z.record(z.string(), z.unknown()).optional(),
+      },
+      outputSchema: {
+        result: z.string(),
+        event: z.object(runtimeEventOutputShape()),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async ({ type, workspace_id, correlation_id, summary, payload }) => {
+      const event = runtimeEvents.append({
+        type,
+        source: "mcp",
+        workspace_id,
+        correlation_id,
+        summary,
+        payload,
+      });
+      const result = `Published Runtime event #${event.sequence} ${event.type}.`;
+      return {
+        content: [textBlock(result)],
+        structuredContent: { result, event },
+      };
+    },
+  );
+
   toolSurface.register({
     server: registrationTarget,
     config,
@@ -858,6 +1115,8 @@ export function createServer(
   });
   const workspaceStore = createWorkspaceStore(config.stateDir);
   const durableOperations = new DurableOperationStore(config.stateDir);
+  const runtimeEvents = new RuntimeEventStore(config.stateDir);
+  const reactiveCommands = new ReactiveCommandRunner(config.stateDir, runtimeEvents);
   const workspaces = new WorkspaceRegistry(config, workspaceStore);
   const reviewCheckpoints = createReviewCheckpointManager();
   const processSessions = new ProcessSessionManager();
@@ -881,6 +1140,8 @@ export function createServer(
       resolveLocalAgentProviders,
       incomingArtifactAdapters,
       durableOperations,
+      runtimeEvents,
+      reactiveCommands,
       toolActivities.track,
     );
   });
@@ -1019,8 +1280,10 @@ export function createServer(
         }
         await toolActivities.waitForIdle();
         processSessions.shutdown();
+        reactiveCommands.shutdown();
         oauthProvider.close();
         durableOperations.close();
+        runtimeEvents.close();
         workspaceStore.close?.();
       })();
       return closePromise;

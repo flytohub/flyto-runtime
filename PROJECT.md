@@ -11,6 +11,8 @@ Flyto2 Runtime is a standalone local execution runtime for coding and other mach
 - durable operation replay
 - runtime capability self-description
 - optional Flyto2 Cloud bridge
+- durable Runtime event stream and one-shot event waits
+- reactive background commands with lazy local evidence
 
 ## Does not own
 

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add a durable Flyto2 Runtime event reactor with monotonic cursors, event dedupe/fail-closed drift handling, bounded retention, filtering, and one-shot waits.
+- Add `runtime_run`, `runtime_wait`, `runtime_events`, `runtime_evidence`, and `runtime_signal` MCP tools so long tests/builds can complete without model-driven process polling.
+- Store reactive process logs as bounded local evidence; shallow events contain only status/digest/evidence references, and interrupted jobs become explicit `process.orphaned` events after restart.
+- Emit `workspace.changed` and Cloud assignment lifecycle events into the same Runtime stream while suppressing duplicate events on durable operation replay.
+
 - Add a macOS one-click Flyto2 Runtime experience: `Install.command`, a double-click `Flyto2 Runtime.command`, a TypeScript interactive management menu, and generated Desktop shortcuts for start/doctor/setup. The shell files remain thin launchers; product behavior stays in TypeScript.
 - Fork upstream DevSpace as **Flyto2 Runtime** while preserving the MIT license, upstream history, existing `devspace` CLI alias, and compatible local state layout.
 - Add the provider-neutral `flyto2.execution.v1` TypeScript protocol and standalone `runtime_manifest` MCP tool.

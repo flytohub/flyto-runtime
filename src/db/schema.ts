@@ -108,6 +108,45 @@ export const durableOperations = sqliteTable(
   ],
 );
 
+export const flyto2RuntimeEvents = sqliteTable(
+  "flyto2_runtime_events",
+  {
+    sequence: integer("sequence").primaryKey({ autoIncrement: true }),
+    eventId: text("event_id").notNull().unique(),
+    type: text("type").notNull(),
+    source: text("source").notNull(),
+    workspaceId: text("workspace_id"),
+    correlationId: text("correlation_id"),
+    summary: text("summary").notNull(),
+    payloadJson: text("payload_json").notNull(),
+    evidenceJson: text("evidence_json").notNull(),
+    occurredAt: text("occurred_at").notNull(),
+  },
+  (table) => [
+    index("flyto2_runtime_events_workspace_sequence_idx").on(table.workspaceId, table.sequence),
+    index("flyto2_runtime_events_type_sequence_idx").on(table.type, table.sequence),
+  ],
+);
+
+export const flyto2ReactiveJobs = sqliteTable(
+  "flyto2_reactive_jobs",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id").notNull(),
+    commandDigest: text("command_digest").notNull(),
+    eventType: text("event_type").notNull(),
+    status: text("status").notNull(),
+    evidencePath: text("evidence_path").notNull(),
+    startedAt: text("started_at").notNull(),
+    completedAt: text("completed_at"),
+    exitCode: integer("exit_code"),
+    signal: text("signal"),
+  },
+  (table) => [
+    index("flyto2_reactive_jobs_status_idx").on(table.status, table.startedAt),
+  ],
+);
+
 export const localAgentSessions = sqliteTable(
   "local_agent_sessions",
   {
@@ -134,6 +173,10 @@ export const localAgentSessions = sqliteTable(
   ],
 );
 
+export type Flyto2RuntimeEventRow = typeof flyto2RuntimeEvents.$inferSelect;
+export type NewFlyto2RuntimeEventRow = typeof flyto2RuntimeEvents.$inferInsert;
+export type Flyto2ReactiveJobRow = typeof flyto2ReactiveJobs.$inferSelect;
+export type NewFlyto2ReactiveJobRow = typeof flyto2ReactiveJobs.$inferInsert;
 export type DurableOperationRow = typeof durableOperations.$inferSelect;
 export type NewDurableOperationRow = typeof durableOperations.$inferInsert;
 export type WorkspaceSessionRow = typeof workspaceSessions.$inferSelect;

@@ -24,6 +24,10 @@ const BASE_CAPABILITIES: readonly Flyto2Capability[] = [
   capability("build.run", "medium", "none", ["build", "log"]),
   capability("review.diff", "low", "none", ["diff"]),
   capability("agent.delegate", "high", "policy", ["agent", "log"]),
+  capability("event.stream", "low", "none", ["event"]),
+  capability("event.wait", "low", "none", ["event"]),
+  capability("evidence.read", "low", "none", ["log", "evidence"]),
+  capability("process.reactive", "high", "policy", ["process", "event", "log"]),
 ];
 
 export function runtimeManifest(config: ServerConfig): Flyto2RuntimeManifest {

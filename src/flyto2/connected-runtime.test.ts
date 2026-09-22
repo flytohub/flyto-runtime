@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import {
   ConnectedFlyto2Runtime,
@@ -10,6 +13,7 @@ import {
   type Flyto2Assignment,
   type Flyto2RuntimeManifest,
 } from "./protocol.js";
+import { RuntimeEventStore } from "./runtime-events.js";
 
 const manifest: Flyto2RuntimeManifest = {
   schema: FLYTO2_EXECUTION_PROTOCOL_VERSION,
@@ -34,7 +38,11 @@ const assignment: Flyto2Assignment = {
   received_at: new Date().toISOString(),
 };
 
-test("connected runtime composes claim, lease, progress, executor and completion", async () => {
+test("connected runtime composes claim, lease, progress, executor and completion", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "flyto2-connected-runtime-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  const events = new RuntimeEventStore(stateDir);
+  t.after(() => events.close());
   const calls: string[] = [];
   let completed: unknown;
   const transport: Flyto2CloudAssignmentTransport = {
@@ -71,7 +79,7 @@ test("connected runtime composes claim, lease, progress, executor and completion
     manifest,
     transport,
     executor,
-    { leaseRenewIntervalMs: 5 },
+    { leaseRenewIntervalMs: 5, events },
   );
   await runtime.executeAssignment(assignment);
 
@@ -83,6 +91,20 @@ test("connected runtime composes claim, lease, progress, executor and completion
     status: "success",
     variables: { result: "ok" },
   });
+  assert.deepEqual(
+    events.list({ workspace_id: "workspace-1" }).map(({ type }) => type),
+    [
+      "assignment.received",
+      "assignment.claimed",
+      "assignment.progress",
+      "assignment.completed",
+    ],
+  );
+  assert.ok(
+    events.list({ workspace_id: "workspace-1" }).every(
+      ({ correlation_id }) => correlation_id === "job-1",
+    ),
+  );
 });
 
 test("executor failure becomes a truthful failed Cloud completion", async () => {
