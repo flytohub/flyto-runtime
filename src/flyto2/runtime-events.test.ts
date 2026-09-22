@@ -18,6 +18,7 @@ test("runtime events are durable, ordered, deduplicated, and filterable", async 
     summary: "changed",
     payload: { paths: ["a.ts"] },
   });
+  await new Promise((resolve) => setTimeout(resolve, 2));
   const replay = first.append({
     event_id: "evt-fixed-a",
     type: "workspace.changed",
@@ -46,6 +47,7 @@ test("runtime events are durable, ordered, deduplicated, and filterable", async 
     summary: "done",
   });
   assert.equal(replay.sequence, eventA.sequence);
+  assert.equal(replay.occurred_at, eventA.occurred_at);
   first.close();
 
   const restored = new RuntimeEventStore(stateDir, 10);

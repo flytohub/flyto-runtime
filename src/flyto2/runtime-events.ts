@@ -101,7 +101,10 @@ export class RuntimeEventStore {
 
       const row = this.getById(normalized.event_id);
       if (!row) throw new Error("Runtime event insert did not produce a readable row.");
-      if (admission.changes === 0 && !matchesNormalizedEvent(row, normalized)) {
+      if (
+        admission.changes === 0
+        && !matchesNormalizedEvent(row, normalized, input.occurred_at !== undefined)
+      ) {
         throw new Error("event_id was already used with different Runtime event content.");
       }
       this.prune();
@@ -246,6 +249,7 @@ function normalizeEventInput(input: AppendRuntimeEventInput): Required<
 function matchesNormalizedEvent(
   event: RuntimeEvent,
   input: ReturnType<typeof normalizeEventInput>,
+  compareOccurredAt: boolean,
 ): boolean {
   return event.event_id === input.event_id
     && event.type === input.type
@@ -253,7 +257,7 @@ function matchesNormalizedEvent(
     && event.workspace_id === input.workspace_id
     && event.correlation_id === input.correlation_id
     && event.summary === input.summary
-    && event.occurred_at === input.occurred_at
+    && (!compareOccurredAt || event.occurred_at === input.occurred_at)
     && JSON.stringify(event.payload) === JSON.stringify(input.payload)
     && JSON.stringify(event.evidence) === JSON.stringify(input.evidence);
 }
