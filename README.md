@@ -96,6 +96,23 @@ Until a Flyto2 npm release is published, install this fork from source:
 
 ```bash
 git clone https://github.com/flytohub/flyto-runtime.git
+cd flyto-runtime
+```
+
+### macOS one-click launcher
+
+For the easiest setup, double-click `Install.command` in Finder. It checks the local Node/pnpm environment, installs/builds the Runtime when needed, and creates a `~/Desktop/Flyto2 Runtime/` folder with four executable shortcuts:
+
+- `Flyto2 Runtime.command` — opens the interactive management menu
+- `啟動 Flyto2 Runtime.command` — starts the MCP server directly
+- `診斷 Flyto2 Runtime.command` — runs Runtime diagnostics
+- `設定 Flyto2 Runtime.command` — reruns setup/reconfiguration
+
+You can also double-click `Flyto2 Runtime.command` directly inside the repository. The `.command` files are only thin macOS launch shells; the menu, setup, Cloud pairing, and launcher management logic remains in the TypeScript CLI.
+
+CLI installation remains available:
+
+```bash
 corepack enable
 pnpm install
 pnpm build

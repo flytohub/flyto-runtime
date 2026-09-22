@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add a macOS one-click Flyto2 Runtime experience: `Install.command`, a double-click `Flyto2 Runtime.command`, a TypeScript interactive management menu, and generated Desktop shortcuts for start/doctor/setup. The shell files remain thin launchers; product behavior stays in TypeScript.
 - Fork upstream DevSpace as **Flyto2 Runtime** while preserving the MIT license, upstream history, existing `devspace` CLI alias, and compatible local state layout.
 - Add the provider-neutral `flyto2.execution.v1` TypeScript protocol and standalone `runtime_manifest` MCP tool.
 - Add an optional outbound Flyto2 Cloud bridge that reuses the existing paired-device job/claim/lease/progress/completion lifecycle without making Cloud a Runtime dependency.

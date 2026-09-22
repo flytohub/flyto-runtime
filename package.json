@@ -27,7 +27,9 @@
     "scripts",
     "skills",
     "README.md",
-    "NOTICE.md"
+    "NOTICE.md",
+    "Flyto2 Runtime.command",
+    "Install.command"
   ],
   "publishConfig": {
     "access": "public"

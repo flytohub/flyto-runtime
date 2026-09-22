@@ -33,6 +33,14 @@ This reference documents the Flyto2-owned TypeScript surface layered on the upst
 - [`shouldJournalTool`](../../src/flyto2/durable-tools.ts#L61)
 - [`asRecord`](../../src/flyto2/durable-tools.ts#L67)
 
+## macOS launcher
+
+- [`flyto2RuntimePackageRoot`](../../src/flyto2/macos-launcher.ts#L11) — resolves the installed/source package root used by the launcher manager.
+- [`installMacDesktopLaunchers`](../../src/flyto2/macos-launcher.ts#L15) — installs Finder-friendly Desktop `.command` shortcuts that all enter the same TypeScript Runtime CLI.
+- [`removeMacDesktopLaunchers`](../../src/flyto2/macos-launcher.ts#L58)
+- [`macDesktopLauncherStatus`](../../src/flyto2/macos-launcher.ts#L69)
+- [`shellQuote`](../../src/flyto2/macos-launcher.ts#L79)
+
 ## Runtime manifest
 
 - [`runtimeManifest`](../../src/flyto2/manifest.ts#L29) — standalone provider-neutral Flyto2 Runtime capability manifest.

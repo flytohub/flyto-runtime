@@ -68,10 +68,12 @@ type Command =
   | "agents"
   | "show-changes"
   | "flyto2"
+  | "menu"
+  | "launcher"
   | "help"
   | "version";
 const require = createRequire(import.meta.url);
-const SUPPORTED_NODE_RANGE = ">=20.12 <27";
+const SUPPORTED_NODE_RANGE = ">=22.19 <27";
 
 async function main(argv: string[]): Promise<void> {
   assertSupportedNode();
@@ -105,6 +107,12 @@ async function main(argv: string[]): Promise<void> {
     case "flyto2":
       await runFlyto2Command(args);
       return;
+    case "menu":
+      await runInteractiveMenu();
+      return;
+    case "launcher":
+      await runLauncherCommand(args);
+      return;
     case "help":
       printHelp();
       return;
@@ -124,6 +132,8 @@ function normalizeCommand(command: string | undefined): Command {
     || command === "agents"
     || command === "show-changes"
     || command === "flyto2"
+    || command === "menu"
+    || command === "launcher"
   ) return command;
   if (command === "help" || command === "--help" || command === "-h") return "help";
   if (command === "version" || command === "--version" || command === "-v") return "version";
@@ -484,6 +494,107 @@ async function runWorktreesCommand(args: string[]): Promise<void> {
   if (result.failed.length > 0) process.exitCode = 1;
 }
 
+async function runLauncherCommand(args: string[]): Promise<void> {
+  const [subcommand = "status", ...rest] = args;
+  if (rest.length > 0) {
+    throw new Error("Usage: flyto2-runtime launcher <install|status|remove>");
+  }
+
+  const {
+    installMacDesktopLaunchers,
+    macDesktopLauncherStatus,
+    removeMacDesktopLaunchers,
+  } = await import("./flyto2/macos-launcher.js");
+
+  switch (subcommand) {
+    case "install": {
+      const installed = installMacDesktopLaunchers();
+      console.log(JSON.stringify({ ok: true, ...installed }, null, 2));
+      return;
+    }
+    case "status":
+      console.log(JSON.stringify(macDesktopLauncherStatus(), null, 2));
+      return;
+    case "remove": {
+      const directory = removeMacDesktopLaunchers();
+      console.log(JSON.stringify({ ok: true, removed: directory }, null, 2));
+      return;
+    }
+    default:
+      throw new Error("Usage: flyto2-runtime launcher <install|status|remove>");
+  }
+}
+
+async function runInteractiveMenu(): Promise<void> {
+  prompts.intro("Flyto2 Runtime");
+
+  for (;;) {
+    const action = await prompts.select({
+      message: "Choose an action",
+      options: [
+        { value: "start", label: "Start Runtime", hint: "Start the MCP server" },
+        { value: "status", label: "Runtime / Cloud status" },
+        { value: "doctor", label: "Doctor", hint: "Check config and native dependencies" },
+        { value: "manifest", label: "Capability manifest" },
+        { value: "pair", label: "Pair with Flyto2 Cloud" },
+        { value: "setup", label: "Setup / reconfigure" },
+        { value: "launcher", label: "Install Desktop launcher" },
+        { value: "quit", label: "Quit" },
+      ],
+    });
+
+    if (prompts.isCancel(action) || action === "quit") {
+      prompts.outro("Flyto2 Runtime closed.");
+      return;
+    }
+
+    switch (action) {
+      case "start":
+        await ensureConfigured();
+        prompts.outro("Starting Flyto2 Runtime. Keep this window open while using direct MCP mode.");
+        await serve();
+        return;
+      case "status":
+        await ensureConfigured();
+        await runFlyto2Command(["status"]);
+        break;
+      case "doctor":
+        await runDoctor();
+        break;
+      case "manifest":
+        await ensureConfigured();
+        await runFlyto2Command(["manifest"]);
+        break;
+      case "pair": {
+        await ensureConfigured();
+        const pairingCode = await textPrompt({
+          message: "Flyto2 Cloud pairing code",
+          placeholder: "XXXX-XXXX",
+          defaultValue: "",
+          validate: (value) => value?.trim() ? undefined : "Enter the pairing code.",
+        });
+        const cloudUrl = await textPrompt({
+          message: "Flyto2 Cloud URL",
+          placeholder: "https://api.flyto2.com",
+          defaultValue: "https://api.flyto2.com",
+          validate: (value) => value ? validatePublicBaseUrl(value) : undefined,
+        });
+        await runFlyto2Command(["pair", pairingCode, "--cloud-url", cloudUrl]);
+        break;
+      }
+      case "setup":
+        await runInit({ force: true });
+        break;
+      case "launcher": {
+        const { installMacDesktopLaunchers } = await import("./flyto2/macos-launcher.js");
+        const installed = installMacDesktopLaunchers(process.cwd());
+        prompts.log.success("Desktop launchers installed at " + installed.directory);
+        break;
+      }
+    }
+  }
+}
+
 async function runFlyto2Command(args: string[]): Promise<void> {
   const [subcommand, ...rest] = args;
   const config = loadConfig();
@@ -558,6 +669,8 @@ function printHelp(): void {
       "  flyto2-runtime flyto2 status",
       "  flyto2-runtime flyto2 pair <pairing-code> [--cloud-url https://api.flyto2.com]",
       "  flyto2-runtime flyto2 next   Wait for one Cloud assignment without executing it",
+      "  flyto2-runtime menu          Open the interactive Flyto2 Runtime launcher",
+      "  flyto2-runtime launcher install|status|remove",
       "  devspace agents targets [--json]  List usable subagent providers and profiles",
       "  devspace agents ls       List subagent sessions",
       "  devspace agents run <profile-or-provider> [--model <model>] [--effort <level>] <prompt>",
