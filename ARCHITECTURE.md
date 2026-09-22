@@ -78,6 +78,8 @@ Flyto2 Runtime owns one durable local event stream for standalone MCP use and op
 
 Evidence is lazy by design: shallow events contain status, digests and evidence references, never full process output. `runtime_evidence` expands a referenced log only when needed. Runtime restart marks unresolved reactive jobs `orphaned` and explicitly reports the outcome as uncertain rather than replaying the command.
 
+External filesystem changes use persistent native watches rather than polling. Watch specifications are stored in SQLite, targets are canonicalized before persistence, and every restore revalidates the logical workspace root against its original canonical identity. A retargeted symlink/root fails closed with `watch.error` instead of silently observing a different tree. Event batching uses a fixed window so sustained filesystem churn cannot indefinitely postpone wake-up.
+
 ## Invariants
 
 1. Cloud is optional.

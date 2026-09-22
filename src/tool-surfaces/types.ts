@@ -17,6 +17,9 @@ export const toolNames = {
   runtimeRun: "runtime_run",
   runtimeEvidence: "runtime_evidence",
   runtimeSignal: "runtime_signal",
+  runtimeWatch: "runtime_watch",
+  runtimeUnwatch: "runtime_unwatch",
+  runtimeWatches: "runtime_watches",
 } as const;
 
 export const workspaceIdDescription =

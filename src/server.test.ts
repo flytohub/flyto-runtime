@@ -17,6 +17,7 @@ import { ProcessSessionManager } from "./process-sessions.js";
 import { DurableOperationStore } from "./flyto2/durable-operations.js";
 import { RuntimeEventStore } from "./flyto2/runtime-events.js";
 import { ReactiveCommandRunner } from "./flyto2/reactive-command.js";
+import { WorkspaceWatchRegistry } from "./flyto2/workspace-watch.js";
 import { createMcpServer, createServer } from "./server.js";
 import { SqliteWorkspaceStore } from "./workspace-store.js";
 import { WorkspaceRegistry } from "./workspaces.js";
@@ -31,11 +32,11 @@ test("tool modes expose the expected host-facing tool surface", async (t) => {
   }> = [
     {
       mode: "claude",
-      expected: ["open_workspace", "read", "write", "edit", "bash", "runtime_manifest", "runtime_events", "runtime_wait", "runtime_run", "runtime_evidence", "runtime_signal", "show_changes"],
+      expected: ["open_workspace", "read", "write", "edit", "bash", "runtime_manifest", "runtime_events", "runtime_wait", "runtime_run", "runtime_evidence", "runtime_signal", "runtime_watch", "runtime_unwatch", "runtime_watches", "show_changes"],
     },
     {
       mode: "codex",
-      expected: ["open_workspace", "read", "apply_patch", "exec_command", "write_stdin", "runtime_manifest", "runtime_events", "runtime_wait", "runtime_run", "runtime_evidence", "runtime_signal", "show_changes"],
+      expected: ["open_workspace", "read", "apply_patch", "exec_command", "write_stdin", "runtime_manifest", "runtime_events", "runtime_wait", "runtime_run", "runtime_evidence", "runtime_signal", "runtime_watch", "runtime_unwatch", "runtime_watches", "show_changes"],
     },
   ];
 
@@ -252,6 +253,82 @@ test("reactive MCP command wakes once with shallow event and lazy evidence", asy
     },
   }));
   assert.deepEqual(noDuplicate.events, []);
+});
+
+test("runtime filesystem watch wakes on external edits and is durable", async (t) => {
+  const context = await fixture(t, { toolMode: "codex", uiEnabled: false });
+  const workspaceId = structuredContent(
+    await callOpen(context.client, context.project, "watch-e2e"),
+  ).workspace_id;
+  assert.equal(typeof workspaceId, "string");
+
+  const file = join(context.project, "external-e2e.txt");
+  await writeFile(file, "before\n");
+
+  const watchArgs = {
+    workspace_id: workspaceId,
+    path: "external-e2e.txt",
+    event_type: "editor.changed",
+    debounce_ms: 40,
+    operation_id: "op.runtime.watch.0001",
+  };
+  const started = structuredContent(await context.client.callTool({
+    name: "runtime_watch",
+    arguments: watchArgs,
+  }));
+  const watch = started.watch as Record<string, unknown>;
+  assert.equal(watch.status, "active");
+  assert.equal(watch.event_type, "editor.changed");
+  const watchId = watch.watch_id as string;
+
+  const replay = structuredContent(await context.client.callTool({
+    name: "runtime_watch",
+    arguments: watchArgs,
+  }));
+  assert.equal(
+    (replay.watch as Record<string, unknown>).watch_id,
+    watchId,
+  );
+
+  const cursor = structuredContent(await context.client.callTool({
+    name: "runtime_events",
+    arguments: { workspace_id: workspaceId },
+  })).next_sequence as number;
+
+  const waiting = context.client.callTool({
+    name: "runtime_wait",
+    arguments: {
+      after_sequence: cursor,
+      workspace_id: workspaceId,
+      type: "editor.changed",
+      timeout_ms: 2_000,
+    },
+  });
+  await writeFile(file, "outside-runtime\n");
+  const waited = structuredContent(await waiting);
+  const event = waited.event as Record<string, unknown>;
+  assert.equal(event.type, "editor.changed");
+  assert.equal(event.source, "fs.watch");
+  assert.equal(event.correlation_id, watchId);
+  assert.doesNotMatch(JSON.stringify(event), /outside-runtime/);
+
+  const stopped = structuredContent(await context.client.callTool({
+    name: "runtime_unwatch",
+    arguments: {
+      watch_id: watchId,
+      operation_id: "op.runtime.unwatch.0001",
+    },
+  }));
+  assert.equal((stopped.watch as Record<string, unknown>).status, "stopped");
+
+  const listed = structuredContent(await context.client.callTool({
+    name: "runtime_watches",
+    arguments: { workspace_id: workspaceId },
+  }));
+  assert.equal(
+    ((listed.watches as Array<Record<string, unknown>>)[0]?.status),
+    "stopped",
+  );
 });
 
 test("Claude edit and bash tools accept snake_case runtime inputs", async (t) => {
@@ -965,6 +1042,7 @@ async function fixture(
   const durableOperations = new DurableOperationStore(stateDir);
   const runtimeEvents = new RuntimeEventStore(stateDir);
   const reactiveCommands = new ReactiveCommandRunner(stateDir, runtimeEvents);
+  const workspaceWatches = new WorkspaceWatchRegistry(stateDir, runtimeEvents);
   const server = createMcpServer(
     config,
     workspaces,
@@ -975,6 +1053,7 @@ async function fixture(
     durableOperations,
     runtimeEvents,
     reactiveCommands,
+    workspaceWatches,
   );
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "devspace-test-client", version: "1.0.0" });
@@ -989,6 +1068,7 @@ async function fixture(
     closed = true;
     await client.close();
     await server.close();
+    workspaceWatches.shutdown();
     reactiveCommands.shutdown();
     durableOperations.close();
     runtimeEvents.close();

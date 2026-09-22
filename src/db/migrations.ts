@@ -57,6 +57,11 @@ const migrations: Migration[] = [
     name: "flyto2-runtime-events",
     up: migrateFlyto2RuntimeEvents,
   },
+  {
+    version: 11,
+    name: "flyto2-workspace-watches",
+    up: migrateFlyto2WorkspaceWatches,
+  },
 ];
 
 export function migrateDatabase(sqlite: Database.Database): void {
@@ -353,6 +358,31 @@ function migrateFlyto2RuntimeEvents(sqlite: Database.Database): void {
 
     create index if not exists flyto2_reactive_jobs_status_idx
       on flyto2_reactive_jobs(status, started_at);
+  `);
+}
+
+function migrateFlyto2WorkspaceWatches(sqlite: Database.Database): void {
+  sqlite.exec(`
+    create table if not exists flyto2_workspace_watches (
+      id text primary key,
+      workspace_id text not null,
+      workspace_root text not null,
+      canonical_root text not null,
+      target_path text not null,
+      display_path text not null,
+      recursive integer not null,
+      event_type text not null,
+      debounce_ms integer not null,
+      status text not null,
+      created_at text not null,
+      updated_at text not null
+    );
+
+    create index if not exists flyto2_workspace_watches_status_idx
+      on flyto2_workspace_watches(status, updated_at);
+
+    create index if not exists flyto2_workspace_watches_workspace_idx
+      on flyto2_workspace_watches(workspace_id, status);
   `);
 }
 

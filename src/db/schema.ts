@@ -147,6 +147,28 @@ export const flyto2ReactiveJobs = sqliteTable(
   ],
 );
 
+export const flyto2WorkspaceWatches = sqliteTable(
+  "flyto2_workspace_watches",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id").notNull(),
+    workspaceRoot: text("workspace_root").notNull(),
+    canonicalRoot: text("canonical_root").notNull(),
+    targetPath: text("target_path").notNull(),
+    displayPath: text("display_path").notNull(),
+    recursive: integer("recursive").notNull(),
+    eventType: text("event_type").notNull(),
+    debounceMs: integer("debounce_ms").notNull(),
+    status: text("status").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    index("flyto2_workspace_watches_status_idx").on(table.status, table.updatedAt),
+    index("flyto2_workspace_watches_workspace_idx").on(table.workspaceId, table.status),
+  ],
+);
+
 export const localAgentSessions = sqliteTable(
   "local_agent_sessions",
   {
@@ -177,6 +199,8 @@ export type Flyto2RuntimeEventRow = typeof flyto2RuntimeEvents.$inferSelect;
 export type NewFlyto2RuntimeEventRow = typeof flyto2RuntimeEvents.$inferInsert;
 export type Flyto2ReactiveJobRow = typeof flyto2ReactiveJobs.$inferSelect;
 export type NewFlyto2ReactiveJobRow = typeof flyto2ReactiveJobs.$inferInsert;
+export type Flyto2WorkspaceWatchRow = typeof flyto2WorkspaceWatches.$inferSelect;
+export type NewFlyto2WorkspaceWatchRow = typeof flyto2WorkspaceWatches.$inferInsert;
 export type DurableOperationRow = typeof durableOperations.$inferSelect;
 export type NewDurableOperationRow = typeof durableOperations.$inferInsert;
 export type WorkspaceSessionRow = typeof workspaceSessions.$inferSelect;

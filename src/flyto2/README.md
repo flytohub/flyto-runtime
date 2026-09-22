@@ -11,5 +11,7 @@ This directory contains the Flyto2-specific TypeScript surface layered onto the 
 - `runtime-events.ts`: durable monotonic Runtime event stream with cursor recovery, dedupe, filtering, bounded retention, and one-shot waits.
 - `reactive-command.ts`: detached non-interactive command runner that stores bounded local evidence and emits shallow completion events.
 - `tool-events.ts`: converts completed durable MCP mutations into shallow Runtime events without replay duplication.
+- `runtime-tools.ts`: registers the Flyto2-native MCP tool surface outside upstream `server.ts` to reduce fork merge conflicts.
+- `workspace-watch.ts`: persists native filesystem watches, emits shallow external-change events, restores watches after restart, and fails closed on canonical-root drift.
 
 The Runtime core remains usable when the Cloud bridge is absent. Flyto2 modules must not import Flyto2 Cloud application code.

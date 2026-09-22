@@ -54,6 +54,7 @@ async function testDatabaseConfiguration(stateDir: string): Promise<void> {
       { version: 8, name: "local-agent-turns" },
       { version: 9, name: "durable-operations" },
       { version: 10, name: "flyto2-runtime-events" },
+      { version: 11, name: "flyto2-workspace-watches" },
     ]);
   } finally {
     database.close();
