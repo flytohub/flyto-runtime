@@ -8,18 +8,18 @@ cd "$ROOT" || exit 1
 MODE="${1:-menu}"
 
 fail() {
-  printf '\nFlyto2 Runtime 啟動失敗：%s\n' "$1" >&2
-  printf '\n按 Enter 關閉視窗。'
+  printf '\nFlyto2 Runtime failed to start: %s\n' "$1" >&2
+  printf '\nPress Enter to close this window.'
   read -r _
   exit 1
 }
 
 if ! command -v node >/dev/null 2>&1; then
-  fail "找不到 Node.js。請先安裝 Node 22.19 以上（低於 27）。"
+  fail "Node.js was not found. Install Node >=22.19 and <27 first."
 fi
 
 if ! node -e 'const [a,b]=process.versions.node.split(".").map(Number);process.exit(a>22||(a===22&&b>=19)?(a<27?0:1):1)' >/dev/null 2>&1; then
-  fail "Node.js 版本不支援。需要 >=22.19 <27，目前是 $(node -v)。"
+  fail "Unsupported Node.js version. Required: >=22.19 <27. Current: $(node -v)."
 fi
 
 if ! command -v pnpm >/dev/null 2>&1; then
@@ -28,12 +28,12 @@ if ! command -v pnpm >/dev/null 2>&1; then
   fi
 fi
 if ! command -v pnpm >/dev/null 2>&1; then
-  fail "找不到 pnpm。請先執行 corepack enable。"
+  fail "pnpm was not found. Run: corepack enable"
 fi
 
 if [[ ! -d node_modules ]]; then
-  echo "第一次啟動：安裝 Flyto2 Runtime 依賴…"
-  pnpm install --frozen-lockfile || fail "依賴安裝失敗。"
+  echo "First launch: installing Flyto2 Runtime dependencies..."
+  pnpm install --frozen-lockfile || fail "Dependency installation failed."
 fi
 
 needs_build=0
@@ -43,8 +43,8 @@ elif find src package.json tsconfig.build.json vite.config.ts -type f -newer dis
   needs_build=1
 fi
 if [[ "$needs_build" == 1 ]]; then
-  echo "更新 Flyto2 Runtime 執行檔…"
-  pnpm build || fail "Build 失敗。"
+  echo "Updating Flyto2 Runtime build..."
+  pnpm build || fail "Build failed."
 fi
 
 case "$MODE" in
@@ -69,6 +69,6 @@ case "$MODE" in
 esac
 result=$?
 
-printf '\n按 Enter 關閉視窗。'
+printf '\nPress Enter to close this window.'
 read -r _
 exit "$result"

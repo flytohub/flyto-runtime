@@ -38,7 +38,7 @@ test("macOS launcher install creates executable desktop shortcuts to one Runtime
     /'menu'/,
   );
   assert.match(
-    await readFile(join(installed.directory, "啟動 Flyto2 Runtime.command"), "utf8"),
+    await readFile(join(installed.directory, "Start Flyto2 Runtime.command"), "utf8"),
     /'start'/,
   );
 

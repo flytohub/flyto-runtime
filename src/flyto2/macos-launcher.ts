@@ -30,9 +30,9 @@ export function installMacDesktopLaunchers(
 
   const definitions = [
     ["Flyto2 Runtime.command", "menu"],
-    ["啟動 Flyto2 Runtime.command", "start"],
-    ["診斷 Flyto2 Runtime.command", "doctor"],
-    ["設定 Flyto2 Runtime.command", "setup"],
+    ["Start Flyto2 Runtime.command", "start"],
+    ["Doctor Flyto2 Runtime.command", "doctor"],
+    ["Setup Flyto2 Runtime.command", "setup"],
   ] as const;
 
   const launchers: string[] = [];
