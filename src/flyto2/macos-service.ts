@@ -21,6 +21,7 @@ export const LEGACY_DEVSPACE_UPDATER_LABEL = "local.devspace.mac-kit.updater";
 export interface MacRuntimeServicePaths {
   plistPath: string;
   previousPlistPath: string;
+  activePlistPath: string;
   logsDirectory: string;
   stdoutPath: string;
   stderrPath: string;
@@ -84,6 +85,7 @@ export function macRuntimeServicePaths(
   return {
     plistPath,
     previousPlistPath: `${plistPath}.previous`,
+    activePlistPath: `${plistPath}.active`,
     logsDirectory,
     stdoutPath: join(logsDirectory, "runtime.log"),
     stderrPath: join(logsDirectory, "runtime-error.log"),
@@ -172,10 +174,12 @@ export function installMacRuntimeService(
     pathEnvironment: options.pathEnvironment,
     homeDirectory,
   });
+  let requiresReload = false;
   if (existsSync(paths.plistPath)) {
     const current = readFileSync(paths.plistPath, "utf8");
     if (current !== next) {
       copyFileSync(paths.plistPath, paths.previousPlistPath);
+      requiresReload = true;
     }
   }
 
@@ -184,6 +188,15 @@ export function installMacRuntimeService(
   renameSync(temporary, paths.plistPath);
 
   if (options.start !== false) {
+    if (requiresReload) {
+      return reloadMacRuntimeService({
+        packageRoot,
+        configDirectory,
+        nodePath,
+        homeDirectory,
+        pathEnvironment: options.pathEnvironment,
+      });
+    }
     return restartMacRuntimeService({
       packageRoot,
       configDirectory,
@@ -248,6 +261,33 @@ export function restartMacRuntimeService(
     FLYTO2_RUNTIME_CONFIG_DIR: configDirectory,
   });
   const healthUrl = localRuntimeHealthUrl(config.host, config.port);
+  const activePlistMatches = !existsSync(paths.activePlistPath)
+    || readFileSync(paths.activePlistPath, "utf8") === readFileSync(paths.plistPath, "utf8");
+  if (isLaunchAgentLoaded(FLYTO2_RUNTIME_LAUNCH_AGENT_LABEL) && activePlistMatches) {
+    enableAndKickstartLaunchAgent();
+    if (!waitForRuntimeHealth(healthUrl, 10_000, 100)) {
+      throw new Error("Flyto2 Runtime did not pass /healthz after restart.");
+    }
+    copyFileSync(paths.plistPath, paths.activePlistPath);
+    return macRuntimeServiceStatus({ packageRoot, configDirectory, homeDirectory });
+  }
+
+  return reloadMacRuntimeService(options);
+}
+
+function reloadMacRuntimeService(
+  options: Omit<InstallMacRuntimeServiceOptions, "start"> = {},
+): MacRuntimeServiceStatus {
+  const packageRoot = options.packageRoot ?? flyto2RuntimePackageRoot();
+  const configDirectory = options.configDirectory ?? devspaceConfigDir();
+  const homeDirectory = options.homeDirectory ?? homedir();
+  const paths = macRuntimeServicePaths(homeDirectory);
+  const config = loadConfig({
+    ...process.env,
+    DEVSPACE_CONFIG_DIR: configDirectory,
+    FLYTO2_RUNTIME_CONFIG_DIR: configDirectory,
+  });
+  const healthUrl = localRuntimeHealthUrl(config.host, config.port);
   const hasPreviousPlist = existsSync(paths.previousPlistPath);
 
   restartLaunchAgentWithRecovery({
@@ -262,6 +302,7 @@ export function restartMacRuntimeService(
     },
     sleep: sleepSync,
   });
+  copyFileSync(paths.plistPath, paths.activePlistPath);
   return macRuntimeServiceStatus({ packageRoot, configDirectory, homeDirectory });
 }
 
@@ -270,7 +311,7 @@ export function restartLaunchAgentWithRecovery(
   policy: LaunchAgentRestartPolicy = {},
 ): void {
   const unloadTimeoutMs = policy.unloadTimeoutMs ?? 2_000;
-  const activationAttempts = policy.activationAttempts ?? 5;
+  const activationAttempts = policy.activationAttempts ?? 21;
   const activationRetryDelayMs = policy.activationRetryDelayMs ?? 250;
   const healthTimeoutMs = policy.healthTimeoutMs ?? 10_000;
   const healthPollIntervalMs = policy.healthPollIntervalMs ?? 100;
@@ -506,6 +547,19 @@ function runtimeHealthCheck(url: string): boolean {
     timeout: 1_000,
   });
   return result.status === 0;
+}
+
+function waitForRuntimeHealth(
+  url: string,
+  timeoutMs: number,
+  intervalMs: number,
+): boolean {
+  const deadline = Date.now() + timeoutMs;
+  do {
+    if (runtimeHealthCheck(url)) return true;
+    sleepSync(intervalMs);
+  } while (Date.now() < deadline);
+  return runtimeHealthCheck(url);
 }
 
 function sleepSync(milliseconds: number): void {
