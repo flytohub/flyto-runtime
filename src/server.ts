@@ -1,8 +1,10 @@
 import { normalizeLegacyMcpInput } from "./mcp-legacy-input.js";
+import { translateLegacyCodexWrite } from "./mcp-legacy-codex-writes.js";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { access, realpath } from "node:fs/promises";
+import { access, readFile, realpath } from "node:fs/promises";
+import { relative as relativePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
@@ -1117,22 +1119,22 @@ export function createServer(
 
     let requestBody: unknown;
     try {
-      const legacyToolName = req.body?.method === "tools/call"
-        && typeof req.body?.params?.name === "string"
-        ? req.body.params.name
+      const legacyToolName = config.toolMode === "codex" && req.body?.method === "tools/call"
+        ? req.body?.params?.name
         : undefined;
       requestBody = normalizeLegacyMcpInput(req.body, config.toolMode);
-      const normalizedToolName = requestBody
-        && typeof requestBody === "object"
-        && "params" in requestBody
-        && requestBody.params
-        && typeof requestBody.params === "object"
-        && "name" in requestBody.params
-        && typeof requestBody.params.name === "string"
-        ? requestBody.params.name
-        : undefined;
-      if (legacyToolName && normalizedToolName && legacyToolName !== normalizedToolName) {
-        req.headers["mcp-name"] = normalizedToolName;
+      if (legacyToolName === "bash") req.headers["mcp-name"] = "exec_command";
+      if (legacyToolName === "write" || legacyToolName === "edit") {
+        requestBody = await translateLegacyCodexWrite(
+          requestBody,
+          async (workspaceId, path) => {
+            const workspace = await workspaces.getWorkspace(workspaceId);
+            const absolutePath = await workspaces.resolvePath(workspace, path);
+            return { absolutePath, relativePath: relativePath(workspace.canonicalRoot, absolutePath) };
+          },
+          (absolutePath) => readFile(absolutePath, "utf8"),
+        );
+        req.headers["mcp-name"] = "apply_patch";
       }
     } catch (error) {
       sendJsonRpcError(res, 400, -32602, error instanceof Error ? error.message : "Invalid tool arguments");

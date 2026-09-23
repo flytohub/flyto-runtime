@@ -62,11 +62,14 @@ import { pruneStaleManagedWorktrees } from "./worktree-prune.js";
 import { Flyto2CloudBridge } from "./flyto2/cloud-bridge.js";
 import { runtimeManifest } from "./flyto2/manifest.js";
 import {
-  allConnectionDetails,
+  collectSetupStatus,
+  connectionDetailsClipboardText,
   copyToClipboard,
-  formatSetupCompletion,
-  type SetupCompletionDetails,
-  type SetupNativeServiceStatus,
+  formatConnectionDetails,
+  formatSetupStatus,
+  setupIsConnectable,
+  type SetupConnectionDetails,
+  type SetupRuntimeStatus,
 } from "./setup-completion.js";
 import {
   DEFAULT_PLUGIN_DESCRIPTION,
@@ -188,10 +191,16 @@ async function ensureConfigured(): Promise<void> {
     );
   }
 
-  await runInit({ force: false });
+  await runInit({ force: false, exitLabel: "Continue" });
 }
 
-async function runInit({ force, returnToMenu = false }: { force: boolean; returnToMenu?: boolean }): Promise<void> {
+async function runInit({
+  force,
+  exitLabel = "Done",
+}: {
+  force: boolean;
+  exitLabel?: string;
+}): Promise<void> {
   const files = loadDevspaceFiles();
   if (!force && files.configExists && files.authExists) {
     prompts.log.info(`DevSpace is already configured at ${files.dir}`);
@@ -326,18 +335,7 @@ async function runInit({ force, returnToMenu = false }: { force: boolean; return
       ...(publicBaseUrl ? [`ChatGPT connection URL: ${publicBaseUrl}/mcp`] : []),
       ...(chatGptPluginPath ? [`ChatGPT plugin ZIP: ${chatGptPluginPath}`] : []),
     ];
-    prompts.note(lines.join("\n"), "Flyto2 Runtime is ready");
-    {
-      prompts.note(
-        [
-          files.auth.ownerToken
-            ? "Your existing Owner password is unchanged."
-            : `Owner password: ${auth.ownerToken}`,
-          "Use this to approve your MCP client in the Runtime OAuth page.",
-        ].join("\n"),
-        "Owner password",
-      );
-    }
+    prompts.note(lines.join("\n"), "Flyto2 Runtime configuration saved");
     const connectionUrl = `${publicBaseUrl ?? files.config.server.publicBaseUrl ?? `http://127.0.0.1:${port}`}/mcp`;
     for (const destination of destinations) {
       if (destination === "chatgpt" && chatGptPluginPath) {
@@ -363,14 +361,17 @@ async function runInit({ force, returnToMenu = false }: { force: boolean; return
         "Install the Subagents skill",
       );
     }
-    if (useCodingAgents && selectedProviders.length > 0) {
-      prompts.log.info("The Subagents skill is optional for local CLI delegation.");
-    }
     await showSetupCompletion({
-      mcpUrl: connectionUrl,
-      ownerPassword: auth.ownerToken,
-      ...(chatGptPluginPath ? { pluginPath: chatGptPluginPath } : {}),
-    }, returnToMenu);
+      localBaseUrl: `http://127.0.0.1:${port}`,
+      publicBaseUrl: publicBaseUrl ?? files.config.server.publicBaseUrl ?? null,
+      details: {
+        mcpUrl: connectionUrl,
+        ownerPassword: auth.ownerToken,
+        pluginPath: chatGptPluginPath,
+      },
+      revealPassword: !files.auth.ownerToken,
+      exitLabel,
+    });
   } catch (error) {
     if (error instanceof SetupCancelledError) {
       prompts.cancel("Setup cancelled");
@@ -380,113 +381,135 @@ async function runInit({ force, returnToMenu = false }: { force: boolean; return
   }
 }
 
+interface SetupCompletionOptions {
+  localBaseUrl: string;
+  publicBaseUrl: string | null;
+  details: SetupConnectionDetails;
+  revealPassword: boolean;
+  exitLabel: string;
+}
 
-async function showSetupCompletion(
-  details: SetupCompletionDetails,
-  returnToMenu: boolean,
-): Promise<void> {
+type SetupCompletionAction =
+  | "copy_all"
+  | "copy_url"
+  | "copy_password"
+  | "toggle_password"
+  | "start"
+  | "restart"
+  | "recheck"
+  | "exit";
+
+// Setup ends on a screen that proves the Runtime is connectable and keeps the
+// connection details in one place until the user chooses to leave.
+async function showSetupCompletion(options: SetupCompletionOptions): Promise<void> {
+  const service = await import("./flyto2/native-service.js");
+  const serviceSupported = service.nativeServiceSupported();
+  const probe = () => collectSetupStatus({
+    localBaseUrl: options.localBaseUrl,
+    publicBaseUrl: options.publicBaseUrl,
+    serviceStatus: serviceSupported ? () => service.nativeRuntimeServiceStatus() : undefined,
+  });
+  let revealPassword = options.revealPassword;
+  let status = await probe();
+  // A Runtime that was already serving still holds the configuration from
+  // before this setup; it serves the new tool mode and URL only after a restart.
+  let restartPending = status.local === "ok";
+
   for (;;) {
-    const snapshot = await inspectSetupRuntime();
-    prompts.note(formatSetupCompletion(details, snapshot), "Setup complete");
-
-    const action = await prompts.select({
-      message: "Setup complete — what would you like to do?",
-      options: [
-        { value: "copy-all", label: "Copy all connection details" },
-        { value: "copy-url", label: "Copy MCP URL" },
-        { value: "copy-password", label: "Copy Owner password" },
-        ...(snapshot.service.supported
-          ? [{
-              value: "runtime",
-              label: snapshot.healthOk ? "Restart Runtime" : "Start Runtime",
-              hint: snapshot.healthOk ? "Restart the native background service" : "Install/start the native background service",
-            }]
+    const connectable = setupIsConnectable(status);
+    prompts.note(
+      [
+        ...formatSetupStatus(status),
+        "",
+        ...formatConnectionDetails(options.details, { revealPassword }),
+        "",
+        "Approve your MCP client with the Owner password on the Runtime OAuth page.",
+        ...(restartPending && status.local === "ok"
+          ? ["Restart the Runtime so it serves the settings you just saved."]
           : []),
-        { value: "retry", label: "Retry health check" },
-        { value: "back", label: returnToMenu ? "Back to main menu" : "Done" },
+        ...(status.local === "foreign"
+          ? [`Another program answers on ${options.localBaseUrl}. Stop it (check \`flyto2-runtime service legacy-status\`), then choose Start Runtime.`]
+          : []),
+        ...(status.local !== "unreachable" || serviceSupported
+          ? []
+          : ["Run `flyto2-runtime serve` in another terminal, then choose Check again."]),
+      ].join("\n"),
+      connectable ? "Setup complete" : "Setup saved - Runtime is not connectable yet",
+    );
+
+    const runtimeAction: { value: SetupCompletionAction; label: string } | undefined = !serviceSupported
+      ? undefined
+      : status.local === "ok"
+        ? { value: "restart", label: "Restart Runtime" }
+        : { value: "start", label: "Start Runtime" };
+    const action = await prompts.select<SetupCompletionAction>({
+      message: "What would you like to do?",
+      initialValue: connectable && !restartPending
+        ? "copy_all"
+        : status.local === "foreign" ? "recheck" : runtimeAction?.value ?? "recheck",
+      options: [
+        { value: "copy_all", label: "Copy all connection details" },
+        { value: "copy_url", label: "Copy MCP URL" },
+        { value: "copy_password", label: "Copy Owner password" },
+        { value: "toggle_password", label: revealPassword ? "Hide Owner password" : "Reveal Owner password" },
+        ...(runtimeAction ? [runtimeAction] : []),
+        { value: "recheck", label: "Check again" },
+        { value: "exit", label: options.exitLabel },
       ],
     });
+    if (prompts.isCancel(action) || action === "exit") return;
 
-    if (prompts.isCancel(action) || action === "back") {
-      if (returnToMenu) {
-        prompts.log.success("Setup complete.");
-      } else {
-        prompts.outro("Setup complete.");
+    switch (action) {
+      case "copy_all":
+      case "copy_url":
+      case "copy_password": {
+        const [text, what] = action === "copy_all"
+          ? [connectionDetailsClipboardText(options.details), "Connection details"]
+          : action === "copy_url"
+            ? [options.details.mcpUrl, "MCP URL"]
+            : [options.details.ownerPassword, "Owner password"];
+        if (await copyToClipboard(text)) prompts.log.success(`${what} copied to the clipboard.`);
+        else prompts.log.warn("No clipboard tool is available here. Reveal the Owner password and copy it manually.");
+        break;
       }
-      return;
-    }
-
-    try {
-      switch (action) {
-        case "copy-all":
-          copyToClipboard(allConnectionDetails(details));
-          prompts.log.success("Connection details copied.");
-          break;
-        case "copy-url":
-          copyToClipboard(details.mcpUrl);
-          prompts.log.success("MCP URL copied.");
-          break;
-        case "copy-password":
-          copyToClipboard(details.ownerPassword);
-          prompts.log.success("Owner password copied.");
-          break;
-        case "runtime": {
-          const service = await import("./flyto2/native-service.js");
-          const status = service.nativeRuntimeServiceStatus();
-          if (status.installed && status.loaded) {
-            service.restartNativeRuntimeService();
-            prompts.log.success("Flyto2 Runtime restarted.");
-          } else {
-            service.startNativeRuntimeService();
-            prompts.log.success("Flyto2 Runtime started.");
-          }
-          break;
+      case "toggle_password":
+        revealPassword = !revealPassword;
+        break;
+      case "start":
+      case "restart": {
+        const spinner = prompts.spinner();
+        spinner.start(action === "start" ? "Starting Flyto2 Runtime" : "Restarting Flyto2 Runtime");
+        try {
+          if (action === "start") service.startNativeRuntimeService();
+          else service.restartNativeRuntimeService();
+          status = await waitForRuntimeHealth(probe);
+          if (status.local === "ok") restartPending = false;
+          spinner.stop(status.local === "ok" ? "Flyto2 Runtime is running." : "Flyto2 Runtime did not pass its health check.");
+        } catch (error) {
+          spinner.stop(`Could not ${action} Flyto2 Runtime: ${error instanceof Error ? error.message : String(error)}`);
+          status = await probe();
         }
-        case "retry":
-          break;
+        continue;
       }
-    } catch (error) {
-      prompts.log.error(error instanceof Error ? error.message : String(error));
+      case "recheck":
+        break;
     }
+    status = await probe();
   }
 }
 
-async function inspectSetupRuntime(): Promise<{
-  healthOk: boolean;
-  service: SetupNativeServiceStatus;
-}> {
-  const config = loadConfig();
-  const localHost = ["0.0.0.0", "::"].includes(config.host) ? "127.0.0.1" : config.host;
-  const formattedHost = localHost.includes(":") ? "[" + localHost + "]" : localHost;
-  const healthUrl = "http://" + formattedHost + ":" + config.port + "/healthz";
-
-  let healthOk = false;
-  try {
-    const response = await fetch(healthUrl, { signal: AbortSignal.timeout(1500) });
-    const health = await response.json() as { ok?: boolean; name?: string };
-    healthOk = response.ok && health.ok === true && health.name === "flyto2-runtime";
-  } catch {
-    healthOk = false;
+// A freshly started service needs a moment to bind; poll instead of reporting
+// the first failed probe as a failure.
+async function waitForRuntimeHealth(
+  probe: () => Promise<SetupRuntimeStatus>,
+  attempts = 10,
+): Promise<SetupRuntimeStatus> {
+  let status = await probe();
+  for (let attempt = 1; attempt < attempts && status.local !== "ok"; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    status = await probe();
   }
-
-  if (process.platform !== "darwin" && process.platform !== "win32") {
-    return {
-      healthOk,
-      service: { supported: false, installed: false, loaded: false },
-    };
-  }
-
-  const service = await import("./flyto2/native-service.js");
-  const status = service.nativeRuntimeServiceStatus();
-  return {
-    healthOk,
-    service: {
-      supported: status.supported,
-      installed: status.installed,
-      loaded: status.loaded,
-      ...("state" in status && typeof status.state === "string" ? { state: status.state } : {}),
-    },
-  };
+  return status;
 }
 
 async function serve(): Promise<void> {
@@ -1016,7 +1039,7 @@ async function runInteractiveMenu(): Promise<void> {
         break;
       }
       case "setup":
-        await runInit({ force: true, returnToMenu: true });
+        await runInit({ force: true, exitLabel: "Back to main menu" });
         break;
       case "plugin":
         await runPluginCommand(["build"]);

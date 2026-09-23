@@ -1679,3 +1679,35 @@ test("cached ChatGPT bash calls execute against the Codex tool surface", async (
   assert.equal(ran.status, 200, await ran.clone().text());
   assert.match(await ran.text(), /cached-chatgpt-bash-ok/);
 });
+
+test("cached ChatGPT write and edit calls apply through the Codex apply_patch surface", async (t) => {
+  const { root, localBaseUrl, accessToken } = await httpServerFixture(t, "runtime-cached-edit-", "codex");
+  const opened = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
+    name: "open_workspace", arguments: { path: root },
+  });
+  assert.equal(opened.status, 200, await opened.clone().text());
+  const openedBody = await opened.json() as { result: { structuredContent: { workspace_id: string } } };
+  const workspaceId = openedBody.result.structuredContent.workspace_id;
+
+  const wrote = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
+    name: "write",
+    arguments: { workspaceId, path: "notes.txt", content: "alpha = 1\nbeta = 2\n" },
+  });
+  assert.equal(wrote.status, 200, await wrote.clone().text());
+  assert.doesNotMatch(await wrote.clone().text(), /not found|isError":true/);
+
+  const edited = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
+    name: "edit",
+    arguments: { workspaceId, path: "notes.txt", edits: [{ oldText: "= 2", newText: "= 20" }] },
+  });
+  assert.equal(edited.status, 200, await edited.clone().text());
+  assert.match(await edited.text(), /Applied patch to 1 file/);
+  assert.equal(await readFile(join(root, "notes.txt"), "utf8"), "alpha = 1\nbeta = 20\n");
+
+  const escaped = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
+    name: "edit",
+    arguments: { workspaceId, path: "../outside.txt", edits: [{ oldText: "a", newText: "b" }] },
+  });
+  assert.equal(escaped.status, 400);
+  assert.match(await escaped.text(), /outside allowed roots/);
+});
