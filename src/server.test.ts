@@ -180,7 +180,7 @@ test("Codex exec_command replays a lost response without repeating the process s
 
   const arguments_ = {
     workspace_id: workspaceId,
-    cmd: "printf 'once\\n' >> codex-effect.txt; sleep 3.2; printf 'done\\n'",
+    cmd: "node -e \"require('node:fs').appendFileSync('codex-effect.txt','once\\\\n');setTimeout(()=>console.log('done'),3200)\"",
     operation_id: "op.codex.exec.retry.0001",
   };
   const first = structuredContent(await context.client.callTool({
@@ -223,7 +223,7 @@ test("Codex interactive and non-interactive sessions share one opaque shape", as
     name: "exec_command",
     arguments: {
       workspace_id: workspaceId,
-      cmd: "sleep 0.4; printf 'pty-done\\n'",
+      cmd: "node -e \"setTimeout(()=>console.log('pty-done'),400)\"",
       tty: true,
     },
   }));
@@ -1598,7 +1598,7 @@ test("existing ChatGPT camelCase tool calls survive the Runtime migration", asyn
   const yieldedJobId = /job_[A-Za-z0-9]+/.exec(yieldedText)?.[0];
   assert.ok(yieldedJobId);
 
-  const resumed = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
+  let resumed = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
     name: "bash",
     arguments: {
       workspaceId,
@@ -1606,7 +1606,19 @@ test("existing ChatGPT camelCase tool calls survive the Runtime migration", asyn
     },
   });
   assert.equal(resumed.status, 200);
-  assert.match(await resumed.text(), /legacy-http-done/);
+  let resumedText = await resumed.text();
+  if (/still running as Flyto2 Runtime job/i.test(resumedText)) {
+    resumed = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
+      name: "bash",
+      arguments: {
+        workspaceId,
+        command: `@flyto2/job ${yieldedJobId}`,
+      },
+    });
+    assert.equal(resumed.status, 200);
+    resumedText = await resumed.text();
+  }
+  assert.match(resumedText, /legacy-http-done/);
 
   const conflict = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
     name: "bash", arguments: { workspaceId, workspace_id: "another-workspace", command: "echo must-not-run" },
