@@ -38,15 +38,27 @@ For ChatGPT, expose the Runtime origin over HTTPS and forward it to the local se
 http://127.0.0.1:7676
 ```
 
-Configure the MCP endpoint as:
+Store only the public origin in Runtime configuration:
 
 ```text
-https://your-runtime-host.example.com/mcp
+https://your-runtime-host.example.com
 ```
 
-The public origin stored in Runtime configuration should not include `/mcp`.
+Do not include `/mcp` in `server.publicBaseUrl`. Runtime derives the MCP resource as `/mcp`.
 
-Complete OAuth with the Runtime Owner credential. Keep the owner credential and `auth.json` private.
+When ChatGPT is selected during `flyto2-runtime init`, Runtime asks whether to generate a personalized portable Plugin ZIP. Choose Yes to create it immediately; choose No to keep only the Runtime/MCP settings and build the ZIP later. By default the generated file is written to `~/Downloads/flyto2-runtime-chatgpt-plugin.zip` when `~/Downloads` exists. The ZIP contains no credentials.
+
+Regenerate or customize the package at any time:
+
+```bash
+flyto2-runtime plugin build
+flyto2-runtime plugin build --url https://runtime.customer.example/mcp --name customer-runtime
+flyto2-runtime plugin build --help
+```
+
+The generator uses `server.publicBaseUrl` by default, but `--url`, `--base-url`, plugin identity, MCP server name, description, version, and output path are all overridable. This keeps the distribution reusable for other users and other Runtime hostnames instead of baking in `devspace.flyto2.com` or any other deployment.
+
+Upload the generated ZIP in ChatGPT Plugins, then complete OAuth with the Runtime Owner credential. Keep the owner credential and `auth.json` private.
 
 Runtime serves its MCP and OAuth discovery routes from the same origin. A reverse proxy or tunnel must therefore forward the whole origin, not only the `/mcp` path.
 

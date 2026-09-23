@@ -60,6 +60,13 @@ import { logEvent } from "./logger.js";
 import { pruneStaleManagedWorktrees } from "./worktree-prune.js";
 import { Flyto2CloudBridge } from "./flyto2/cloud-bridge.js";
 import { runtimeManifest } from "./flyto2/manifest.js";
+import {
+  DEFAULT_PLUGIN_DESCRIPTION,
+  DEFAULT_PLUGIN_DISPLAY_NAME,
+  DEFAULT_PLUGIN_NAME,
+  mcpUrlFromPublicBaseUrl,
+  writePortablePluginPackage,
+} from "./portable-plugin.js";
 
 type Command =
   | "serve"
@@ -73,6 +80,7 @@ type Command =
   | "menu"
   | "launcher"
   | "service"
+  | "plugin"
   | "help"
   | "version";
 const require = createRequire(import.meta.url);
@@ -119,6 +127,9 @@ async function main(argv: string[]): Promise<void> {
     case "service":
       await runServiceCommand(args);
       return;
+    case "plugin":
+      await runPluginCommand(args);
+      return;
     case "help":
       printHelp();
       return;
@@ -141,6 +152,7 @@ function normalizeCommand(command: string | undefined): Command {
     || command === "menu"
     || command === "launcher"
     || command === "service"
+    || command === "plugin"
   ) return command;
   if (command === "help" || command === "--help" || command === "-h") return "help";
   if (command === "version" || command === "--version" || command === "-v") return "version";
@@ -212,6 +224,7 @@ async function runInit({ force }: { force: boolean }): Promise<void> {
     const port = files.config.server.port;
 
     let publicBaseUrl: string | null = null;
+    let generateChatGptPlugin = false;
     if (useChatGpt) {
       prompts.note(
         [
@@ -230,6 +243,12 @@ async function runInit({ force }: { force: boolean }): Promise<void> {
         defaultValue: files.config.server.publicBaseUrl ?? "",
         validate: validateRequiredPublicBaseUrl,
       }));
+
+      const pluginAnswer = await prompts.confirm({
+        message: "Generate an upload-ready ChatGPT Plugin ZIP now?",
+      });
+      if (prompts.isCancel(pluginAnswer)) throw new SetupCancelledError();
+      generateChatGptPlugin = pluginAnswer;
     }
 
     const currentSubagents = files.config.subagents;
@@ -284,10 +303,21 @@ async function runInit({ force }: { force: boolean }): Promise<void> {
     ]);
     writeDevspaceAuth(auth);
 
+    let chatGptPluginPath: string | undefined;
+    if (useChatGpt && publicBaseUrl && generateChatGptPlugin) {
+      const packageJson = require("../package.json") as { version?: unknown };
+      const plugin = await writePortablePluginPackage({
+        mcpUrl: mcpUrlFromPublicBaseUrl(publicBaseUrl),
+        version: typeof packageJson.version === "string" ? packageJson.version : "1.0.0",
+      });
+      chatGptPluginPath = plugin.outputPath;
+    }
+
     const lines = [
       ...(allowedRoots ? [`Project folders: ${allowedRoots.join(", ")}`] : []),
       `Subagents: ${selectedProviders.join(", ") || "disabled"}`,
       ...(publicBaseUrl ? [`ChatGPT connection URL: ${publicBaseUrl}/mcp`] : []),
+      ...(chatGptPluginPath ? [`ChatGPT plugin ZIP: ${chatGptPluginPath}`] : []),
     ];
     prompts.note(lines.join("\n"), "Flyto2 Runtime is ready");
     {
@@ -303,6 +333,17 @@ async function runInit({ force }: { force: boolean }): Promise<void> {
     }
     const connectionUrl = `${publicBaseUrl ?? files.config.server.publicBaseUrl ?? `http://127.0.0.1:${port}`}/mcp`;
     for (const destination of destinations) {
+      if (destination === "chatgpt" && chatGptPluginPath) {
+        prompts.note(
+          [
+            `Upload ${chatGptPluginPath} in ChatGPT Plugins.`,
+            `The package points to ${connectionUrl}.`,
+            "Authorize the MCP connection with your Owner password when ChatGPT asks.",
+          ].join("\n"),
+          "Connect chatgpt",
+        );
+        continue;
+      }
       prompts.note(clientConnectionInstructions(destination, connectionUrl), `Connect ${destination}`);
     }
     if (useCodingAgents && selectedProviders.length > 0) {
@@ -805,6 +846,7 @@ async function runInteractiveMenu(): Promise<void> {
         { value: "manifest", label: "Capability manifest" },
         { value: "pair", label: "Pair with Flyto2 Cloud" },
         { value: "setup", label: "Setup / choose client", hint: "Codex, ChatGPT, Claude, or custom MCP" },
+        { value: "plugin", label: "Export ChatGPT plugin", hint: "Create an upload-ready ZIP from this Runtime config" },
         { value: "launcher", label: "Install Desktop launcher" },
         { value: "quit", label: "Quit" },
       ],
@@ -856,6 +898,9 @@ async function runInteractiveMenu(): Promise<void> {
       }
       case "setup":
         await runInit({ force: true });
+        break;
+      case "plugin":
+        await runPluginCommand(["build"]);
         break;
       case "launcher": {
         if (process.platform === "win32") {
@@ -928,6 +973,159 @@ async function runFlyto2Command(args: string[]): Promise<void> {
   }
 }
 
+async function runPluginCommand(args: string[]): Promise<void> {
+  const [candidateSubcommand, ...candidateRest] = args;
+  const subcommand = candidateSubcommand?.startsWith("--")
+    ? "build"
+    : candidateSubcommand ?? "build";
+  const rest = candidateSubcommand?.startsWith("--") ? args : candidateRest;
+
+  if (subcommand === "help" || rest.includes("--help") || rest.includes("-h")) {
+    printPluginHelp();
+    return;
+  }
+  if (subcommand !== "build") {
+    throw new Error("Usage: flyto2-runtime plugin build [options]");
+  }
+
+  const options = parsePluginBuildArgs(rest);
+  const files = loadDevspaceFiles();
+  const configuredBaseUrl = files.config.server.publicBaseUrl;
+  const mcpUrl = options.mcpUrl
+    ?? (options.baseUrl
+      ? mcpUrlFromPublicBaseUrl(options.baseUrl)
+      : configuredBaseUrl
+        ? mcpUrlFromPublicBaseUrl(configuredBaseUrl)
+        : undefined);
+  if (!mcpUrl) {
+    throw new Error(
+      [
+        "No public MCP URL is configured.",
+        "Set server.publicBaseUrl during setup, run:",
+        "  flyto2-runtime config set publicBaseUrl https://your-runtime-host.example.com",
+        "or pass --url https://your-runtime-host.example.com/mcp.",
+      ].join("\n"),
+    );
+  }
+
+  const packageJson = require("../package.json") as { version?: unknown };
+  const version = options.version
+    ?? (typeof packageJson.version === "string" ? packageJson.version : "1.0.0");
+  const result = await writePortablePluginPackage({
+    mcpUrl,
+    version,
+    name: options.name,
+    serverName: options.serverName,
+    displayName: options.displayName,
+    description: options.description,
+    outputPath: options.outputPath,
+  });
+
+  if (options.json) {
+    printJson({ ok: true, ...result });
+    return;
+  }
+
+  console.log(`Created ChatGPT plugin: ${result.outputPath}`);
+  console.log(`MCP URL: ${result.mcpUrl}`);
+  console.log("Upload the ZIP in ChatGPT Plugins. OAuth credentials are not stored in the package.");
+}
+
+interface PluginBuildCliOptions {
+  mcpUrl?: string;
+  baseUrl?: string;
+  name?: string;
+  serverName?: string;
+  displayName?: string;
+  description?: string;
+  version?: string;
+  outputPath?: string;
+  json: boolean;
+}
+
+function parsePluginBuildArgs(args: string[]): PluginBuildCliOptions {
+  const options: PluginBuildCliOptions = { json: false };
+
+  for (let index = 0; index < args.length; index += 1) {
+    const flag = args[index]!;
+    if (flag === "--json") {
+      options.json = true;
+      continue;
+    }
+
+    const value = args[index + 1];
+    if (!value || value.startsWith("--")) {
+      throw new Error(`Missing value for ${flag}.\n\n${pluginHelpText()}`);
+    }
+    index += 1;
+
+    switch (flag) {
+      case "--url":
+      case "--mcp-url":
+        options.mcpUrl = value;
+        break;
+      case "--base-url":
+        options.baseUrl = value;
+        break;
+      case "--name":
+        options.name = value;
+        break;
+      case "--server-name":
+        options.serverName = value;
+        break;
+      case "--display-name":
+        options.displayName = value;
+        break;
+      case "--description":
+        options.description = value;
+        break;
+      case "--version":
+        options.version = value;
+        break;
+      case "--output":
+        options.outputPath = value;
+        break;
+      default:
+        throw new Error(`Unknown plugin option: ${flag}.\n\n${pluginHelpText()}`);
+    }
+  }
+
+  if (options.mcpUrl && options.baseUrl) {
+    throw new Error("Use either --url or --base-url, not both.");
+  }
+  return options;
+}
+
+function pluginHelpText(): string {
+  return [
+    "Flyto2 Runtime plugin packaging",
+    "",
+    "Usage:",
+    "  flyto2-runtime plugin build [options]",
+    "",
+    "By default the package uses server.publicBaseUrl from Runtime config and writes",
+    "a personalized upload-ready ZIP to ~/Downloads when that folder exists.",
+    "",
+    "Options:",
+    "  --url <https-url>          Full MCP endpoint; for example https://host.example/mcp",
+    "  --base-url <https-url>     Public Runtime base URL; /mcp is added automatically",
+    `  --name <kebab-name>       Plugin id (default: ${DEFAULT_PLUGIN_NAME})`,
+    "  --server-name <name>       MCP server id (letters, digits, dots, underscores, hyphens)",
+    `  --display-name <name>      Human name (default: ${DEFAULT_PLUGIN_DISPLAY_NAME})`,
+    `  --description <text>       Plugin purpose (default: ${DEFAULT_PLUGIN_DESCRIPTION})`,
+    "  --version <semver>         Plugin version (default: Runtime package version)",
+    "  --output <file.zip>        Destination ZIP path",
+    "  --json                     Print machine-readable result",
+    "",
+    "The ZIP contains plugin.json, mcp.json, and a Runtime skill. It never contains",
+    "the Owner password, OAuth tokens, tunnel credentials, or auth.json.",
+  ].join("\n");
+}
+
+function printPluginHelp(): void {
+  console.log(pluginHelpText());
+}
+
 function printHelp(): void {
   console.log(
     [
@@ -952,6 +1150,7 @@ function printHelp(): void {
       "  flyto2-runtime menu          Open the interactive Flyto2 Runtime launcher",
       "  flyto2-runtime launcher install|status|remove",
       "  flyto2-runtime service install|start|stop|restart|status|update|rollback|uninstall",
+      "  flyto2-runtime plugin build [options]  Create an upload-ready portable ChatGPT plugin ZIP",
       "  devspace agents targets [--json]  List usable subagent providers and profiles",
       "  devspace agents ls       List subagent sessions",
       "  devspace agents run <profile-or-provider> [--model <model>] [--effort <level>] <prompt>",
@@ -1323,7 +1522,11 @@ function validateRequiredPublicBaseUrl(value: string | undefined): string | unde
   const trimmed = value?.trim() ?? "";
   if (!trimmed) return "Enter the public URL from your tunnel or reverse proxy.";
   if (trimmed.endsWith("/mcp")) return "Enter the base URL only, without /mcp.";
-  return validatePublicBaseUrl(trimmed);
+  const validationError = validatePublicBaseUrl(trimmed);
+  if (validationError) return validationError;
+  return new URL(trimmed).protocol === "https:"
+    ? undefined
+    : "ChatGPT requires a public HTTPS URL.";
 }
 
 function validatePublicBaseUrl(value: string): string | undefined {

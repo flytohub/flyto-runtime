@@ -5,6 +5,7 @@ Flyto2 Runtime is a standalone local execution runtime for coding and other mach
 ## Owns
 
 - MCP workspace and tool execution
+- portable ChatGPT/Codex Plugin packaging from each user's configured public MCP URL
 - local files, Git and process sessions
 - isolated worktrees and review checkpoints
 - local-agent delegation

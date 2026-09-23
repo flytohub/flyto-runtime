@@ -40,6 +40,7 @@ The wire contract is provider-neutral. Runtime adapters decide how an assignment
 ## Standalone surfaces
 
 - MCP server: `src/server.ts`
+- portable host plugin packaging: `src/portable-plugin.ts`
 - workspace lifecycle: `src/workspaces.ts`
 - process sessions: `src/process-sessions.ts`
 - local agents: `src/local-agent-*.ts`

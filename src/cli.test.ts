@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import { strFromU8, unzipSync } from "fflate";
 import { loadConfig } from "./config.js";
 import {
   LOCAL_AGENT_DAEMON_PROTOCOL_VERSION,
@@ -77,6 +78,48 @@ try {
   assert.match(doctor, /Runtime internals: exposed for diagnostics/);
 } finally {
   rmSync(configRoot, { recursive: true, force: true });
+}
+
+const pluginRoot = mkdtempSync(join(tmpdir(), "flyto2-cli-plugin-test-"));
+try {
+  const configDir = join(pluginRoot, ".devspace");
+  const outputPath = join(pluginRoot, "team-runtime.zip");
+  const configEnv = writeTestDevspaceConfig(configDir, {
+    server: { publicBaseUrl: "https://runtime.team.example" },
+  });
+  const env = { ...process.env, ...configEnv };
+  const output = execFileSync(
+    "node",
+    [
+      "--import",
+      "tsx",
+      "src/cli.ts",
+      "plugin",
+      "build",
+      "--name",
+      "team-runtime",
+      "--display-name",
+      "Team Runtime",
+      "--output",
+      outputPath,
+      "--json",
+    ],
+    { cwd: process.cwd(), encoding: "utf8", env },
+  );
+  const result = JSON.parse(output) as { ok?: boolean; mcpUrl?: string; outputPath?: string };
+  assert.equal(result.ok, true);
+  assert.equal(result.mcpUrl, "https://runtime.team.example/mcp");
+  assert.equal(result.outputPath, outputPath);
+
+  const archive = unzipSync(readFileSync(outputPath));
+  const plugin = JSON.parse(strFromU8(archive["plugin.json"]!)) as { name?: string };
+  const mcp = JSON.parse(strFromU8(archive["mcp.json"]!)) as {
+    mcpServers?: Record<string, { url?: string }>;
+  };
+  assert.equal(plugin.name, "team-runtime");
+  assert.equal(mcp.mcpServers?.["team-runtime"]?.url, "https://runtime.team.example/mcp");
+} finally {
+  rmSync(pluginRoot, { recursive: true, force: true });
 }
 
 const root = mkdtempSync(join(tmpdir(), "devspace-cli-agents-test-"));

@@ -66,7 +66,12 @@ export function clientConnectionInstructions(client: OnboardingDestination, url:
     case "claude":
       return `claude mcp add --transport http flyto2-runtime ${quoted}\nOpen /mcp in Claude Code to authorize. Other Claude clients: add the URL as a remote MCP server.`;
     case "chatgpt":
-      return `Add a custom MCP connection in ChatGPT: ${url}\nChoose OAuth and approve access with your Owner password.`;
+      return [
+        "Create an upload-ready plugin with:",
+        "  flyto2-runtime plugin build",
+        `The generated package will point to ${url}.`,
+        "Upload the ZIP in ChatGPT Plugins, then approve OAuth access with your Owner password.",
+      ].join("\n");
     default:
       return `Streamable HTTP MCP URL: ${url}\nUse OAuth discovery and approve access with your Owner password. Flyto2 Cloud is not required.`;
   }

@@ -17,6 +17,11 @@ document without discarding its comments, including `devspace config set
 publicBaseUrl <url|null>`, `flyto2-runtime config set tools.mode <codex|claude>`,
 and `flyto2-runtime config set tools.exposeRuntimeInternals <true|false>`.
 
+For ChatGPT, `flyto2-runtime plugin build` reads `server.publicBaseUrl` and
+creates a personalized portable Plugin ZIP. The endpoint and plugin metadata can
+also be overridden with CLI flags, so no deployment hostname is compiled into
+the Runtime. The generated package contains no Runtime credentials.
+
 ## Complete example
 
 ```jsonc

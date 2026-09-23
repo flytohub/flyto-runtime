@@ -79,15 +79,30 @@ On macOS the service is owned by `local.flyto2.runtime`; on Windows it is owned 
 
 ### ChatGPT
 
-Point the public HTTPS endpoint at Runtime's local server, normally `http://127.0.0.1:7676`, then connect ChatGPT to:
+Point a public HTTPS endpoint at Runtime's local server, normally `http://127.0.0.1:7676`, and store the public origin as `server.publicBaseUrl`. Do not hard-code someone else's Runtime URL into a plugin.
 
-```text
-https://your-runtime-host.example.com/mcp
+During `flyto2-runtime init`, choosing ChatGPT asks whether you want to generate a personalized, upload-ready portable Plugin ZIP. Choose **Yes** to write it to `~/Downloads` when that folder exists, or **No** to save only the Runtime/MCP configuration and generate the ZIP later. The package is built from the current Runtime URL and contains only portable plugin metadata, MCP configuration, and a small Runtime skill. It never contains the Owner password, OAuth tokens, tunnel credentials, or `auth.json`.
+
+You can regenerate it at any time:
+
+```bash
+flyto2-runtime plugin build
 ```
 
-Complete OAuth once. Runtime exposes the same MCP endpoint for modern and supported legacy client schemas.
+For another Runtime or a white-label package, override the connection and metadata without editing source:
 
-A client that cached an older MCP tool list may need its connector to be reconnected or a new conversation before the current compact surface appears. Cached legacy clients remain usable through the non-blocking compatibility surface.
+```bash
+flyto2-runtime plugin build \
+  --url https://runtime.customer.example/mcp \
+  --name customer-runtime \
+  --server-name customer-runtime \
+  --display-name "Customer Runtime" \
+  --output ./customer-runtime-plugin.zip
+```
+
+The generated ZIP contains root `plugin.json`, root `mcp.json`, and `skills/<plugin-name>/SKILL.md` using the portable Agent Plugins schemas. Upload the ZIP in ChatGPT Plugins and complete OAuth once when ChatGPT connects to the MCP endpoint.
+
+A client that cached an older MCP tool list may need its connection to be refreshed or a new conversation before the current compact surface appears.
 
 ### Runtime status and evidence
 
