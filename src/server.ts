@@ -1,3 +1,4 @@
+import { AccessDeniedError } from "./roots.js";
 import { LEGACY_SHELL_HEADER, normalizeLegacyMcpInput } from "./mcp-legacy-input.js";
 import { translateLegacyCodexWrite } from "./mcp-legacy-codex-writes.js";
 import { spawn } from "node:child_process";
@@ -138,6 +139,12 @@ interface WorkspaceAppManifestEntry {
 }
 
 type WorkspaceAppManifest = Record<string, WorkspaceAppManifestEntry>;
+
+function allowedRootsSentence(allowedRoots: readonly string[]): string {
+  return allowedRoots.length === 0
+    ? "No allowed roots are configured; ask the user to add one with flyto2-runtime setup."
+    : `Allowed roots: ${allowedRoots.join(", ")}. To find a folder the user names, open the allowed root and list it; do not search outside these roots.`;
+}
 
 function serverInstructions(
   config: ServerConfig,
@@ -453,7 +460,7 @@ function registerMcpSurface(
         path: z
           .string()
           .describe(
-            "Absolute path, or a leading-tilde home path such as ~/project, to a project directory inside an allowed root.",
+            `Absolute path, or a leading-tilde home path such as ~/project, to a project directory inside an allowed root. ${allowedRootsSentence(config.allowedRoots)}`,
           ),
         mode: z
           .enum(["checkout", "worktree"])
@@ -511,7 +518,14 @@ function registerMcpSurface(
       } = await workspaces.openWorkspace(
         { path, mode, baseRef },
         { conversationScopeId: conversationScopeIdFromRequestMeta(_meta) },
-      );
+      ).catch((error: unknown) => {
+        // The host cannot see the filesystem: name the roots it may use, so it
+        // opens one and looks inside instead of guessing or searching $HOME.
+        if (error instanceof AccessDeniedError) {
+          throw new AccessDeniedError(`${error.message}. ${allowedRootsSentence(config.allowedRoots)}`);
+        }
+        throw error;
+      });
       const review = await reviewCheckpoints.initializeWorkspace({
         workspaceId: workspace.id,
         root: workspace.root,
