@@ -8,12 +8,12 @@ import { RuntimeEventStore } from "./runtime-events.js";
 
 test("reactive commands return immediately and publish shallow completion with evidence", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "flyto2-reactive-"));
-  t.after(() => rm(stateDir, { recursive: true, force: true }));
   const events = new RuntimeEventStore(stateDir);
   const runner = new ReactiveCommandRunner(stateDir, events);
-  t.after(() => {
+  t.after(async () => {
     runner.shutdown();
     events.close();
+    await rm(stateDir, { recursive: true, force: true });
   });
 
   const after = events.latestSequence();
@@ -52,12 +52,12 @@ test("reactive commands return immediately and publish shallow completion with e
 
 test("terminal reactive jobs can be discarded after a synchronous compatibility response", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "flyto2-reactive-discard-"));
-  t.after(() => rm(stateDir, { recursive: true, force: true }));
   const events = new RuntimeEventStore(stateDir);
   const runner = new ReactiveCommandRunner(stateDir, events);
-  t.after(() => {
+  t.after(async () => {
     runner.shutdown();
     events.close();
+    await rm(stateDir, { recursive: true, force: true });
   });
 
   const receipt = runner.start({
@@ -84,12 +84,12 @@ test("terminal reactive jobs can be discarded after a synchronous compatibility 
 
 test("reactive command timeout terminates the process and records timeout evidence", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "flyto2-reactive-timeout-"));
-  t.after(() => rm(stateDir, { recursive: true, force: true }));
   const events = new RuntimeEventStore(stateDir);
   const runner = new ReactiveCommandRunner(stateDir, events);
-  t.after(() => {
+  t.after(async () => {
     runner.shutdown();
     events.close();
+    await rm(stateDir, { recursive: true, force: true });
   });
 
   const receipt = runner.start({
@@ -115,12 +115,12 @@ test("reactive command timeout terminates the process and records timeout eviden
 
 test("reactive timeout cannot be converted into success by a clean SIGTERM handler", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "flyto2-reactive-timeout-clean-"));
-  t.after(() => rm(stateDir, { recursive: true, force: true }));
   const events = new RuntimeEventStore(stateDir);
   const runner = new ReactiveCommandRunner(stateDir, events);
-  t.after(() => {
+  t.after(async () => {
     runner.shutdown();
     events.close();
+    await rm(stateDir, { recursive: true, force: true });
   });
 
   const receipt = runner.start({
@@ -144,12 +144,12 @@ test("reactive timeout cannot be converted into success by a clean SIGTERM handl
 
 test("reactive command failure emits failure facts without hiding evidence", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "flyto2-reactive-"));
-  t.after(() => rm(stateDir, { recursive: true, force: true }));
   const events = new RuntimeEventStore(stateDir);
   const runner = new ReactiveCommandRunner(stateDir, events);
-  t.after(() => {
+  t.after(async () => {
     runner.shutdown();
     events.close();
+    await rm(stateDir, { recursive: true, force: true });
   });
 
   const receipt = runner.start({

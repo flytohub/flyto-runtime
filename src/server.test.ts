@@ -428,6 +428,10 @@ test("legacy Claude bash yields long commands into a durable Runtime job", async
   const jobId = /job_[A-Za-z0-9]+/.exec(first.result as string)?.[0];
   assert.ok(jobId);
 
+  // The compatibility receipt is intentionally non-blocking. Give the
+  // command enough time to finish before exercising the resume path; Windows
+  // process startup is measurably slower than macOS/Linux.
+  await new Promise((resolve) => setTimeout(resolve, 1_800));
   const resumed = structuredContent(await context.client.callTool({
     name: "bash",
     arguments: {
@@ -1396,7 +1400,10 @@ async function callOpen(
 }
 
 function structuredContent(result: Awaited<ReturnType<Client["callTool"]>>): Record<string, unknown> {
-  assert.ok(result.structuredContent);
+  assert.ok(
+    result.structuredContent,
+    `Expected structured tool output, got: ${JSON.stringify(result.content ?? [])}`,
+  );
   return result.structuredContent as Record<string, unknown>;
 }
 

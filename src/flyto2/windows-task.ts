@@ -95,8 +95,37 @@ export function queryWindowsScheduledTaskXml(taskName: string): string | undefin
 
 export function registerWindowsScheduledTask(taskName: string, xmlPath: string): void {
   assertWindows();
-  const result = runSchtasks(["/Create", "/TN", taskName, "/XML", xmlPath, "/F"]);
-  if (result.status !== 0) throw taskError("register", taskName, result);
+  // schtasks.exe interprets XML files through the Windows Unicode parser and
+  // can reject a valid UTF-8 file with "unable to switch the encoding".
+  // PowerShell reads the file explicitly as UTF-8 and hands Task Scheduler
+  // the decoded XML string, making registration independent of file encoding.
+  const result = spawnSync(
+    "powershell.exe",
+    [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "$ErrorActionPreference='Stop'; $xml=Get-Content -LiteralPath $env:FLYTO2_TASK_XML -Raw -Encoding UTF8; Register-ScheduledTask -TaskName $env:FLYTO2_TASK_NAME -Xml $xml -Force | Out-Null",
+    ],
+    {
+      encoding: "utf8",
+      windowsHide: true,
+      env: {
+        ...process.env,
+        FLYTO2_TASK_NAME: taskName,
+        FLYTO2_TASK_XML: xmlPath,
+      },
+    },
+  );
+  if (result.status !== 0) {
+    const detail = typeof result.stderr === "string"
+      ? result.stderr.trim()
+      : "PowerShell failed.";
+    throw new Error(
+      `Failed to register Windows scheduled task "${taskName}"${detail ? `: ${detail}` : "."}`,
+    );
+  }
 }
 
 export function runWindowsScheduledTask(taskName: string): void {

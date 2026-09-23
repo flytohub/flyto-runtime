@@ -7,7 +7,6 @@ import { RuntimeEventStore } from "./runtime-events.js";
 
 test("runtime events are durable, ordered, deduplicated, and filterable", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "flyto2-events-"));
-  t.after(() => rm(stateDir, { recursive: true, force: true }));
 
   const first = new RuntimeEventStore(stateDir, 10);
   const eventA = first.append({
@@ -51,7 +50,10 @@ test("runtime events are durable, ordered, deduplicated, and filterable", async 
   first.close();
 
   const restored = new RuntimeEventStore(stateDir, 10);
-  t.after(() => restored.close());
+  t.after(async () => {
+    restored.close();
+    await rm(stateDir, { recursive: true, force: true });
+  });
   assert.ok(restored.latestSequence() >= eventA.sequence + 1);
   assert.deepEqual(
     restored.list({ workspace_id: "ws-1" }).map(({ event_id }) => event_id),
@@ -65,9 +67,11 @@ test("runtime events are durable, ordered, deduplicated, and filterable", async 
 
 test("runtime wait returns one shallow matching event without polling", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "flyto2-events-"));
-  t.after(() => rm(stateDir, { recursive: true, force: true }));
   const store = new RuntimeEventStore(stateDir);
-  t.after(() => store.close());
+  t.after(async () => {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  });
 
   const after = store.latestSequence();
   const waiting = store.wait({
@@ -102,9 +106,11 @@ test("runtime wait returns one shallow matching event without polling", async (t
 
 test("runtime event retention keeps the newest bounded history", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "flyto2-events-"));
-  t.after(() => rm(stateDir, { recursive: true, force: true }));
   const store = new RuntimeEventStore(stateDir, 3);
-  t.after(() => store.close());
+  t.after(async () => {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  });
 
   for (let index = 1; index <= 5; index += 1) {
     store.append({
@@ -123,9 +129,11 @@ test("runtime event retention keeps the newest bounded history", async (t) => {
 
 test("runtime event payloads are bounded", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "flyto2-events-"));
-  t.after(() => rm(stateDir, { recursive: true, force: true }));
   const store = new RuntimeEventStore(stateDir);
-  t.after(() => store.close());
+  t.after(async () => {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  });
 
   assert.throws(
     () => store.append({

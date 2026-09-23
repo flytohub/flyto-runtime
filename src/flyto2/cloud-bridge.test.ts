@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { Flyto2CloudBridge } from "./cloud-bridge.js";
@@ -56,7 +56,9 @@ test("Cloud bridge pairs once, persists 0600 credentials, and normalizes assignm
   assert.equal(bridge.paired, true);
 
   const credentialPath = join(stateDir, "flyto2-cloud.json");
-  assert.equal((await stat(credentialPath)).mode & 0o777, 0o600);
+  if (platform() !== "win32") {
+    assert.equal((await stat(credentialPath)).mode & 0o777, 0o600);
+  }
   const stored = JSON.parse(await readFile(credentialPath, "utf8")) as Record<string, unknown>;
   assert.equal(stored.device_secret, "secret-1");
 

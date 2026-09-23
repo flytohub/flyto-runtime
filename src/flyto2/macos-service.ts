@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, platform } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, posix } from "node:path";
 import { devspaceConfigDir } from "../user-config.js";
 import { loadConfig } from "../config.js";
 import { flyto2RuntimePackageRoot } from "./macos-launcher.js";
@@ -78,9 +78,9 @@ export interface LaunchAgentRestartPolicy {
 export function macRuntimeServicePaths(
   homeDirectory = homedir(),
 ): MacRuntimeServicePaths {
-  const launchAgents = join(homeDirectory, "Library", "LaunchAgents");
-  const logsDirectory = join(homeDirectory, "Library", "Logs", "Flyto2 Runtime");
-  const plistPath = join(
+  const launchAgents = posix.join(homeDirectory, "Library", "LaunchAgents");
+  const logsDirectory = posix.join(homeDirectory, "Library", "Logs", "Flyto2 Runtime");
+  const plistPath = posix.join(
     launchAgents,
     `${FLYTO2_RUNTIME_LAUNCH_AGENT_LABEL}.plist`,
   );
@@ -89,8 +89,8 @@ export function macRuntimeServicePaths(
     previousPlistPath: `${plistPath}.previous`,
     activePlistPath: `${plistPath}.active`,
     logsDirectory,
-    stdoutPath: join(logsDirectory, "runtime.log"),
-    stderrPath: join(logsDirectory, "runtime-error.log"),
+    stdoutPath: posix.join(logsDirectory, "runtime.log"),
+    stderrPath: posix.join(logsDirectory, "runtime-error.log"),
   };
 }
 
@@ -103,7 +103,7 @@ export function renderMacRuntimeLaunchAgent(options: {
 }): string {
   const paths = macRuntimeServicePaths(options.homeDirectory);
   const nodePath = options.nodePath ?? process.execPath;
-  const cliPath = join(options.packageRoot, "dist", "cli.js");
+  const cliPath = posix.join(options.packageRoot, "dist", "cli.js");
   const pathEnvironment = options.pathEnvironment
     ?? [dirname(nodePath), process.env.PATH].filter(Boolean).join(":");
 

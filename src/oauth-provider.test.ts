@@ -16,7 +16,6 @@ function hashToken(token: string): string {
 
 test("refresh rotation keeps the consumed token valid only for bounded response-loss retry", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "flyto2-oauth-retry-"));
-  t.after(async () => rm(stateDir, { recursive: true, force: true }));
 
   const resource = "https://runtime.example.test/mcp";
   const originalRefreshToken = "original-refresh-token";
@@ -42,7 +41,10 @@ test("refresh rotation keeps the consumed token valid only for bounded response-
     allowedResourceUrls: [],
     allowedRedirectHosts: ["chatgpt.com"],
   }, new URL(resource), stateDir);
-  t.after(() => provider.close());
+  t.after(async () => {
+    provider.close();
+    await rm(stateDir, { recursive: true, force: true });
+  });
 
   const first = await provider.exchangeRefreshToken(
     client,

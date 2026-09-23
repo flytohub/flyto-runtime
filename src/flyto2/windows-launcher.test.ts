@@ -22,7 +22,7 @@ test("Windows desktop launcher starts the same packaged CLI with durable config"
 
 test("Windows desktop fallback path is deterministic off Windows", () => {
   assert.equal(
-    windowsDesktopRoot("C:\\Users\\chester"),
+    windowsDesktopRoot("C:\\Users\\chester", "linux"),
     "C:\\Users\\chester\\Desktop",
   );
 });

@@ -12,8 +12,9 @@ export interface InstalledWindowsLaunchers {
 
 export function windowsDesktopRoot(
   homeDirectory = homedir(),
+  currentPlatform: NodeJS.Platform = platform(),
 ): string {
-  if (platform() === "win32") {
+  if (currentPlatform === "win32") {
     const result = spawnSync(
       "powershell.exe",
       [

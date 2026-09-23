@@ -16,17 +16,17 @@ import { WorkspaceWatchRegistry } from "./workspace-watch.js";
 test("external filesystem changes emit shallow workspace events and stop cleanly", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "flyto2-watch-state-"));
   const workspaceRoot = await mkdtemp(join(tmpdir(), "flyto2-watch-workspace-"));
-  t.after(() => rm(stateDir, { recursive: true, force: true }));
-  t.after(() => rm(workspaceRoot, { recursive: true, force: true }));
 
   const file = join(workspaceRoot, "external.txt");
   await writeFile(file, "before\n");
 
   const events = new RuntimeEventStore(stateDir);
   const watches = new WorkspaceWatchRegistry(stateDir, events);
-  t.after(() => {
+  t.after(async () => {
     watches.shutdown();
     events.close();
+    await rm(stateDir, { recursive: true, force: true });
+    await rm(workspaceRoot, { recursive: true, force: true });
   });
 
   const watch = watches.start({
@@ -71,8 +71,6 @@ test("external filesystem changes emit shallow workspace events and stop cleanly
 test("active filesystem watches restore after Runtime restart", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "flyto2-watch-state-"));
   const workspaceRoot = await mkdtemp(join(tmpdir(), "flyto2-watch-workspace-"));
-  t.after(() => rm(stateDir, { recursive: true, force: true }));
-  t.after(() => rm(workspaceRoot, { recursive: true, force: true }));
 
   const file = join(workspaceRoot, "restore.txt");
   await writeFile(file, "before\n");
@@ -91,9 +89,11 @@ test("active filesystem watches restore after Runtime restart", async (t) => {
   first.shutdown();
 
   const restored = new WorkspaceWatchRegistry(stateDir, events);
-  t.after(() => {
+  t.after(async () => {
     restored.shutdown();
     events.close();
+    await rm(stateDir, { recursive: true, force: true });
+    await rm(workspaceRoot, { recursive: true, force: true });
   });
   assert.equal(
     restored.list("ws-restore").find(({ watch_id }) => watch_id === watch.watch_id)?.status,
@@ -126,8 +126,6 @@ test("persisted watch fails closed when a logical workspace root retargets", {
   await writeFile(join(rootA, "file.txt"), "a\n");
   await writeFile(join(rootB, "file.txt"), "b\n");
   await symlink(rootA, logicalRoot, "dir");
-  t.after(() => rm(stateDir, { recursive: true, force: true }));
-  t.after(() => rm(parent, { recursive: true, force: true }));
 
   const events = new RuntimeEventStore(stateDir);
   const first = new WorkspaceWatchRegistry(stateDir, events);
@@ -146,9 +144,11 @@ test("persisted watch fails closed when a logical workspace root retargets", {
 
   const cursor = events.latestSequence();
   const restored = new WorkspaceWatchRegistry(stateDir, events);
-  t.after(() => {
+  t.after(async () => {
     restored.shutdown();
     events.close();
+    await rm(stateDir, { recursive: true, force: true });
+    await rm(parent, { recursive: true, force: true });
   });
 
   const record = restored

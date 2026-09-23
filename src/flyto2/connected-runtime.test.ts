@@ -40,9 +40,11 @@ const assignment: Flyto2Assignment = {
 
 test("connected runtime composes claim, lease, progress, executor and completion", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "flyto2-connected-runtime-"));
-  t.after(() => rm(stateDir, { recursive: true, force: true }));
   const events = new RuntimeEventStore(stateDir);
-  t.after(() => events.close());
+  t.after(async () => {
+    events.close();
+    await rm(stateDir, { recursive: true, force: true });
+  });
   const calls: string[] = [];
   let completed: unknown;
   const transport: Flyto2CloudAssignmentTransport = {

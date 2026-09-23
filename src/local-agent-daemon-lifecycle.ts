@@ -10,7 +10,7 @@ import {
   rmSync,
   writeSync,
 } from "node:fs";
-import { join, resolve } from "node:path";
+import { join, posix, resolve } from "node:path";
 
 export const LOCAL_AGENT_DAEMON_PROTOCOL_VERSION = 5;
 export const LOCAL_AGENT_DAEMON_SOCKET_NAME = "agentd.sock";
@@ -37,7 +37,7 @@ export function localAgentDaemonPaths(
   const defaultSocketPath = join(resolvedStateDir, LOCAL_AGENT_DAEMON_SOCKET_NAME);
   const socketPath = platform !== "win32"
     && Buffer.byteLength(defaultSocketPath, "utf8") > 90
-    ? join("/tmp", `flyto2-agentd-${hashStateDir(resolvedStateDir)}.sock`)
+    ? posix.join("/tmp", `flyto2-agentd-${hashStateDir(resolvedStateDir)}.sock`)
     : defaultSocketPath;
   return {
     stateDir: resolvedStateDir,

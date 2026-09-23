@@ -7,12 +7,14 @@ import { DurableOperationStore, runDurableOperation } from "./durable-operations
 
 test("durable operation admission is atomic across store instances", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "flyto2-durable-"));
-  t.after(() => rm(stateDir, { recursive: true, force: true }));
 
   const first = new DurableOperationStore(stateDir);
   const second = new DurableOperationStore(stateDir);
-  t.after(() => first.close());
-  t.after(() => second.close());
+  t.after(async () => {
+    first.close();
+    second.close();
+    await rm(stateDir, { recursive: true, force: true });
+  });
 
   const admitted = first.begin("write", "op.atomic.0001", { path: "a.txt", content: "a" });
   assert.equal(admitted.mode, "execute");
@@ -29,9 +31,11 @@ test("durable operation admission is atomic across store instances", async (t) =
 
 test("completed durable operation replays its stored value", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "flyto2-durable-"));
-  t.after(() => rm(stateDir, { recursive: true, force: true }));
   const store = new DurableOperationStore(stateDir);
-  t.after(() => store.close());
+  t.after(async () => {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  });
 
   let calls = 0;
   const first = await runDurableOperation(
