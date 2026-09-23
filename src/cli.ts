@@ -42,6 +42,7 @@ import {
   clientConnectionInstructions,
   SUBAGENT_SKILL_INSTALL_COMMAND,
   resolveOnboardingUsage,
+  resolveToolModeForDestinations,
   updateOnboardingSubagentsConfig,
   usesChatGpt,
   usesCodingAgents,
@@ -203,6 +204,7 @@ async function runInit({ force }: { force: boolean }): Promise<void> {
     if (prompts.isCancel(destinationAnswer)) throw new SetupCancelledError();
     const destinations = destinationAnswer as OnboardingDestination[];
     const usage = resolveOnboardingUsage(destinations);
+    const toolMode = resolveToolModeForDestinations(destinations);
     const useChatGpt = usesChatGpt(usage);
     const useCodingAgents = usesCodingAgents(usage);
 
@@ -295,11 +297,9 @@ async function runInit({ force }: { force: boolean }): Promise<void> {
         ? [{ path: ["workspaces", "allowedRoots"], value: allowedRoots }]
         : []),
       { path: ["subagents"], value: subagents },
-      ...(destinations.includes("codex")
-        ? [{ path: ["tools", "mode"], value: "codex" }]
-        : destinations.includes("claude") || useChatGpt
-          ? [{ path: ["tools", "mode"], value: "claude" }]
-          : []),
+      ...(toolMode
+        ? [{ path: ["tools", "mode"], value: toolMode }]
+        : []),
     ]);
     writeDevspaceAuth(auth);
 

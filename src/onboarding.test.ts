@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   resolveOnboardingUsage,
+  resolveToolModeForDestinations,
   ONBOARDING_CLIENT_OPTIONS,
   clientConnectionInstructions,
   updateOnboardingSubagentsConfig,
@@ -17,6 +18,12 @@ for (const [selections, expected] of [
   assert.equal(resolveOnboardingUsage(selections), expected);
 }
 assert.throws(() => resolveOnboardingUsage([]), /Choose ChatGPT, Coding Agents, or both/);
+
+assert.equal(resolveToolModeForDestinations(["chatgpt"]), "codex");
+assert.equal(resolveToolModeForDestinations(["chatgpt", "claude"]), "codex");
+assert.equal(resolveToolModeForDestinations(["codex"]), "codex");
+assert.equal(resolveToolModeForDestinations(["claude"]), "claude");
+assert.equal(resolveToolModeForDestinations(["custom"]), undefined);
 
 assert.deepEqual(
   updateOnboardingSubagentsConfig(
@@ -74,4 +81,5 @@ assert.match(clientConnectionInstructions("codex", "http://127.0.0.1:7676/mcp"),
 assert.match(clientConnectionInstructions("codex", "http://127.0.0.1:7676/mcp"), /codex mcp login/);
 assert.match(clientConnectionInstructions("claude", "https://runtime.example/mcp"), /claude mcp add --transport http/);
 assert.match(clientConnectionInstructions("chatgpt", "https://runtime.example/mcp"), /OAuth/);
+assert.match(clientConnectionInstructions("chatgpt", "https://runtime.example/mcp"), /refresh or recreate/);
 assert.match(clientConnectionInstructions("custom", "http://127.0.0.1:7676/mcp"), /Cloud is not required/);

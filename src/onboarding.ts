@@ -30,6 +30,15 @@ export function usesCodingAgents(usage: OnboardingUsage): boolean {
   return usage === "coding-agents" || usage === "both";
 }
 
+export function resolveToolModeForDestinations(
+  destinations: readonly OnboardingDestination[],
+): "codex" | "claude" | undefined {
+  const selected = new Set(destinations);
+  if (selected.has("chatgpt") || selected.has("codex")) return "codex";
+  if (selected.has("claude")) return "claude";
+  return undefined;
+}
+
 export function updateOnboardingSubagentsConfig(
   current: SubagentsConfig,
   selectedProviders: readonly LocalAgentProvider[],
@@ -52,7 +61,7 @@ export function updateOnboardingSubagentsConfig(
 }
 
 export const ONBOARDING_CLIENT_OPTIONS = [
-  { value: "chatgpt", label: "ChatGPT", hint: "Connect through your public HTTPS tunnel." },
+  { value: "chatgpt", label: "ChatGPT", hint: "Connect through HTTPS with the compact six-tool surface." },
   { value: "codex", label: "Codex", hint: "Show connection instructions; no client is registered automatically." },
   { value: "claude", label: "Claude", hint: "Connect Claude Code or another Claude MCP client." },
   { value: "custom", label: "Direct MCP / custom client", hint: "Use Streamable HTTP with OAuth; Cloud is optional." },
@@ -71,6 +80,7 @@ export function clientConnectionInstructions(client: OnboardingDestination, url:
         "  flyto2-runtime plugin build",
         `The generated package will point to ${url}.`,
         "Upload the ZIP in ChatGPT Plugins, then approve OAuth access with your Owner password.",
+        "If this Runtime was already connected, refresh or recreate its ChatGPT app so ChatGPT scans the current tools.",
       ].join("\n");
     default:
       return `Streamable HTTP MCP URL: ${url}\nUse OAuth discovery and approve access with your Owner password. Flyto2 Cloud is not required.`;
