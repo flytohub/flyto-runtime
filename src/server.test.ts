@@ -77,6 +77,30 @@ test("healthz exposes only minimal public liveness", async (t) => {
   }
 });
 
+test("MCP accepts bounded tool payloads above Express' 100 KB default", async (t) => {
+  const context = await httpServerFixture(t, "flyto2-large-mcp-body-");
+  const response = await fetch(`${context.localBaseUrl}/mcp`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${context.accessToken}`,
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/list",
+      params: {},
+      padding: "x".repeat(256 * 1024),
+    }),
+  });
+
+  // The deliberately unknown top-level field may be rejected by the
+  // JSON-RPC validator, but the request must make it past the HTTP body parser.
+  assert.notEqual(response.status, 413);
+  assert.equal(response.status, 400);
+});
+
 test("model-facing tool schemas use snake_case recursively", async (t) => {
   for (const toolMode of ["claude", "codex"] as const) {
     await t.test(toolMode, async (nested) => {

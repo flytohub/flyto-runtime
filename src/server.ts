@@ -5,7 +5,10 @@ import { readFileSync } from "node:fs";
 import { access, realpath } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
+import {
+  hostHeaderValidation,
+  localhostHostValidation,
+} from "@modelcontextprotocol/sdk/server/middleware/hostHeaderValidation.js";
 import { mcpAuthRouter, getOAuthProtectedResourceMetadataUrl } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import { resourceUrlFromServerUrl } from "@modelcontextprotocol/sdk/shared/auth-utils.js";
@@ -99,7 +102,7 @@ function mcpServerInfo() {
 }
 
 interface RunningServer {
-  app: ReturnType<typeof createMcpExpressApp>;
+  app: ReturnType<typeof express>;
   config: ServerConfig;
   localAgentProviders: LocalAgentProviderStatus[];
   close(): Promise<void>;
@@ -926,10 +929,17 @@ export function createServer(
   const allowedHosts = config.allowedHosts.includes("*")
     ? undefined
     : Array.from(new Set([config.host, ...config.allowedHosts]));
-  const app = createMcpExpressApp({
-    host: config.host,
-    ...(allowedHosts ? { allowedHosts } : {}),
-  });
+  const app = express();
+  // The MCP SDK helper currently hard-codes Express' default 100 KB JSON
+  // parser limit. Real edit/write/tool payloads can legitimately exceed that,
+  // so use a bounded Runtime-owned limit instead of surfacing a transport-level
+  // 413 that MCP hosts often present as a connection interruption.
+  app.use(express.json({ limit: "4mb" }));
+  if (allowedHosts) {
+    app.use(hostHeaderValidation(allowedHosts));
+  } else if (["127.0.0.1", "localhost", "::1"].includes(config.host)) {
+    app.use(localhostHostValidation());
+  }
   const mcpUrl = new URL("/mcp", config.publicBaseUrl);
   const resourceServerUrl = resourceUrlFromServerUrl(mcpUrl);
   const oauthProvider = new SingleUserOAuthProvider(config.oauth, mcpUrl, config.stateDir);
