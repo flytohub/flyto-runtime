@@ -26,6 +26,7 @@ test("native LaunchAgent plist points directly at Flyto2 Runtime", () => {
   assert.match(plist, /\/opt\/flyto2\/runtime\/dist\/cli\.js/);
   assert.match(plist, /<string>serve<\/string>/);
   assert.match(plist, /FLYTO2_RUNTIME_CONFIG_DIR/);
+  assert.match(plist, /FLYTO2_RUNTIME_MANAGED_SERVICE/);
   assert.match(plist, /\/Users\/example\/\.flyto2\/runtime/);
   assert.doesNotMatch(plist, /service\.mjs/);
   assert.doesNotMatch(plist, /local\.devspace\.mac-kit/);

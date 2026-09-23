@@ -345,17 +345,22 @@ async function serve(): Promise<void> {
 
   const config = loadConfig();
   // A Desktop launcher can be opened while the background Runtime is already serving.
+  // Managed service processes skip this probe: during a launchd/Task Scheduler
+  // handoff the previous process can remain healthy for a few milliseconds,
+  // which would make the replacement process incorrectly exit before binding.
   const localHost = ["0.0.0.0", "::"].includes(config.host) ? "127.0.0.1" : config.host;
   const localUrl = `http://${localHost.includes(":") ? `[${localHost}]` : localHost}:${config.port}`;
-  try {
-    const response = await fetch(`${localUrl}/healthz`, { signal: AbortSignal.timeout(1500) });
-    const health = await response.json() as { ok?: boolean; name?: string };
-    if (health.ok && health.name === "flyto2-runtime") {
-      console.log(`Flyto2 Runtime is already serving at ${localUrl}/mcp`);
-      return;
+  if (process.env.FLYTO2_RUNTIME_MANAGED_SERVICE !== "1") {
+    try {
+      const response = await fetch(`${localUrl}/healthz`, { signal: AbortSignal.timeout(1500) });
+      const health = await response.json() as { ok?: boolean; name?: string };
+      if (health.ok && health.name === "flyto2-runtime") {
+        console.log(`Flyto2 Runtime is already serving at ${localUrl}/mcp`);
+        return;
+      }
+    } catch {
+      // No healthy Runtime on the configured listener; start it below.
     }
-  } catch {
-    // No healthy Runtime on the configured listener; start it below.
   }
   await runStartupWorktreeCleanup(config);
   const { createServer } = await import("./server.js");

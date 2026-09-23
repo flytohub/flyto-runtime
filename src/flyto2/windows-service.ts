@@ -91,6 +91,7 @@ export function renderWindowsRuntimeScript(options: {
   return [
     "$ErrorActionPreference = 'Stop'",
     `$env:FLYTO2_RUNTIME_CONFIG_DIR = '${powershellLiteral(options.configDirectory)}'`,
+    "$env:FLYTO2_RUNTIME_MANAGED_SERVICE = '1'",
     `$env:DEVSPACE_CONFIG_DIR = '${powershellLiteral(options.configDirectory)}'`,
     `$env:PATH = '${powershellLiteral(nodeDirectory)};' + $env:PATH`,
     `Set-Location -LiteralPath '${powershellLiteral(options.packageRoot)}'`,

@@ -126,6 +126,8 @@ export function renderMacRuntimeLaunchAgent(options: {
     "  <dict>",
     "    <key>FLYTO2_RUNTIME_CONFIG_DIR</key>",
     `    <string>${xmlEscape(options.configDirectory)}</string>`,
+    "    <key>FLYTO2_RUNTIME_MANAGED_SERVICE</key>",
+    "    <string>1</string>",
     "    <key>DEVSPACE_CONFIG_DIR</key>",
     `    <string>${xmlEscape(options.configDirectory)}</string>`,
     "    <key>PATH</key>",

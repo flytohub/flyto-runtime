@@ -15,6 +15,7 @@ test("Windows Runtime wrapper preserves config and paths with spaces", () => {
   });
 
   assert.match(script, /FLYTO2_RUNTIME_CONFIG_DIR/);
+  assert.match(script, /FLYTO2_RUNTIME_MANAGED_SERVICE/);
   assert.match(script, /DEVSPACE_CONFIG_DIR/);
   assert.match(script, /Flyto2 Config/);
   assert.match(script, /Set-Location -LiteralPath/);
