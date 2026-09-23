@@ -89,9 +89,12 @@ test("setup waits for the new hostname to exist in DNS before anything resolves 
     if (lookups < 3) throw Object.assign(new Error("queryA ENOTFOUND"), { code: "ENOTFOUND" });
     return ["104.16.230.132"];
   };
-  assert.equal(await waitForPublicDns("fresh.trycloudflare.com", { resolve, sleep: async () => {} }), true);
+  await waitForPublicDns("fresh.trycloudflare.com", { resolve, sleep: async () => {} });
   assert.equal(lookups, 3);
-  assert.equal(await waitForPublicDns("never.trycloudflare.com", {
-    resolve: async () => { throw new Error("ENOTFOUND"); }, timeoutMs: 0, sleep: async () => {},
-  }), false);
+  await assert.rejects(
+    waitForPublicDns("never.trycloudflare.com", {
+      resolve: async () => { throw new Error("ENOTFOUND"); }, timeoutMs: 0, sleep: async () => {},
+    }),
+    /did not appear in public DNS/,
+  );
 });

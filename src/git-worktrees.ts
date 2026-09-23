@@ -512,10 +512,12 @@ function managedWorktreePath(input: { worktreeRoot: string; repoRoot: string }):
 }
 
 function sanitizePathSegment(value: string): string {
-  return value
-    .replace(/[^a-zA-Z0-9._-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 80);
+  const sanitized = value.replace(/[^a-zA-Z0-9._-]+/g, "-");
+  let start = 0;
+  let end = sanitized.length;
+  while (start < end && sanitized[start] === "-") start += 1;
+  while (end > start && sanitized[end - 1] === "-") end -= 1;
+  return sanitized.slice(start, end).slice(0, 80);
 }
 
 async function isDirectory(path: string): Promise<boolean> {

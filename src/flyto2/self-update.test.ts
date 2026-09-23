@@ -18,6 +18,9 @@ import {
 
 const green: CheckRun[] = [
   { name: "Smoke (ubuntu-latest)", status: "completed", conclusion: "success" },
+  { name: "Smoke (macos-latest)", status: "completed", conclusion: "success" },
+  { name: "Smoke (macos-15-intel)", status: "completed", conclusion: "success" },
+  { name: "Smoke (windows-latest)", status: "completed", conclusion: "success" },
   { name: "Analyze", status: "completed", conclusion: "neutral" },
 ];
 
@@ -76,13 +79,35 @@ function scheduled(paths: ReturnType<typeof selfUpdatePaths>): string {
   return scheduleSelfUpdate(paths, () => {}).request_id;
 }
 
-test("only a commit with every check run finished green may deploy", () => {
+test("only a commit with the complete cross-platform smoke matrix green may deploy", () => {
   assert.deepEqual(evaluateCheckRuns(green), { state: "passed" });
   assert.equal(evaluateCheckRuns([]).state, "missing");
-  assert.equal(evaluateCheckRuns([...green, { name: "Smoke (macos)", status: "in_progress", conclusion: null }]).state, "pending");
-  const failed = evaluateCheckRuns([...green, { name: "Smoke (windows)", status: "completed", conclusion: "failure" }]);
+
+  const missing = evaluateCheckRuns([
+    { name: "Analyze (javascript-typescript)", status: "completed", conclusion: "success" },
+    { name: "Analyze (actions)", status: "completed", conclusion: "success" },
+  ]);
+  assert.equal(missing.state, "missing");
+  assert.match((missing as { detail: string }).detail, /required CI checks are missing/);
+
+  assert.equal(
+    evaluateCheckRuns(green.map((run) => run.name === "Smoke (macos-latest)"
+      ? { ...run, status: "in_progress", conclusion: null }
+      : run)).state,
+    "pending",
+  );
+
+  const failed = evaluateCheckRuns(green.map((run) => run.name === "Smoke (windows-latest)"
+    ? { ...run, conclusion: "failure" }
+    : run));
   assert.equal(failed.state, "failed");
-  assert.match((failed as { detail: string }).detail, /Smoke \(windows\)=failure/);
+  assert.match((failed as { detail: string }).detail, /Smoke \(windows-latest\)=failure/);
+
+  const skipped = evaluateCheckRuns(green.map((run) => run.name === "Smoke (macos-15-intel)"
+    ? { ...run, conclusion: "skipped" }
+    : run));
+  assert.equal(skipped.state, "failed");
+  assert.match((skipped as { detail: string }).detail, /Smoke \(macos-15-intel\)=skipped/);
 });
 
 test("scheduling refuses a second update while one is running, but not a dead or finished one", (t) => {
@@ -130,7 +155,9 @@ test("a commit whose CI is not green is never built or activated", async (t) => 
   const { origin, commit, paths } = fixture(t);
   commit("v2");
   const { value, activated, builds } = deps(origin, {
-    fetchCheckRuns: async () => [{ name: "Smoke (macos-latest)", status: "in_progress", conclusion: null }],
+    fetchCheckRuns: async () => green.map((run) => run.name === "Smoke (macos-latest)"
+      ? { ...run, status: "in_progress", conclusion: null }
+      : run),
   });
   const status = await runSelfUpdate(scheduled(paths), paths, value);
   assert.equal(status.phase, "failed");

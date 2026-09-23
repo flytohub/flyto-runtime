@@ -146,15 +146,17 @@ export async function waitForPublicDns(
     resolve?: (name: string) => Promise<string[]>;
     sleep?: (ms: number) => Promise<void>;
   } = {},
-): Promise<boolean> {
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     try {
-      if ((await resolve(hostname)).length > 0) return true;
+      if ((await resolve(hostname)).length > 0) return;
     } catch {
       // Not published yet.
     }
-    if (Date.now() >= deadline) return false;
+    if (Date.now() >= deadline) {
+      throw new Error(`Quick tunnel hostname ${hostname} did not appear in public DNS within ${timeoutMs} ms.`);
+    }
     await sleep(intervalMs);
   }
 }

@@ -9,7 +9,7 @@ import { join, relative as relativePath } from "node:path";
 import { flyto2RuntimePackageRoot } from "./flyto2/macos-launcher.js";
 import { flyto2NativeRuntimeHome } from "./flyto2/native-paths.js";
 import { setDevspaceConfigValues } from "./user-config.js";
-import { fetchQuickTunnelHostname, quickTunnelUrlChange, readQuickTunnelProfile } from "./flyto2/quick-tunnel.js";
+import { fetchQuickTunnelHostname, quickTunnelUrlChange, readQuickTunnelProfile, waitForPublicDns } from "./flyto2/quick-tunnel.js";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
@@ -270,8 +270,20 @@ function requestLogFields(req: Request, config: ServerConfig): Record<string, un
   };
 }
 
+function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") end -= 1;
+  return value.slice(0, end);
+}
+
+function stripLeadingSlashes(value: string): string {
+  let start = 0;
+  while (start < value.length && value[start] === "/") start += 1;
+  return value.slice(start);
+}
+
 function assetBaseUrl(config: ServerConfig): string {
-  return `${config.publicBaseUrl.replace(/\/+$/, "")}/mcp-app-assets`;
+  return `${stripTrailingSlashes(config.publicBaseUrl)}/mcp-app-assets`;
 }
 
 function uiManifestUrl(): URL {
@@ -294,7 +306,7 @@ function getWorkspaceAppManifestEntry(): WorkspaceAppManifestEntry {
 }
 
 function assetUrl(baseUrl: string, assetPath: string): string {
-  return `${baseUrl}/${assetPath.replace(/^\/+/, "")}`;
+  return `${baseUrl}/${stripLeadingSlashes(assetPath)}`;
 }
 
 function workspaceAppHtml(config: ServerConfig): string {
@@ -328,7 +340,7 @@ function appCsp(config: ServerConfig): {
   resourceDomains: string[];
   connectDomains: string[];
 } {
-  const publicBaseUrl = config.publicBaseUrl.replace(/\/+$/, "");
+  const publicBaseUrl = stripTrailingSlashes(config.publicBaseUrl);
   return {
     resourceDomains: [publicBaseUrl],
     connectDomains: [publicBaseUrl],
@@ -894,14 +906,24 @@ const QUICK_TUNNEL_RESTART_EXIT_CODE = 75;
 function startQuickTunnelFollower(config: ServerConfig, enabled: boolean): () => void {
   if (!enabled) return () => {};
   let stopped = false;
+  let checking = false;
   const check = async () => {
-    const profile = readQuickTunnelProfile(flyto2NativeRuntimeHome());
-    if (stopped || !profile) return;
-    const next = quickTunnelUrlChange(config.publicBaseUrl, await fetchQuickTunnelHostname(profile.metrics_port));
-    if (stopped || !next) return;
-    setDevspaceConfigValues([{ path: ["server", "publicBaseUrl"], value: next }]);
-    logEvent(config.logging, "warn", "quick_tunnel_url_changed", { from: config.publicBaseUrl, to: next });
-    if (process.env.FLYTO2_RUNTIME_MANAGED_SERVICE === "1") process.exit(QUICK_TUNNEL_RESTART_EXIT_CODE);
+    if (stopped || checking) return;
+    checking = true;
+    try {
+      const profile = readQuickTunnelProfile(flyto2NativeRuntimeHome());
+      if (stopped || !profile) return;
+      const liveHostname = await fetchQuickTunnelHostname(profile.metrics_port);
+      const next = quickTunnelUrlChange(config.publicBaseUrl, liveHostname);
+      if (stopped || !next || !liveHostname) return;
+      await waitForPublicDns(liveHostname);
+      if (stopped) return;
+      setDevspaceConfigValues([{ path: ["server", "publicBaseUrl"], value: next }]);
+      logEvent(config.logging, "warn", "quick_tunnel_url_changed", { from: config.publicBaseUrl, to: next });
+      if (process.env.FLYTO2_RUNTIME_MANAGED_SERVICE === "1") process.exit(QUICK_TUNNEL_RESTART_EXIT_CODE);
+    } finally {
+      checking = false;
+    }
   };
   const interval = setInterval(() => void check().catch(() => {}), 10_000);
   interval.unref();

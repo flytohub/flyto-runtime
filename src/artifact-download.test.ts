@@ -419,7 +419,7 @@ function testLogRedaction(): void {
   assert.equal(serialized.includes("file_secret"), false);
   assert.equal(serialized.includes("log-secret"), false);
   assert.equal(serialized.includes("ws_secret"), true);
-  assert.equal(serialized.includes("files.oaiusercontent.com"), true);
+  assert.equal(fields.downloadUrlHostname, "files.oaiusercontent.com");
 }
 
 function registryFor(source: {

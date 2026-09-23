@@ -132,14 +132,41 @@ export interface CheckRun {
 
 export type CiVerdict = { state: "passed" } | { state: "pending" | "failed" | "missing"; detail: string };
 
-// Only a commit whose every check run finished green may be deployed: main can
-// briefly hold a commit that CI has not finished, or has failed, verifying.
+const REQUIRED_SELF_UPDATE_CHECKS = [
+  "Smoke (ubuntu-latest)",
+  "Smoke (macos-latest)",
+  "Smoke (macos-15-intel)",
+  "Smoke (windows-latest)",
+] as const;
+
+// Only a commit whose complete cross-platform smoke matrix exists and finished
+// green may be deployed. Other reported checks must also be non-failing.
 export function evaluateCheckRuns(runs: CheckRun[]): CiVerdict {
   if (runs.length === 0) return { state: "missing", detail: "no CI results exist for this commit yet" };
+
+  const missing = REQUIRED_SELF_UPDATE_CHECKS.filter(
+    (required) => !runs.some((run) => run.name === required),
+  );
+  if (missing.length > 0) {
+    return { state: "missing", detail: `required CI checks are missing: ${missing.join(", ")}` };
+  }
+
   const pending = runs.filter((run) => run.status !== "completed");
   if (pending.length > 0) {
     return { state: "pending", detail: `CI is still running: ${pending.map((run) => run.name).join(", ")}` };
   }
+
+  const requiredNotSuccessful = runs.filter(
+    (run) => REQUIRED_SELF_UPDATE_CHECKS.includes(run.name as typeof REQUIRED_SELF_UPDATE_CHECKS[number])
+      && run.conclusion !== "success",
+  );
+  if (requiredNotSuccessful.length > 0) {
+    return {
+      state: "failed",
+      detail: `required CI did not pass: ${requiredNotSuccessful.map((run) => `${run.name}=${run.conclusion}`).join(", ")}`,
+    };
+  }
+
   const failed = runs.filter((run) => !["success", "neutral", "skipped"].includes(run.conclusion ?? ""));
   if (failed.length > 0) {
     return { state: "failed", detail: `CI did not pass: ${failed.map((run) => `${run.name}=${run.conclusion}`).join(", ")}` };
