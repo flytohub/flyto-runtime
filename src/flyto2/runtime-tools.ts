@@ -2,9 +2,7 @@ import * as z from "zod/v4";
 import type { ServerConfig } from "../config.js";
 import type { McpRegistrationTarget } from "../mcp-modern-server.js";
 import type { WorkspaceRegistry } from "../workspaces.js";
-import {
-  textBlock,
-} from "../tool-surfaces/shared.js";
+import { textBlock } from "../tool-surfaces/shared.js";
 import {
   toolNames,
   workspaceIdDescription,
@@ -23,18 +21,25 @@ export interface RuntimeToolRegistrationContext {
   workspaceWatches: WorkspaceWatchRegistry;
 }
 
+/** Register optional diagnostic Runtime internals as small, independently testable tools. */
 export function registerRuntimeTools(
   context: RuntimeToolRegistrationContext,
 ): void {
-  const {
-    server,
-    config,
-    workspaces,
-    runtimeEvents,
-    reactiveCommands,
-    workspaceWatches,
-  } = context;
+  registerRuntimeManifestTool(context);
+  registerRuntimeEventsTool(context);
+  registerRuntimeWaitTool(context);
+  registerRuntimeRunTool(context);
+  registerRuntimeEvidenceTool(context);
+  registerRuntimeWatchesTool(context);
+  registerRuntimeWatchTool(context);
+  registerRuntimeUnwatchTool(context);
+  registerRuntimeSignalTool(context);
+}
 
+function registerRuntimeManifestTool({
+  server,
+  config,
+}: RuntimeToolRegistrationContext): void {
   server.registerTool(
     toolNames.runtimeManifest,
     {
@@ -69,7 +74,12 @@ export function registerRuntimeTools(
       };
     },
   );
+}
 
+function registerRuntimeEventsTool({
+  server,
+  runtimeEvents,
+}: RuntimeToolRegistrationContext): void {
   server.registerTool(
     toolNames.runtimeEvents,
     {
@@ -102,6 +112,11 @@ export function registerRuntimeTools(
         events.at(-1)?.sequence
         ?? after_sequence
         ?? runtimeEvents.latestSequence();
+      const result = events.length === 0
+        ? "No matching Runtime events."
+        : events
+            .map((event) => `#${event.sequence} ${event.type}: ${event.summary}`)
+            .join("\n");
       return {
         content: [textBlock(
           events.length === 0
@@ -109,19 +124,19 @@ export function registerRuntimeTools(
             : `Runtime events: ${events.length}; next_sequence=${nextSequence}.`,
         )],
         structuredContent: {
-          result:
-            events.length === 0
-              ? "No matching Runtime events."
-              : events
-                  .map((event) => `#${event.sequence} ${event.type}: ${event.summary}`)
-                  .join("\n"),
+          result,
           events,
           next_sequence: nextSequence,
         },
       };
     },
   );
+}
 
+function registerRuntimeWaitTool({
+  server,
+  runtimeEvents,
+}: RuntimeToolRegistrationContext): void {
   server.registerTool(
     toolNames.runtimeWait,
     {
@@ -165,7 +180,13 @@ export function registerRuntimeTools(
       };
     },
   );
+}
 
+function registerRuntimeRunTool({
+  server,
+  workspaces,
+  reactiveCommands,
+}: RuntimeToolRegistrationContext): void {
   server.registerTool(
     toolNames.runtimeRun,
     {
@@ -218,7 +239,12 @@ export function registerRuntimeTools(
       };
     },
   );
+}
 
+function registerRuntimeEvidenceTool({
+  server,
+  reactiveCommands,
+}: RuntimeToolRegistrationContext): void {
   server.registerTool(
     toolNames.runtimeEvidence,
     {
@@ -264,7 +290,12 @@ export function registerRuntimeTools(
       };
     },
   );
+}
 
+function registerRuntimeWatchesTool({
+  server,
+  workspaceWatches,
+}: RuntimeToolRegistrationContext): void {
   server.registerTool(
     toolNames.runtimeWatches,
     {
@@ -282,22 +313,27 @@ export function registerRuntimeTools(
     },
     async ({ workspace_id }) => {
       const watches = workspaceWatches.list(workspace_id);
-      const result =
-        watches.length === 0
-          ? "No Runtime filesystem watches."
-          : watches
-              .map(
-                (watch) =>
-                  `${watch.watch_id} ${watch.status} ${watch.path} -> ${watch.event_type}`,
-              )
-              .join("\n");
+      const result = watches.length === 0
+        ? "No Runtime filesystem watches."
+        : watches
+            .map(
+              (watch) =>
+                `${watch.watch_id} ${watch.status} ${watch.path} -> ${watch.event_type}`,
+            )
+            .join("\n");
       return {
         content: [textBlock(result)],
         structuredContent: { result, watches },
       };
     },
   );
+}
 
+function registerRuntimeWatchTool({
+  server,
+  workspaces,
+  workspaceWatches,
+}: RuntimeToolRegistrationContext): void {
   server.registerTool(
     toolNames.runtimeWatch,
     {
@@ -361,7 +397,12 @@ export function registerRuntimeTools(
       };
     },
   );
+}
 
+function registerRuntimeUnwatchTool({
+  server,
+  workspaceWatches,
+}: RuntimeToolRegistrationContext): void {
   server.registerTool(
     toolNames.runtimeUnwatch,
     {
@@ -391,7 +432,12 @@ export function registerRuntimeTools(
       };
     },
   );
+}
 
+function registerRuntimeSignalTool({
+  server,
+  runtimeEvents,
+}: RuntimeToolRegistrationContext): void {
   server.registerTool(
     toolNames.runtimeSignal,
     {
