@@ -6,7 +6,7 @@ Date: 2026-09-24
 
 ## What changed
 
-All on `main`, from `f130b9f` to `1106e53`.
+All on `main`, from `f130b9f` to `f54fa44`.
 
 - **Cached ChatGPT catalogs on the Codex surface** (`src/mcp-legacy-codex-writes.ts`, `src/mcp-legacy-input.ts`, `src/server.ts`, `src/tool-surfaces/codex.ts`). Legacy `write`/`edit` become one `apply_patch` at the transport: `edit` keeps the exact-unique-match contract and widens matches to whole-line hunks; `write` is byte-exact via Add File's no-newline marker. A retried call with the same `operation_id` replays the first translation from a journal entry keyed by a hash of that id. Legacy `bash` is marked with the internal `x-flyto2-legacy-shell` header (stripped from incoming requests); `exec_command`/`write_stdin` then wait up to 45s and describe continuation as `bash` with `@flyto2/job <session> [--cancel]`, which routes to `write_stdin`.
 - **`0009d7e` (a parallel implementation of the same fixes) was merged over, not reverted.** Its `edit` translation failed every partial-line edit and applied an ambiguous `old_text` to its first match; its setup screen showed the password in plaintext and reported a loaded launchd job as running. Kept from it: Add File no-newline support and its HTTP test.
@@ -16,7 +16,8 @@ All on `main`, from `f130b9f` to `1106e53`.
 - **`service self-update`** (`src/flyto2/self-update.ts`, `self-update-scheduler.ts`): schedules a one-shot launchd agent / Task Scheduler task that fetches `main` from the fixed repository, refuses any commit without fully green check runs, builds in `<runtime home>/self-update/builds/<sha>`, and switches the service through the existing health-gated restart with rollback. `service self-update status` reports phases. Server instructions give a managed service's host the absolute command.
 - **Free Cloudflare URL in setup** (`src/flyto2/quick-tunnel.ts`, `quick-tunnel-service.ts`): default choice installs `cloudflared` with consent, runs a kept-alive quick tunnel (metrics on 127.0.0.1:20243), reads the hostname from `/quicktunnel`, and waits until it resolves in DNS before anything probes it. The managed Runtime polls the live hostname, saves it and exits 75 so the service manager restarts it with the new Host/OAuth resource. `service quick-tunnel start|stop|status`.
 - `service uninstall` on macOS also removes the `.active` / `.previous` plist copies.
-- CI: `macos-15-intel` added; macOS/Windows jobs set `FLYTO2_NATIVE_SERVICE_TESTS=1` to run `src/flyto2/native-jobs.integration.test.ts` against the real service manager.
+- **Intel Macs could never save a file ChatGPT sent** (`src/artifact-destination-darwin.ts`): the koffi calls used the undecorated `fstatat`/`fdopendir`/`readdir`, which on x86_64 macOS return legacy 32-bit inode layouts, so the swap check read dev/ino/size from wrong offsets and always failed. x64 now binds the `$INODE64` variants. Found by the new Intel CI job.
+- CI: `macos-15-intel` added, installing pnpm through corepack as the README does (pnpm 11 has no working darwin-x64 standalone binary); macOS/Windows jobs set `FLYTO2_NATIVE_SERVICE_TESTS=1` to run `src/flyto2/native-jobs.integration.test.ts` against the real service manager.
 
 ## Why
 
@@ -36,7 +37,8 @@ Rejected: a Flyto2-hosted relay handing out subdomains (the repo keeps tunnel ow
 ## Not verified
 
 - A real ChatGPT session against this machine after the reset. Everything ChatGPT exercised today ran on the user's other Mac.
-- Windows and Intel macOS on real hardware; only CI covers them (the native tests there were added in `1106e53`).
+- Windows and Intel macOS on a person's own hardware. CI runners are real machines: the Task Scheduler updater test passed on windows-latest, and the launchd tests passed on both Apple Silicon and Intel runners.
+- `src/local-agent-daemon.test.ts` failed once on the Intel runner with EPIPE and passed on rerun; treat it as timing-sensitive on slow machines.
 - ChatGPT's own confirmation prompt on `edit` is host behavior and was not changed.
 
 ## Follow-ups
