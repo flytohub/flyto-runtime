@@ -15,7 +15,7 @@ import {
   shouldRepairNativeTunnelRedundancy,
 } from "./macos-tunnel.js";
 
-test("tunnel redundancy repair triggers only for a partial connector failure", () => {
+test("tunnel redundancy repair triggers for any degraded connector set", () => {
   assert.equal(shouldRepairNativeTunnelRedundancy({
     supported: true,
     configured: true,
@@ -35,7 +35,7 @@ test("tunnel redundancy repair triggers only for a partial connector failure", (
       { label: FLYTO2_RUNTIME_TUNNEL_LABEL, ready: false },
       { label: FLYTO2_RUNTIME_TUNNEL_STANDBY_LABEL, ready: false },
     ],
-  }), false);
+  }), true);
   assert.equal(shouldRepairNativeTunnelRedundancy({
     supported: true,
     configured: true,

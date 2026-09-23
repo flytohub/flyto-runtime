@@ -362,7 +362,6 @@ export function shouldRepairNativeTunnelRedundancy(
 ): boolean {
   return readiness.configured
     && readiness.connector_count >= 2
-    && readiness.ready_connectors > 0
     && readiness.ready_connectors < readiness.connector_count;
 }
 

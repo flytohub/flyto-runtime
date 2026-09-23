@@ -852,19 +852,27 @@ function startNativeTunnelWatchdog(
 
   let stopped = false;
   let checking = false;
-  let lastRepairAt = 0;
+  let repairAttempt = 0;
+  let nextRepairAt = 0;
 
   const check = async () => {
     if (stopped || checking) return;
     checking = true;
     try {
       const readiness = await nativeTunnelReadiness();
-      if (!shouldRepairNativeTunnelRedundancy(readiness)) return;
-      if (Date.now() - lastRepairAt < 30_000) return;
+      if (!shouldRepairNativeTunnelRedundancy(readiness)) {
+        repairAttempt = 0;
+        nextRepairAt = 0;
+        return;
+      }
+      const now = Date.now();
+      if (now < nextRepairAt) return;
       const cliPath = process.argv[1];
       if (!cliPath) return;
 
-      lastRepairAt = Date.now();
+      const backoffMs = Math.min(30_000, 2_000 * (2 ** Math.min(repairAttempt, 4)));
+      nextRepairAt = now + backoffMs;
+      repairAttempt += 1;
       const child = spawn(
         process.execPath,
         [cliPath, "service", "tunnel-start"],
@@ -878,6 +886,8 @@ function startNativeTunnelWatchdog(
       logEvent(config.logging, "warn", "tunnel_repair_started", {
         readyConnectors: readiness.ready_connectors,
         connectorCount: readiness.connector_count,
+        repairAttempt,
+        nextRetryMs: backoffMs,
       });
     } catch (error) {
       logEvent(config.logging, "warn", "tunnel_watchdog_check_failed", {
@@ -888,8 +898,8 @@ function startNativeTunnelWatchdog(
     }
   };
 
-  const initial = setTimeout(() => void check(), 5_000);
-  const interval = setInterval(() => void check(), 15_000);
+  const initial = setTimeout(() => void check(), 750);
+  const interval = setInterval(() => void check(), 5_000);
   initial.unref();
   interval.unref();
 
