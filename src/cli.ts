@@ -257,23 +257,7 @@ async function runInit({
     let publicBaseUrl: string | null = null;
     let generateChatGptPlugin = false;
     if (useChatGpt) {
-      prompts.note(
-        [
-          `Point your HTTPS tunnel or reverse proxy to http://127.0.0.1:${port}.`,
-          "Paste its public URL below.",
-          "",
-          "Example: https://your-tunnel-host.example.com",
-        ].join("\n"),
-        "Connect ChatGPT",
-      );
-      publicBaseUrl = normalizePublicBaseUrl(await textPrompt({
-        message: files.config.server.publicBaseUrl
-          ? `What public URL will ChatGPT connect to? Press Enter to keep ${files.config.server.publicBaseUrl}`
-          : "What public URL will ChatGPT connect to?",
-        placeholder: files.config.server.publicBaseUrl ?? "https://your-tunnel-host.example.com",
-        defaultValue: files.config.server.publicBaseUrl ?? "",
-        validate: validateRequiredPublicBaseUrl,
-      }));
+      publicBaseUrl = await chooseChatGptPublicUrl(port, files.config.server.publicBaseUrl);
 
       const pluginAnswer = await prompts.confirm({
         message: "Generate an upload-ready ChatGPT Plugin ZIP now?",
@@ -391,6 +375,103 @@ async function runInit({
       return;
     }
     throw error;
+  }
+}
+
+// ChatGPT needs a public HTTPS URL. A first-time user usually has neither a
+// domain nor a tunnel, so the default is a free Cloudflare quick tunnel that
+// Setup creates and keeps running; users with their own URL can still paste it.
+async function chooseChatGptPublicUrl(port: number, savedUrl: string | null): Promise<string> {
+  const quick = await import("./flyto2/quick-tunnel-service.js");
+  const serviceManaged = process.platform === "darwin" || process.platform === "win32";
+  const savedIsQuick = savedUrl ? /\.trycloudflare\.com$/.test(new URL(savedUrl).hostname) : false;
+  const choice = serviceManaged
+    ? await prompts.select<"quick" | "own">({
+        message: "How should ChatGPT reach this computer?",
+        initialValue: savedUrl && !savedIsQuick ? "own" : "quick",
+        options: [
+          { value: "quick", label: "Create a free Cloudflare URL for me", hint: "No account or domain needed; the URL changes if the tunnel restarts" },
+          { value: "own", label: "Use my own HTTPS URL", hint: "A named Cloudflare tunnel, reverse proxy, Tailscale Funnel or ngrok domain" },
+        ],
+      })
+    : "own";
+  if (prompts.isCancel(choice)) throw new SetupCancelledError();
+
+  if (choice === "quick") {
+    const created = await createQuickTunnelInSetup(quick, port);
+    if (created) return created;
+    prompts.log.warn("Continuing with your own URL instead.");
+  }
+  // A running quick tunnel would make Runtime replace the URL chosen here.
+  if ((await quick.quickTunnelStatus()).configured) await quick.stopQuickTunnel();
+
+  prompts.note(
+    [
+      `Point your HTTPS tunnel or reverse proxy to http://127.0.0.1:${port}.`,
+      "Paste its public URL below.",
+      "",
+      "Example: https://your-tunnel-host.example.com",
+    ].join("\n"),
+    "Connect ChatGPT",
+  );
+  return normalizePublicBaseUrl(await textPrompt({
+    message: savedUrl && !savedIsQuick
+      ? `What public URL will ChatGPT connect to? Press Enter to keep ${savedUrl}`
+      : "What public URL will ChatGPT connect to?",
+    placeholder: savedUrl && !savedIsQuick ? savedUrl : "https://your-tunnel-host.example.com",
+    defaultValue: savedUrl && !savedIsQuick ? savedUrl : "",
+    validate: validateRequiredPublicBaseUrl,
+  }));
+}
+
+async function createQuickTunnelInSetup(
+  quick: typeof import("./flyto2/quick-tunnel-service.js"),
+  port: number,
+): Promise<string | undefined> {
+  let binaryPath = quick.findCloudflared();
+  if (!binaryPath) {
+    const { cloudflaredInstallCommand } = await import("./flyto2/quick-tunnel.js");
+    const install = cloudflaredInstallCommand(process.platform, quick.commandExists);
+    if (!install) {
+      prompts.log.warn(
+        process.platform === "win32"
+          ? "cloudflared is not installed and winget is unavailable. Install cloudflared from https://github.com/cloudflare/cloudflared/releases and run setup again."
+          : "cloudflared is not installed and Homebrew is unavailable. Install cloudflared from https://github.com/cloudflare/cloudflared/releases and run setup again.",
+      );
+      return undefined;
+    }
+    const approved = await prompts.confirm({
+      message: `cloudflared is required. Install it now with \`${[install.command, ...install.args.slice(0, 3)].join(" ")}\`?`,
+    });
+    if (prompts.isCancel(approved)) throw new SetupCancelledError();
+    if (!approved) return undefined;
+    const { spawnSync } = await import("node:child_process");
+    const result = spawnSync(install.command, install.args, { stdio: "inherit", windowsHide: true });
+    binaryPath = quick.findCloudflared();
+    if (result.status !== 0 || !binaryPath) {
+      prompts.log.warn("cloudflared could not be installed.");
+      return undefined;
+    }
+  }
+
+  const spinner = prompts.spinner();
+  spinner.start("Creating a free Cloudflare URL");
+  try {
+    const status = await quick.startQuickTunnel({ binaryPath, originPort: port });
+    spinner.stop(`Public URL: ${status.public_base_url}`);
+    prompts.note(
+      [
+        "This free URL stays the same until the tunnel restarts (for example after a reboot).",
+        "Runtime follows the new URL on its own; give ChatGPT the new URL when that happens.",
+        "`flyto2-runtime doctor` always shows the current one.",
+        "For a URL that never changes, use a named Cloudflare tunnel with your own domain.",
+      ].join("\n"),
+      "Free Cloudflare URL",
+    );
+    return status.public_base_url;
+  } catch (error) {
+    spinner.stop(`Could not create the free URL: ${error instanceof Error ? error.message : String(error)}`);
+    return undefined;
   }
 }
 
@@ -640,6 +721,12 @@ async function runDoctor(): Promise<void> {
       not_configured: "not configured",
     }[localHealth]}`);
     console.log(`Public MCP URL: ${new URL("/mcp", config.publicBaseUrl).toString()}`);
+    const quickTunnel = await (await import("./flyto2/quick-tunnel-service.js")).quickTunnelStatus();
+    if (quickTunnel.configured) {
+      console.log(
+        `Quick tunnel: ${quickTunnel.running ? `running at ${quickTunnel.public_base_url} (a free URL that changes when the tunnel restarts)` : "configured but not reporting a URL"}`,
+      );
+    }
     console.log(`Allowed roots: ${config.allowedRoots.join(", ")}`);
     console.log(`Allowed hosts: ${config.allowedHosts.join(", ")}`);
     console.log(`Tool mode: ${config.toolMode}`);
@@ -756,6 +843,45 @@ async function runWorktreesCommand(args: string[]): Promise<void> {
   if (result.failed.length > 0) process.exitCode = 1;
 }
 
+async function runQuickTunnelCommand(args: string[]): Promise<void> {
+  const quick = await import("./flyto2/quick-tunnel-service.js");
+  const [action = "status", ...extra] = args;
+  if (extra.length > 0) throw new Error("Usage: flyto2-runtime service quick-tunnel [start|stop|status]");
+  switch (action) {
+    case "start": {
+      const status = await startQuickTunnelForConfig(quick);
+      console.log(JSON.stringify(status, null, 2));
+      return;
+    }
+    case "stop":
+      console.log(JSON.stringify(await quick.stopQuickTunnel(), null, 2));
+      return;
+    case "status":
+      console.log(JSON.stringify(await quick.quickTunnelStatus(), null, 2));
+      return;
+    default:
+      throw new Error("Usage: flyto2-runtime service quick-tunnel [start|stop|status]");
+  }
+}
+
+// Starts the quick tunnel, saves its URL as the public URL, and returns it.
+async function startQuickTunnelForConfig(
+  quick: typeof import("./flyto2/quick-tunnel-service.js"),
+): Promise<Awaited<ReturnType<typeof quick.startQuickTunnel>>> {
+  const binaryPath = quick.findCloudflared();
+  if (!binaryPath) {
+    throw new Error(
+      process.platform === "win32"
+        ? "cloudflared is not installed. Install it with: winget install --id Cloudflare.cloudflared"
+        : "cloudflared is not installed. Install it with: brew install cloudflared",
+    );
+  }
+  const files = loadDevspaceFiles();
+  const status = await quick.startQuickTunnel({ binaryPath, originPort: files.config.server.port });
+  setDevspaceConfigValues([{ path: ["server", "publicBaseUrl"], value: status.public_base_url }]);
+  return status;
+}
+
 // `service self-update` is safe to run from the Runtime's own shell (a remote
 // host's exec_command): it only schedules an OS-owned job and returns.
 async function runSelfUpdateCommand(args: string[]): Promise<void> {
@@ -830,9 +956,13 @@ async function runSelfUpdateCommand(args: string[]): Promise<void> {
 async function runServiceCommand(args: string[]): Promise<void> {
   const [subcommand = "status", ...rest] = args;
   const usage =
-    "Usage: flyto2-runtime service <stage|install|start|stop|restart|status|update|self-update [status]|rollback|uninstall|legacy-status|disable-legacy-updater|restore-legacy|tunnel-import|tunnel-migrate|tunnel-start|tunnel-stop|tunnel-status>";
+    "Usage: flyto2-runtime service <stage|install|start|stop|restart|status|update|self-update [status]|quick-tunnel [start|stop|status]|rollback|uninstall|legacy-status|disable-legacy-updater|restore-legacy|tunnel-import|tunnel-migrate|tunnel-start|tunnel-stop|tunnel-status>";
   if (subcommand === "self-update") {
     await runSelfUpdateCommand(rest);
+    return;
+  }
+  if (subcommand === "quick-tunnel") {
+    await runQuickTunnelCommand(rest);
     return;
   }
   if (subcommand !== "tunnel-import" && rest.length > 0) throw new Error(usage);

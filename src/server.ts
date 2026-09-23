@@ -7,6 +7,9 @@ import { readFileSync } from "node:fs";
 import { access, readFile, realpath } from "node:fs/promises";
 import { join, relative as relativePath } from "node:path";
 import { flyto2RuntimePackageRoot } from "./flyto2/macos-launcher.js";
+import { flyto2NativeRuntimeHome } from "./flyto2/native-paths.js";
+import { setDevspaceConfigValues } from "./user-config.js";
+import { fetchQuickTunnelHostname, quickTunnelUrlChange, readQuickTunnelProfile } from "./flyto2/quick-tunnel.js";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
@@ -881,6 +884,33 @@ function withTrackedToolHandlers(
   };
 }
 
+// A quick tunnel's URL changes whenever cloudflared restarts. The saved public
+// URL decides which Host headers and OAuth resource this process accepts, so a
+// stale one locks every client out. Save the live URL and exit; the service
+// manager restarts this process with it (a non-zero code, because the Windows
+// supervisor treats exit 0 as a deliberate stop).
+const QUICK_TUNNEL_RESTART_EXIT_CODE = 75;
+
+function startQuickTunnelFollower(config: ServerConfig, enabled: boolean): () => void {
+  if (!enabled) return () => {};
+  let stopped = false;
+  const check = async () => {
+    const profile = readQuickTunnelProfile(flyto2NativeRuntimeHome());
+    if (stopped || !profile) return;
+    const next = quickTunnelUrlChange(config.publicBaseUrl, await fetchQuickTunnelHostname(profile.metrics_port));
+    if (stopped || !next) return;
+    setDevspaceConfigValues([{ path: ["server", "publicBaseUrl"], value: next }]);
+    logEvent(config.logging, "warn", "quick_tunnel_url_changed", { from: config.publicBaseUrl, to: next });
+    if (process.env.FLYTO2_RUNTIME_MANAGED_SERVICE === "1") process.exit(QUICK_TUNNEL_RESTART_EXIT_CODE);
+  };
+  const interval = setInterval(() => void check().catch(() => {}), 10_000);
+  interval.unref();
+  return () => {
+    stopped = true;
+    clearInterval(interval);
+  };
+}
+
 function startNativeTunnelWatchdog(
   config: ServerConfig,
   enabled: boolean,
@@ -995,6 +1025,10 @@ export function createServer(
     getLocalAgentProviderAvailabilitySnapshot(process.env, config.subagents),
   );
   const stopNativeTunnelWatchdog = startNativeTunnelWatchdog(
+    config,
+    options.nativeTunnelWatchdog === true,
+  );
+  const stopQuickTunnelFollower = startQuickTunnelFollower(
     config,
     options.nativeTunnelWatchdog === true,
   );
@@ -1207,6 +1241,7 @@ export function createServer(
         }
         await toolActivities.waitForIdle();
         stopNativeTunnelWatchdog();
+        stopQuickTunnelFollower();
         processSessions.shutdown();
         workspaceWatches.shutdown();
         reactiveCommands.shutdown();

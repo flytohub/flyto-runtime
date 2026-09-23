@@ -83,9 +83,10 @@ On macOS you can double-click `Install.command`. On Windows, double-click `Insta
 
 ## Connect ChatGPT
 
-ChatGPT needs a public HTTPS URL that reaches your local Runtime.
+ChatGPT needs a public HTTPS URL that reaches your local Runtime. During setup, choose **ChatGPT**, then either:
 
-During setup, choose **ChatGPT** and enter your public Runtime URL:
+- **Create a free Cloudflare URL for me** (the default). No account or domain is needed. Setup installs `cloudflared` if you allow it (Homebrew on macOS, winget on Windows), keeps a quick tunnel running in the background, and fills in its `https://<random>.trycloudflare.com` URL. That URL changes whenever the tunnel restarts, for example after a reboot. Runtime follows the new URL by itself; you then give ChatGPT the new one, which `flyto2-runtime doctor` or `flyto2-runtime service quick-tunnel status` shows.
+- **Use my own HTTPS URL** for an address that never changes: a named Cloudflare tunnel on your own domain, a reverse proxy, Tailscale Funnel, or an ngrok domain pointed at `http://127.0.0.1:7676`.
 
 ```text
 https://your-runtime-host.example.com

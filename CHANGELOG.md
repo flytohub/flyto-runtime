@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Setup can create a free Cloudflare quick tunnel instead of asking for a URL: it installs `cloudflared` with consent, keeps the tunnel running as a background service, waits until the new hostname exists in DNS, and the Runtime follows the URL whenever the tunnel restarts. `service quick-tunnel start|stop|status` manages it.
+- `open_workspace` names the allowed roots in its description and in access denials.
+- Cached ChatGPT `bash` calls wait for long commands and continue with `@flyto2/job <session>`.
 - Add `service self-update`: a remote host can move the background service to the newest CI-green commit on main. An OS-owned one-shot job fetches, builds in its own directory, restarts behind the health gate, and rolls back on failure; `service self-update status` reports each phase.
 - End setup on a status screen that probes local health, the public endpoint and the background service separately and keeps the MCP URL and Owner password together.
 - Route cached ChatGPT `write`/`edit` calls through `apply_patch` in Codex mode.

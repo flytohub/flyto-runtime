@@ -444,16 +444,23 @@ export function startWindowsOneShotTask(options: {
   command: string;
   arguments: string[];
   workingDirectory: string;
+  // true: start at every logon and restart on failure (a long-lived helper).
+  persistent?: boolean;
 }): void {
   const xml = renderWindowsScheduledTaskXml({
     command: options.command,
     arguments: options.arguments.map(quoteWindowsArgument).join(" "),
     workingDirectory: options.workingDirectory,
-    logonTrigger: false,
-    restartCount: 1,
+    logonTrigger: options.persistent === true,
+    restartCount: options.persistent ? 255 : 1,
   });
   mkdirSync(winPath.dirname(options.xmlPath), { recursive: true });
   writeFileSync(options.xmlPath, xml, "utf8");
   registerWindowsScheduledTask(options.taskName, options.xmlPath);
   runWindowsScheduledTask(options.taskName);
+}
+
+export function stopWindowsTask(taskName: string): void {
+  endWindowsScheduledTask(taskName);
+  if (windowsScheduledTaskExists(taskName)) deleteWindowsScheduledTask(taskName);
 }

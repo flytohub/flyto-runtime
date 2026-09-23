@@ -647,6 +647,8 @@ export interface MacOneShotAgent {
   programArguments: string[];
   environment: Record<string, string>;
   logPath: string;
+  // true: launchd restarts the process whenever it exits (a long-lived helper).
+  keepAlive?: boolean;
 }
 
 export function renderMacOneShotAgent(agent: Omit<MacOneShotAgent, "plistPath">): string {
@@ -671,7 +673,8 @@ export function renderMacOneShotAgent(agent: Omit<MacOneShotAgent, "plistPath">)
     "  <key>RunAtLoad</key>",
     "  <true/>",
     "  <key>KeepAlive</key>",
-    "  <false/>",
+    agent.keepAlive ? "  <true/>" : "  <false/>",
+    ...(agent.keepAlive ? ["  <key>ThrottleInterval</key>", "  <integer>5</integer>"] : []),
     "  <key>StandardOutPath</key>",
     `  <string>${xmlEscape(agent.logPath)}</string>`,
     "  <key>StandardErrorPath</key>",
@@ -693,4 +696,14 @@ export function startMacOneShotAgent(agent: MacOneShotAgent): void {
   writeFileSync(temporary, renderMacOneShotAgent(agent), { mode: 0o600 });
   renameSync(temporary, agent.plistPath);
   runLaunchctl(["bootstrap", launchAgentDomain(), agent.plistPath]);
+}
+
+export function stopMacAgent(label: string, plistPath: string): void {
+  assertMacOs();
+  bootoutLabel(label);
+  rmSync(plistPath, { force: true });
+}
+
+export function isMacAgentLoaded(label: string): boolean {
+  return platform() === "darwin" && isLaunchAgentLoaded(label);
 }
