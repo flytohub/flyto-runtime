@@ -11,7 +11,7 @@ import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import semver from "semver";
-import { flyto2NativeRuntimeHome } from "./macos-tunnel.js";
+import { flyto2NativeRuntimeHome } from "./native-paths.js";
 
 const DEFAULT_RELEASE_API =
   "https://api.github.com/repos/flytohub/flyto-runtime/releases/latest";
@@ -97,7 +97,10 @@ export async function installLatestFlyto2Release(
   const artifact = await latestFlyto2ReleaseArtifact(options);
   const homeDirectory = options.homeDirectory ?? homedir();
   const releaseRoot = join(
-    flyto2NativeRuntimeHome(homeDirectory),
+    flyto2NativeRuntimeHome(
+      homeDirectory,
+      options.homeDirectory ? {} : process.env,
+    ),
     "releases",
     artifact.tag,
   );
@@ -141,7 +144,8 @@ export async function installLatestFlyto2Release(
     }
 
     mkdirSync(releaseRoot, { recursive: true, mode: 0o700 });
-    const npmCommand = options.npmCommand ?? "npm";
+    const npmCommand = options.npmCommand
+      ?? (process.platform === "win32" ? "npm.cmd" : "npm");
     const install = spawnSync(
       npmCommand,
       [
@@ -153,7 +157,11 @@ export async function installLatestFlyto2Release(
         "--no-fund",
         tarball,
       ],
-      { encoding: "utf8" },
+      {
+        encoding: "utf8",
+        shell: process.platform === "win32",
+        windowsHide: true,
+      },
     );
     if (install.status !== 0) {
       throw new Error(

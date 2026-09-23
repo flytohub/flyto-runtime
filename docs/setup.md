@@ -10,7 +10,7 @@ This guide covers ChatGPT, Claude, Codex, and custom MCP clients using Flyto2 Ru
 - Bash, including Git Bash or WSL on Windows
 - a public HTTPS origin only when a remote client such as ChatGPT needs to reach the local Runtime
 
-Flyto2 Runtime does not provision a new public tunnel account for you. It can, however, migrate and run an existing fixed Cloudflare tunnel as a native Runtime service on macOS.
+Flyto2 Runtime does not provision a new public tunnel account for you. It can import and supervise an existing fixed Cloudflare tunnel on macOS or Windows, including two redundant connectors and automatic repair.
 
 ## Install and configure
 
@@ -64,7 +64,7 @@ A current ChatGPT connection can expose:
 - `runtime_unwatch`
 - `runtime_watches`
 
-If ChatGPT still shows only an older cached workspace/read/write/edit/bash surface, reconnect the connector or start a fresh conversation after Runtime has restarted. This is a client schema-cache issue; `/healthz` reports the server-side registered tool list and whether the complete Runtime surface is loaded.
+If ChatGPT still shows only an older cached workspace/read/write/edit/bash surface, reconnect the connector or start a fresh conversation after Runtime has restarted. This is a client schema-cache issue. The legacy surface remains non-blocking for long commands through durable Runtime jobs.
 
 ## Claude, Codex, and custom MCP clients
 
@@ -72,17 +72,9 @@ The setup menu can print connection instructions for supported clients. Local MC
 
 Subagents are independent of MCP access. A ChatGPT-only installation can leave every subagent provider disabled.
 
-## Native macOS background service
+## Native background service
 
-Flyto2 Runtime owns its native background service:
-
-```text
-local.flyto2.runtime
-```
-
-The LaunchAgent starts `dist/cli.js serve` directly. It does not depend on the old Mac Kit `service.mjs`.
-
-Common lifecycle commands:
+Flyto2 Runtime uses the same lifecycle commands on macOS and Windows:
 
 ```bash
 flyto2-runtime service status
@@ -93,15 +85,25 @@ flyto2-runtime service update
 flyto2-runtime service rollback
 ```
 
-Logs are written under:
+On macOS, `local.flyto2.runtime` is a user LaunchAgent with RunAtLoad and KeepAlive. Logs are stored under `~/Library/Logs/Flyto2 Runtime/`.
 
-```text
-~/Library/Logs/Flyto2 Runtime/
+On Windows, `Flyto2 Runtime` is a per-user Task Scheduler task started at logon. It launches a PowerShell supervisor that restarts a failed Runtime quickly with bounded backoff. Task Scheduler provides an additional restart fallback. Service start/restart is health-checked against local `/healthz`, and a failed update can restore the previous task definition and wrapper.
+
+For source installs, double-click `Install.command` on macOS or `Install.cmd` on Windows. Both create the native background service and Desktop launchers.
+
+## Cloudflare tunnel import and Mac Kit migration
+
+For either desktop platform, an existing Cloudflare named-tunnel config can be imported without hand-writing a Runtime profile:
+
+```bash
+flyto2-runtime service tunnel-import /path/to/config.yml
 ```
 
-`service rollback` restores the previous native LaunchAgent definition when a previous definition exists.
+If `cloudflared` is not already discoverable on PATH, pass `--cloudflared <path>`. If the config has no hostname-bearing ingress entry, pass `--hostname <host>`. Runtime copies the binary, config, and credentials into platform-native Runtime storage, rewrites the credential path, and stages two connector definitions with independent readiness ports.
 
-## Migrating an existing Mac Kit installation
+Windows stores Runtime-owned data under `%LOCALAPPDATA%\\Flyto2 Runtime\\`; macOS uses `~/Library/Application Support/Flyto2 Runtime/`.
+
+### Migrating an existing Mac Kit installation
 
 Existing installations can be staged without stopping the currently working Runtime:
 
@@ -148,37 +150,26 @@ flyto2-runtime service disable-legacy-updater
 
 Do not stop the old supervisor until the native Runtime and native tunnel definitions have been staged and validated. The old supervisor may currently own both the Runtime process and the public Cloudflare tunnel.
 
-## Runtime truth card
+## Health and diagnostics
 
-The local status endpoint is:
+The local/public liveness endpoint is:
 
 ```text
 http://127.0.0.1:7676/healthz
 ```
 
-It reports:
+It intentionally exposes only minimal liveness information. Detailed process, package, service, tunnel, and platform status belongs in local or authenticated surfaces:
 
-- Runtime version
-- Git SHA
-- build timestamp
-- process start time and PID
-- config schema version
-- state schema version
-- public MCP URL
-- native tunnel status
-- MCP tool mode
-- exact registered tools
-- whether the full `runtime_*` surface is loaded
-- last successful MCP request
-- last request identified as ChatGPT/OpenAI
-- reactive job health
-- filesystem watcher health
+```bash
+flyto2-runtime doctor
+flyto2-runtime service status
+```
 
-This is intended to prove that the build on disk, the running background process, and the MCP surface agree.
+Runtime tools provide durable job, event, evidence, and watcher state to authenticated MCP clients. Keeping `/healthz` minimal avoids exposing Git SHA, process IDs, tunnel internals, or tool inventory on a public tunnel.
 
 ## Build identity
 
-`pnpm build` writes `dist/build-info.json` containing the package version, source Git SHA, and build timestamp. Runtime reads this receipt for `/healthz`.
+`pnpm build` writes `dist/build-info.json` containing the package version, source Git SHA, and build timestamp. The receipt is used for package and local deployment verification rather than being exposed on public `/healthz`.
 
 An explicitly packaged build can also provide `FLYTO2_BUILD_GIT_SHA` and `FLYTO2_BUILD_TIMESTAMP`.
 

@@ -12,9 +12,11 @@ Flyto2 Cloud is optional. Runtime works standalone.
 - Bounded local evidence for long-running process output
 - Persistent filesystem watches that survive Runtime restart
 - OAuth-protected remote MCP access for ChatGPT
-- Native macOS LaunchAgent lifecycle and fixed Cloudflare tunnel migration
+- Native macOS LaunchAgent and Windows Task Scheduler lifecycle with health-checked restart and rollback
+- Redundant two-connector Cloudflare tunnel supervision on macOS and Windows
+- Cross-platform Cloudflare tunnel import into Runtime-owned storage
 - Optional Flyto2 Cloud pairing through a versioned bridge
-- Auditable `/healthz` truth card with version, Git SHA, build timestamp, schemas, MCP surface, tunnel state, recent client activity, jobs, and watchers
+- Minimal public `/healthz` liveness plus detailed local diagnostics through `doctor`, `service status`, and Runtime tools
 
 ## Installation
 
@@ -35,7 +37,7 @@ pnpm install --frozen-lockfile
 pnpm build
 ```
 
-On macOS, double-click `Install.command`. The installer creates the native background service and Desktop launchers.
+On macOS, double-click `Install.command`. On Windows, double-click `Install.cmd`. Both installers build a source checkout when necessary, create the native background service, and install Desktop launchers.
 
 ## Usage
 
@@ -52,7 +54,7 @@ flyto2-runtime doctor
 flyto2-runtime service status
 ```
 
-Start or restart the native macOS background service:
+Start or restart the native background service on macOS or Windows:
 
 ```bash
 flyto2-runtime service start
@@ -65,14 +67,7 @@ For an existing Mac Kit installation, stage the Flyto2-native Runtime service an
 flyto2-runtime service stage
 ```
 
-After validation, the native services are:
-
-```text
-local.flyto2.runtime
-local.flyto2.runtime.tunnel
-```
-
-The old `local.devspace.mac-kit` and updater labels are compatibility-only migration sources and are not required by the native service after cutover.
+On macOS the service is owned by `local.flyto2.runtime`; on Windows it is owned by the `Flyto2 Runtime` scheduled task. Redundant tunnel connectors are managed natively on both platforms. The old `local.devspace.mac-kit` labels remain macOS migration sources only and are not Runtime dependencies after cutover.
 
 ### ChatGPT
 
@@ -84,7 +79,7 @@ https://your-runtime-host.example.com/mcp
 
 Complete OAuth once. Runtime exposes the same MCP endpoint for modern and supported legacy client schemas.
 
-A client that cached an older MCP tool list may need its connector to be reconnected or a new conversation before newly added `runtime_*` tools appear. The server-side `/healthz` endpoint reports whether the complete Runtime tool surface is actually registered.
+A client that cached an older MCP tool list may need its connector to be reconnected or a new conversation before newly added `runtime_*` tools appear. Cached legacy clients remain usable through the non-blocking compatibility surface.
 
 ### Runtime status and evidence
 
@@ -94,7 +89,7 @@ Use:
 curl http://127.0.0.1:7676/healthz
 ```
 
-The response includes Runtime version, Git SHA, build timestamp, config/state schema versions, public MCP endpoint, native tunnel state, registered tool names, full-tool-surface status, last successful MCP/ChatGPT request timestamps, reactive job counts, and watcher health.
+The public response intentionally contains only minimal liveness fields. Use `flyto2-runtime doctor`, `flyto2-runtime service status`, and authenticated Runtime tools for detailed diagnostics without leaking process, build, tunnel, or tool inventory publicly.
 
 ### Service lifecycle
 
@@ -106,7 +101,7 @@ flyto2-runtime service stop
 flyto2-runtime service start
 ```
 
-`service rollback` restores the previous native LaunchAgent definition when one is available. Runtime keeps existing OAuth, workspace, SQLite state, and allowed-root configuration during migration.
+`service rollback` restores the previous native service definition when one is available: LaunchAgent on macOS and the scheduled-task wrapper on Windows. Runtime keeps existing OAuth, workspace, SQLite state, and allowed-root configuration during migration.
 
 ## Configuration
 
@@ -130,7 +125,7 @@ ChatGPT / MCP client
   -> optional Flyto2 Cloud
 ```
 
-On macOS, `local.flyto2.runtime` owns the Runtime process and `local.flyto2.runtime.tunnel` can own a migrated fixed Cloudflare tunnel. Client tooling, Runtime execution, and optional Cloud orchestration remain separate layers.
+On macOS, LaunchAgent owns the Runtime process; on Windows, Task Scheduler owns a PowerShell supervisor that restarts failed Runtime processes with bounded backoff. Both platforms can own two independent Cloudflare connectors, while the Runtime watchdog repairs degraded connectivity. Client tooling, Runtime execution, and optional Cloud orchestration remain separate layers.
 
 ## Testing
 

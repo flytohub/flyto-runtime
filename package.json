@@ -29,7 +29,9 @@
     "README.md",
     "NOTICE.md",
     "Flyto2 Runtime.command",
-    "Install.command"
+    "Flyto2 Runtime.cmd",
+    "Install.command",
+    "Install.cmd"
   ],
   "publishConfig": {
     "access": "public"

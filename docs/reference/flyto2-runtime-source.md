@@ -35,22 +35,21 @@ This reference documents the Flyto2-owned TypeScript surface layered on the upst
 - [`removeMacDesktopLaunchers`](../../src/flyto2/macos-launcher.ts)
 - [`macDesktopLauncherStatus`](../../src/flyto2/macos-launcher.ts)
 
-## Native macOS Runtime service
-- [`installMacRuntimeService`](../../src/flyto2/macos-service.ts) — installs `local.flyto2.runtime` directly against the Flyto2 Runtime CLI.
-- [`startMacRuntimeService`](../../src/flyto2/macos-service.ts)
-- [`restartMacRuntimeService`](../../src/flyto2/macos-service.ts)
-- [`rollbackMacRuntimeService`](../../src/flyto2/macos-service.ts)
-- [`macRuntimeServiceStatus`](../../src/flyto2/macos-service.ts)
-- [`legacyMacKitStatus`](../../src/flyto2/macos-service.ts) — reports legacy service/updater state during migration without making them Runtime dependencies.
+## Native desktop lifecycle
+- [`native-service.ts`](../../src/flyto2/native-service.ts) — dispatches the same service lifecycle to macOS LaunchAgent or Windows Task Scheduler.
+- [`macos-service.ts`](../../src/flyto2/macos-service.ts) — health-checked LaunchAgent activation, rollback, and legacy Mac Kit migration status.
+- [`windows-service.ts`](../../src/flyto2/windows-service.ts) — login-started scheduled task plus a fast PowerShell crash supervisor, health verification, and rollback.
+- [`windows-task.ts`](../../src/flyto2/windows-task.ts) — Task Scheduler XML and task lifecycle primitives.
+- [`windows-launcher.ts`](../../src/flyto2/windows-launcher.ts) — Windows Desktop launchers matching the macOS launcher surface.
 
-## Native Cloudflare tunnel migration
-- [`migrateLegacyCloudflareTunnel`](../../src/flyto2/macos-tunnel.ts) — copies the existing fixed tunnel into Flyto2-owned storage without exposing credentials.
-- [`installNativeTunnelService`](../../src/flyto2/macos-tunnel.ts)
-- [`startNativeTunnelService`](../../src/flyto2/macos-tunnel.ts)
-- [`nativeTunnelStatus`](../../src/flyto2/macos-tunnel.ts)
+## Native Cloudflare tunnel lifecycle
+- [`native-tunnel.ts`](../../src/flyto2/native-tunnel.ts) — platform-neutral redundant tunnel lifecycle and readiness.
+- [`migrateLegacyCloudflareTunnel`](../../src/flyto2/macos-tunnel.ts) — imports an existing Mac Kit fixed tunnel without exposing credentials.
+- [`tunnel-import.ts`](../../src/flyto2/tunnel-import.ts) — imports a Cloudflare YAML/JSON config and assets into Runtime-owned storage on macOS or Windows.
+- [`windows-tunnel.ts`](../../src/flyto2/windows-tunnel.ts) — two independent Windows cloudflared tasks with readiness checks and rollback.
 
 ## Build identity
-- [`flyto2BuildInfo`](../../src/flyto2/build-info.ts) — resolves Runtime version, source Git SHA, and build timestamp for the auditable health surface.
+- [`flyto2BuildInfo`](../../src/flyto2/build-info.ts) — resolves Runtime version, source Git SHA, and build timestamp for local/package verification. Public `/healthz` intentionally exposes only minimal liveness.
 
 ## Runtime manifest
 - [`runtimeManifest`](../../src/flyto2/manifest.ts#L34)

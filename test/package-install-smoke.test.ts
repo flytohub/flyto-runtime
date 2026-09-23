@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,6 +24,11 @@ function testPackedPackageLaunchers(): void {
     const archive = readdirSync(root).find((name) => name.endsWith(".tgz"));
     assert.ok(archive, "npm pack must produce a package archive");
 
+    const packageRoot = join(installRoot, "node_modules", "flyto2-runtime");
+    // Both native desktop entrypoints must ship in the same package so a
+    // release is installable without a source checkout on either desktop OS.
+    // Validate the archive itself through the installed package before running
+    // any generated bin shims.
     execFileSync(npmExecutable(), [
       "install",
       "--no-audit",
@@ -39,6 +44,11 @@ function testPackedPackageLaunchers(): void {
       shell: process.platform === "win32",
     });
 
+    assert.equal(existsSync(join(packageRoot, "Install.command")), true);
+    assert.equal(existsSync(join(packageRoot, "Flyto2 Runtime.command")), true);
+    assert.equal(existsSync(join(packageRoot, "Install.cmd")), true);
+    assert.equal(existsSync(join(packageRoot, "Flyto2 Runtime.cmd")), true);
+
     const configRoot = join(root, "config");
     const env = writeTestDevspaceConfig(configRoot, {
       storage: { stateDir: join(root, "state") },
@@ -52,6 +62,16 @@ function testPackedPackageLaunchers(): void {
       });
       const config = JSON.parse(cliOutput) as { tools?: { mode?: string } };
       assert.equal(config.tools?.mode, "codex");
+    }
+
+    if (process.platform === "win32") {
+      const launcher = join(packageRoot, "Flyto2 Runtime.cmd");
+      execFileSync("cmd.exe", ["/d", "/c", "call", launcher, "doctor"], {
+        encoding: "utf8",
+        env: { ...process.env, ...env },
+        stdio: "pipe",
+        windowsHide: true,
+      });
     }
 
     for (const daemonName of ["flyto2-runtime-agentd", "devspace-agentd"]) {

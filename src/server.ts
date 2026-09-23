@@ -50,9 +50,10 @@ import { DEVSPACE_VERSION } from "./version.js";
 import { createWorkspaceStore } from "./workspace-store.js";
 import { DurableOperationStore } from "./flyto2/durable-operations.js";
 import {
+  nativeTunnelManagementSupported,
   nativeTunnelReadiness,
   shouldRepairNativeTunnelRedundancy,
-} from "./flyto2/macos-tunnel.js";
+} from "./flyto2/native-tunnel.js";
 import { withDurableToolHandlers } from "./flyto2/durable-tools.js";
 import { registerRuntimeTools } from "./flyto2/runtime-tools.js";
 import { RuntimeEventStore } from "./flyto2/runtime-events.js";
@@ -848,7 +849,7 @@ function startNativeTunnelWatchdog(
   config: ServerConfig,
   enabled: boolean,
 ): () => void {
-  if (!enabled || process.platform !== "darwin") return () => {};
+  if (!enabled || !nativeTunnelManagementSupported()) return () => {};
 
   let stopped = false;
   let checking = false;
@@ -880,6 +881,7 @@ function startNativeTunnelWatchdog(
           detached: true,
           stdio: "ignore",
           env: process.env,
+          windowsHide: true,
         },
       );
       child.unref();
