@@ -537,7 +537,7 @@ test("Claude edit and bash tools accept snake_case runtime inputs", async (t) =>
   assert.equal(edited.isError, undefined);
   assert.equal(await readFile(join(context.project, "note.txt"), "utf8"), "after\n");
 
-  const shell = structuredContent(await context.client.callTool({
+  let shell = structuredContent(await context.client.callTool({
     name: "bash",
     arguments: {
       workspace_id: workspaceId,
@@ -545,7 +545,22 @@ test("Claude edit and bash tools accept snake_case runtime inputs", async (t) =>
       working_directory: "nested",
     },
   }));
-  assert.match(shell.result as string, /nested/i);
+  let shellResult = String(shell.result ?? "");
+  const jobId = /job_[A-Za-z0-9]+/.exec(shellResult)?.[0];
+  if (jobId) {
+    for (let attempt = 0; attempt < 20 && /still running/i.test(shellResult); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      shell = structuredContent(await context.client.callTool({
+        name: "bash",
+        arguments: {
+          workspace_id: workspaceId,
+          command: `@flyto2/job ${jobId}`,
+        },
+      }));
+      shellResult = String(shell.result ?? "");
+    }
+  }
+  assert.match(shellResult, /nested/i);
 });
 
 test("legacy Claude bash yields long commands into a durable Runtime job", async (t) => {
