@@ -4,7 +4,8 @@ import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { access, readFile, realpath } from "node:fs/promises";
-import { relative as relativePath } from "node:path";
+import { join, relative as relativePath } from "node:path";
+import { flyto2RuntimePackageRoot } from "./flyto2/macos-launcher.js";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
@@ -160,7 +161,16 @@ function serverInstructions(
     ? ` Diagnostic Runtime internals are explicitly enabled. Use ${toolNames.runtimeEvents}, ${toolNames.runtimeWait}, ${toolNames.runtimeEvidence}, or watch tools only when diagnosing Runtime behavior; normal coding should still use the primary workspace/file/process primitives.`
     : "";
 
-  return `${common} ${toolSurface.instructions({ agents, skills })}${execution}${diagnostics}${artifactInstruction}${showChangesInstruction}`;
+  return `${common} ${toolSurface.instructions({ agents, skills })}${execution}${diagnostics}${artifactInstruction}${showChangesInstruction}${selfUpdateInstruction()}`;
+}
+
+// A remote host can only update a Runtime it cannot restart by hand if it knows
+// the command; the background service's PATH does not include the CLI shim.
+function selfUpdateInstruction(): string {
+  if (process.env.FLYTO2_RUNTIME_MANAGED_SERVICE !== "1") return "";
+  if (process.platform !== "darwin" && process.platform !== "win32") return "";
+  const cli = `${JSON.stringify(process.execPath)} ${JSON.stringify(join(flyto2RuntimePackageRoot(), "dist", "cli.js"))}`;
+  return ` Only when the user asks to update Flyto2 Runtime itself, run \`${cli} service self-update\` and later \`${cli} service self-update status\`; the connection drops for a few seconds while it restarts, then retry.`;
 }
 
 function formatVisibleAgent(agent: {

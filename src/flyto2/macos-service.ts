@@ -640,3 +640,57 @@ function xmlEscape(value: string): string {
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&apos;");
 }
+
+export interface MacOneShotAgent {
+  label: string;
+  plistPath: string;
+  programArguments: string[];
+  environment: Record<string, string>;
+  logPath: string;
+}
+
+export function renderMacOneShotAgent(agent: Omit<MacOneShotAgent, "plistPath">): string {
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+    '<plist version="1.0">',
+    "<dict>",
+    "  <key>Label</key>",
+    `  <string>${xmlEscape(agent.label)}</string>`,
+    "  <key>ProgramArguments</key>",
+    "  <array>",
+    ...agent.programArguments.map((argument) => `    <string>${xmlEscape(argument)}</string>`),
+    "  </array>",
+    "  <key>EnvironmentVariables</key>",
+    "  <dict>",
+    ...Object.entries(agent.environment).flatMap(([key, value]) => [
+      `    <key>${xmlEscape(key)}</key>`,
+      `    <string>${xmlEscape(value)}</string>`,
+    ]),
+    "  </dict>",
+    "  <key>RunAtLoad</key>",
+    "  <true/>",
+    "  <key>KeepAlive</key>",
+    "  <false/>",
+    "  <key>StandardOutPath</key>",
+    `  <string>${xmlEscape(agent.logPath)}</string>`,
+    "  <key>StandardErrorPath</key>",
+    `  <string>${xmlEscape(agent.logPath)}</string>`,
+    "</dict>",
+    "</plist>",
+    "",
+  ].join("\n");
+}
+
+// Runs a job once under launchd rather than as our child, so it survives the
+// Runtime service being stopped and restarted underneath it.
+export function startMacOneShotAgent(agent: MacOneShotAgent): void {
+  assertMacOs();
+  bootoutLabel(agent.label);
+  mkdirSync(dirname(agent.plistPath), { recursive: true, mode: 0o700 });
+  mkdirSync(dirname(agent.logPath), { recursive: true, mode: 0o700 });
+  const temporary = `${agent.plistPath}.tmp-${process.pid}`;
+  writeFileSync(temporary, renderMacOneShotAgent(agent), { mode: 0o600 });
+  renameSync(temporary, agent.plistPath);
+  runLaunchctl(["bootstrap", launchAgentDomain(), agent.plistPath]);
+}

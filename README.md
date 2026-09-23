@@ -167,6 +167,22 @@ flyto2-runtime service stop
 
 The interactive launcher also includes setup, diagnostics, and **Export ChatGPT plugin**.
 
+### Updating a machine you are not sitting at
+
+```bash
+flyto2-runtime service self-update
+flyto2-runtime service self-update status
+```
+
+`self-update` returns immediately, so ChatGPT or any other connected host can run it through its shell tool. A separate job owned by launchd (macOS) or Task Scheduler (Windows) then:
+
+1. fetches `main` from `github.com/flytohub/flyto-runtime` (the source is fixed; it cannot be pointed elsewhere);
+2. refuses the commit unless every CI check on it finished green;
+3. builds it in its own directory, never in your checkout;
+4. switches the background service to that build and restarts it behind the `/healthz` gate, rolling back to the previous build if the check fails.
+
+The connection drops for a few seconds during the restart. OAuth approvals survive it, so the host reconnects without asking for the Owner password again, as long as its URL does not change. Use a named Cloudflare tunnel with a fixed hostname; a quick `trycloudflare.com` tunnel gets a new URL whenever it restarts.
+
 ## Security
 
 Flyto2 Runtime is powerful because it can operate on your machine. Treat a connected AI client like a trusted coding partner.

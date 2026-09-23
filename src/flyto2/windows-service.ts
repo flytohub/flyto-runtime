@@ -435,3 +435,25 @@ function assertWindows(): void {
     throw new Error("Flyto2 Runtime Windows service management is available on Windows only.");
   }
 }
+
+// Runs a job once under Task Scheduler rather than as our child, so it survives
+// the Runtime task being ended and restarted underneath it.
+export function startWindowsOneShotTask(options: {
+  taskName: string;
+  xmlPath: string;
+  command: string;
+  arguments: string[];
+  workingDirectory: string;
+}): void {
+  const xml = renderWindowsScheduledTaskXml({
+    command: options.command,
+    arguments: options.arguments.map(quoteWindowsArgument).join(" "),
+    workingDirectory: options.workingDirectory,
+    logonTrigger: false,
+    restartCount: 1,
+  });
+  mkdirSync(winPath.dirname(options.xmlPath), { recursive: true });
+  writeFileSync(options.xmlPath, xml, "utf8");
+  registerWindowsScheduledTask(options.taskName, options.xmlPath);
+  runWindowsScheduledTask(options.taskName);
+}

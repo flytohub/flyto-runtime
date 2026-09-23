@@ -746,10 +746,85 @@ async function runWorktreesCommand(args: string[]): Promise<void> {
   if (result.failed.length > 0) process.exitCode = 1;
 }
 
+// `service self-update` is safe to run from the Runtime's own shell (a remote
+// host's exec_command): it only schedules an OS-owned job and returns.
+async function runSelfUpdateCommand(args: string[]): Promise<void> {
+  const selfUpdate = await import("./flyto2/self-update.js");
+  const { flyto2NativeRuntimeHome } = await import("./flyto2/native-paths.js");
+  const { flyto2BuildInfo } = await import("./flyto2/build-info.js");
+  const paths = selfUpdate.selfUpdatePaths(flyto2NativeRuntimeHome());
+  const [action, requestId, ...extra] = args;
+  const usage = "Usage: flyto2-runtime service self-update [status]";
+
+  if (action === undefined) {
+    const service = await import("./flyto2/native-service.js");
+    if (!service.nativeRuntimeServiceStatus().installed) {
+      throw new Error(
+        "Remote self-update switches the background service, which is not installed. Run `flyto2-runtime service install` first.",
+      );
+    }
+    const { nativeSelfUpdateScheduler } = await import("./flyto2/self-update-scheduler.js");
+    const status = selfUpdate.scheduleSelfUpdate(paths, await nativeSelfUpdateScheduler(paths));
+    console.log(JSON.stringify({
+      ...status,
+      current_sha: flyto2BuildInfo().git_sha,
+      next: "The update runs in the background: fetch main, require green CI, build, restart behind a health check, roll back on failure. "
+        + "The connection drops for a few seconds during the restart. Check progress with `flyto2-runtime service self-update status`.",
+    }, null, 2));
+    return;
+  }
+  if (action === "status" && requestId === undefined) {
+    console.log(JSON.stringify({
+      current_sha: flyto2BuildInfo().git_sha,
+      update: selfUpdate.readSelfUpdateStatus(paths) ?? null,
+    }, null, 2));
+    return;
+  }
+  if (action === "run" && requestId && extra.length === 0) {
+    const { spawnSync } = await import("node:child_process");
+    const service = await import("./flyto2/native-service.js");
+    const status = await selfUpdate.runSelfUpdate(requestId, paths, {
+      run: (command, commandArgs, options) => {
+        const result = spawnSync(command, commandArgs, {
+          cwd: options?.cwd,
+          encoding: "utf8",
+          maxBuffer: 64 * 1024 * 1024,
+          // Only npm-style .cmd shims need a shell; git paths may contain spaces.
+          shell: process.platform === "win32" && command.endsWith(".cmd"),
+          windowsHide: true,
+        });
+        return {
+          status: result.status,
+          stdout: result.stdout ?? "",
+          stderr: result.stderr ?? (result.error ? String(result.error) : ""),
+        };
+      },
+      fetchCheckRuns: (sha) => selfUpdate.fetchCheckRuns(sha),
+      currentGitSha: () => flyto2BuildInfo().git_sha,
+      activate: (packageRoot) => {
+        service.installNativeRuntimeService({
+          packageRoot,
+          configDirectory: loadDevspaceFiles().dir,
+          start: true,
+        });
+      },
+      pnpmCommand: process.platform === "win32" ? "pnpm.cmd" : "pnpm",
+    });
+    console.log(JSON.stringify(status, null, 2));
+    if (status.phase === "failed" || status.phase === "rolled_back") process.exitCode = 1;
+    return;
+  }
+  throw new Error(usage);
+}
+
 async function runServiceCommand(args: string[]): Promise<void> {
   const [subcommand = "status", ...rest] = args;
   const usage =
-    "Usage: flyto2-runtime service <stage|install|start|stop|restart|status|update|rollback|uninstall|legacy-status|disable-legacy-updater|restore-legacy|tunnel-import|tunnel-migrate|tunnel-start|tunnel-stop|tunnel-status>";
+    "Usage: flyto2-runtime service <stage|install|start|stop|restart|status|update|self-update [status]|rollback|uninstall|legacy-status|disable-legacy-updater|restore-legacy|tunnel-import|tunnel-migrate|tunnel-start|tunnel-stop|tunnel-status>";
+  if (subcommand === "self-update") {
+    await runSelfUpdateCommand(rest);
+    return;
+  }
   if (subcommand !== "tunnel-import" && rest.length > 0) throw new Error(usage);
 
   const service = await import("./flyto2/native-service.js");
