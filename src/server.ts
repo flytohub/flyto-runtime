@@ -151,9 +151,14 @@ function serverInstructions(
     : "";
   const agents = `Follow instructions returned by ${toolNames.openWorkspace}. Before working under a path listed in available_agents_files, use ${toolNames.read} to inspect that instruction file and follow it. `;
   const common = `Call ${toolNames.openWorkspace} when starting work in a project folder or isolated worktree without a usable workspace_id, then reuse the returned workspace_id for subsequent operations in that workspace.`;
-  const reactive = ` For long-running tests, builds, or non-interactive commands, prefer ${toolNames.runtimeRun} followed by one ${toolNames.runtimeWait} for the expected event instead of repeatedly polling process output. If the host has cached an older tool catalog without the Runtime tools, ${toolNames.shell} automatically yields long commands into durable Runtime jobs; follow the returned @flyto2/job command later and never rerun the original side effect just because it is still running. If a connection drops after ${toolNames.runtimeRun}, do not rerun the side effect: resume ${toolNames.runtimeWait} with the returned job_id as correlation_id and event_type as type so a persisted completion can be replayed. When waiting for changes made by an editor, Git, build tool, or another local program, use ${toolNames.runtimeWatch} and ${toolNames.runtimeWait} instead of repeatedly rereading files; after reconnect, the same rule applies using the watch_id as correlation_id and its event type. Runtime events are shallow; call ${toolNames.runtimeEvidence} only when the event summary is insufficient.`;
+  const execution = config.toolMode === "codex"
+    ? " For long-running non-interactive commands, use exec_command once and continue any returned session_id with write_stdin instead of rerunning the command. Flyto2 Runtime owns durable execution, reconnect recovery, event handling, and evidence internally."
+    : ` Long bash commands automatically continue as durable Flyto2 Runtime jobs. Follow any returned @flyto2/job <job_id> command later; never rerun the original side effect just because it is still running or a response was lost.`;
+  const diagnostics = config.exposeRuntimeInternals
+    ? ` Diagnostic Runtime internals are explicitly enabled. Use ${toolNames.runtimeEvents}, ${toolNames.runtimeWait}, ${toolNames.runtimeEvidence}, or watch tools only when diagnosing Runtime behavior; normal coding should still use the primary workspace/file/process primitives.`
+    : "";
 
-  return `${common} ${toolSurface.instructions({ agents, skills })}${reactive}${artifactInstruction}${showChangesInstruction}`;
+  return `${common} ${toolSurface.instructions({ agents, skills })}${execution}${diagnostics}${artifactInstruction}${showChangesInstruction}`;
 }
 
 function formatVisibleAgent(agent: {

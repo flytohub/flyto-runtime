@@ -164,7 +164,7 @@ function registerCodexProcessTools(context: ToolRegistrationContext): void {
     {
       title: "Execute command",
       description:
-        "Run a command in a workspace with the user's local permissions. Non-interactive commands automatically become durable Runtime jobs if they outlive the yield window; continue the returned session_id with write_stdin instead of rerunning the command. Set tty=true only for input-driven interactive commands.",
+        "Run a command in a workspace with the user's local permissions. If it is still running when this call returns, continue the returned session_id with write_stdin instead of rerunning the command. Set tty=true only for input-driven interactive commands.",
       inputSchema: {
         workspace_id: z.string().describe(workspaceIdDescription),
         cmd: z.string().min(1).describe("Shell command to execute."),
@@ -201,7 +201,7 @@ function registerCodexProcessTools(context: ToolRegistrationContext): void {
           .max(MAX_PROCESS_YIELD_MS)
           .optional()
           .describe(
-            "Milliseconds to wait before returning a running session. Defaults to 3000, maximum 12000. Long non-interactive commands remain durable after the response returns.",
+            "Milliseconds to wait before returning a running session. Defaults to 3000, maximum 12000.",
           ),
         max_output_tokens: z
           .number()
@@ -217,7 +217,7 @@ function registerCodexProcessTools(context: ToolRegistrationContext): void {
           .max(3_600)
           .optional()
           .describe(
-            "Optional hard timeout for a non-interactive durable command. Maximum 3600 seconds.",
+            "Optional hard timeout for a non-interactive command. Maximum 3600 seconds.",
           ),
       },
       outputSchema: processOutputSchema(),
@@ -301,13 +301,13 @@ function registerCodexProcessTools(context: ToolRegistrationContext): void {
     {
       title: "Write to process",
       description:
-        "Continue a session returned by exec_command. Omit chars to wait for more output or completion. Interactive numeric sessions accept input; durable non-interactive job sessions accept polling and \\u0003 to cancel. Never rerun the original command just because it is still running.",
+        "Continue a session returned by exec_command. Omit chars to wait for more output or completion. Interactive sessions accept input; non-interactive sessions can be waited on or cancelled with \\u0003. Never rerun the original command just because it is still running.",
       inputSchema: {
         workspace_id: z
           .string()
           .describe("Workspace identifier used to start the process."),
         session_id: z
-          .union([z.number(), z.string().regex(/^job_[A-Za-z0-9]+$/)])
+          .union([z.number(), z.string().min(1).max(128)])
           .describe("Opaque process session identifier returned by exec_command."),
         chars: z
           .string()
@@ -377,7 +377,7 @@ function registerCodexProcessTools(context: ToolRegistrationContext): void {
             }
             if (chars && chars !== "\u0003") {
               throw new Error(
-                "Durable non-interactive sessions do not accept stdin. Start exec_command with tty=true for an input-driven process.",
+                "This non-interactive process session does not accept stdin. Start exec_command with tty=true for an input-driven process.",
               );
             }
             if (chars === "\u0003") {
@@ -419,7 +419,7 @@ async function durableProcessSnapshot(
   const { runtimeEvents, reactiveCommands } = context;
   let job = reactiveCommands.get(jobId);
   if (!job || job.workspace_id !== workspaceId) {
-    throw new Error(`Unknown durable process session ${jobId} for workspace ${workspaceId}.`);
+    throw new Error(`Unknown process session ${jobId} for workspace ${workspaceId}.`);
   }
 
   if (job.status === "running" && yieldTimeMs > 0) {
