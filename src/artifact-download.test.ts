@@ -444,3 +444,12 @@ async function expectArtifactError(promise: Promise<unknown>, code: string): Pro
     (error: unknown) => error instanceof ArtifactError && error.code === code,
   );
 }
+
+// Intel Macs keep the legacy 32-bit inode layouts behind the plain symbols.
+{
+  const { darwinInodeSymbol } = await import("./artifact-destination-darwin.js");
+  assert.equal(darwinInodeSymbol("fstatat", "x64"), "fstatat$INODE64");
+  assert.equal(darwinInodeSymbol("readdir", "x64"), "readdir$INODE64");
+  assert.equal(darwinInodeSymbol("fdopendir", "x64"), "fdopendir$INODE64");
+  assert.equal(darwinInodeSymbol("fstatat", "arm64"), "fstatat");
+}

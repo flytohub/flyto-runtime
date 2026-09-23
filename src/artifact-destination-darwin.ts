@@ -156,6 +156,13 @@ function darwinLibc(): DarwinLibc {
   return cachedDarwinLibc;
 }
 
+// On Intel macOS the undecorated stat/directory symbols keep the legacy 32-bit
+// inode layouts; the 64-bit struct stat and struct dirent this file reads live
+// behind the $INODE64 variants. Apple Silicon only ever had the 64-bit layout.
+export function darwinInodeSymbol(name: "fstatat" | "fdopendir" | "readdir", arch: string = process.arch): string {
+  return arch === "x64" ? `${name}$INODE64` : name;
+}
+
 function createDarwinLibc(): DarwinLibc {
   const libc = koffi.load("/usr/lib/libSystem.B.dylib");
   const open = libc.func("int open(const char *path, int flags, ...)");
@@ -183,15 +190,15 @@ function createDarwinLibc(): DarwinLibc {
     },
     mkdirat: libc.func("mkdirat", "int", ["int", "str", "uint32_t"]),
     fstatat: libc.func(
-      "fstatat",
+      darwinInodeSymbol("fstatat"),
       "int",
       ["int", "str", "void *", "int"],
     ),
     linkat: libc.func("linkat", "int", ["int", "str", "int", "str", "int"]),
     unlinkat: libc.func("unlinkat", "int", ["int", "str", "int"]),
     dup: libc.func("dup", "int", ["int"]),
-    fdopendir: libc.func("fdopendir", DIR_PTR, ["int"]),
-    readdir: libc.func("readdir", DIRENT_PTR, [DIR_PTR]),
+    fdopendir: libc.func(darwinInodeSymbol("fdopendir"), DIR_PTR, ["int"]),
+    readdir: libc.func(darwinInodeSymbol("readdir"), DIRENT_PTR, [DIR_PTR]),
     closedir: libc.func("closedir", "int", [DIR_PTR]),
     DIRENT,
   } as DarwinLibc;
