@@ -12,8 +12,10 @@ Authentication stays separate because it contains a secret:
 ~/.devspace/auth.json
 ```
 
-Run `devspace init` to create both files. `devspace config set publicBaseUrl
-<url|null>` updates the JSONC document without discarding its comments.
+Run `devspace init` to create both files. The config CLI updates the JSONC
+document without discarding its comments, including `devspace config set
+publicBaseUrl <url|null>`, `flyto2-runtime config set tools.mode <codex|claude>`,
+and `flyto2-runtime config set tools.exposeRuntimeInternals <true|false>`.
 
 ## Complete example
 
@@ -101,7 +103,11 @@ After restarting, refresh tokens for removed aliases can no longer mint tokens.
 
 The dedicated MCP tools `grep`, `glob`, and `ls` are not exposed. Each mode uses
 its shell tool with programs such as `rg`, `find`, and `ls` when it needs those
-operations.
+operations. Codex process sessions are deliberately opaque: interactive PTY and
+long non-interactive execution both return the same string `session_id` shape,
+and Runtime chooses yield windows, output bounds, and terminal sizing internally.
+Changing `tools.mode` requires a Runtime restart before connected clients see the
+new tool catalog.
 
 `tools.exposeRuntimeInternals` defaults to `false`. Set it to `true` only for
 Runtime development or diagnostics when direct access to internal manifest,

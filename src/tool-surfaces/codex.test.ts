@@ -5,13 +5,18 @@ import { processLogFields } from "./codex.js";
 test("process logging keeps a running command successful", () => {
   assert.deepEqual(
     processLogFields({
-      sessionId: 7,
+      sessionId: "proc_0123456789abcdef0123456789abcdef",
       output: "",
       outputTruncated: false,
       running: true,
       wallTimeMs: 10,
     }),
-    { sessionId: 7, running: true, exitCode: undefined, success: true },
+    {
+      sessionId: "proc_0123456789abcdef0123456789abcdef",
+      running: true,
+      exitCode: undefined,
+      success: true,
+    },
   );
 });
 

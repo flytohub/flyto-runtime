@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import * as z from "zod/v4";
 import { applyPatch } from "../apply-patch.js";
 import {
@@ -21,16 +22,19 @@ import {
 
 type CodexRegistration = (context: ToolRegistrationContext) => void;
 
-type CodexSessionId = number | string;
+type CodexSessionId = string;
 
 interface CodexProcessSnapshot extends Omit<ProcessSnapshot, "sessionId"> {
   sessionId?: CodexSessionId;
 }
 
 const CODEX_DURABLE_EVENT_TYPE = "codex.exec.exited";
+const CODEX_DURABLE_SESSION_PREFIX = "proc_";
 const DEFAULT_CODEX_YIELD_MS = 3_000;
+const DEFAULT_CODEX_INTERACTIVE_YIELD_MS = 250;
 const DEFAULT_CODEX_POLL_YIELD_MS = 5_000;
 const DEFAULT_MAX_OUTPUT_TOKENS = 10_000;
+const CODEX_UNCERTAIN_OUTCOME_SIGNAL = "OUTCOME_UNCERTAIN";
 
 const CODEX_INSTRUCTIONS = `Follow instructions returned by ${toolNames.openWorkspace}; read applicable instruction and skill files before working in their scope.`;
 
@@ -51,10 +55,12 @@ const CODEX_REGISTRATIONS: readonly CodexRegistration[] = [
 
 function processResult(snapshot: CodexProcessSnapshot): string {
   const status = snapshot.running
-    ? `Process running with session ID ${snapshot.sessionId}.`
-    : snapshot.signal
-      ? `Process exited after signal ${snapshot.signal}.`
-      : `Process exited with code ${snapshot.exitCode ?? "unknown"}.`;
+    ? `Process is still running with session_id=${snapshot.sessionId}. Continue it with write_stdin.`
+    : snapshot.signal === CODEX_UNCERTAIN_OUTCOME_SIGNAL
+      ? "Process outcome is uncertain. Do not rerun the command blindly."
+      : snapshot.signal
+        ? `Process exited after signal ${snapshot.signal}.`
+        : `Process exited with code ${snapshot.exitCode ?? "unknown"}.`;
   return snapshot.output
     ? `${snapshot.output.replace(/\n$/, "")}\n${status}`
     : status;
@@ -62,7 +68,7 @@ function processResult(snapshot: CodexProcessSnapshot): string {
 
 function processOutputSchema(): z.ZodRawShape {
   return resultOutputSchema({
-    session_id: z.union([z.number(), z.string()]).optional(),
+    session_id: z.string().optional(),
     running: z.boolean(),
     exit_code: z.number().int().optional(),
     signal: z.string().optional(),
@@ -86,6 +92,39 @@ function processToolResponse(snapshot: CodexProcessSnapshot) {
       output_truncated: snapshot.outputTruncated,
     },
   };
+}
+
+function newCodexProcessSessionId(): string {
+  return `${CODEX_DURABLE_SESSION_PREFIX}${randomUUID().replaceAll("-", "")}`;
+}
+
+function codexSessionIdForReactiveJob(jobId: string): string {
+  const match = /^job_([a-f0-9]{32})$/.exec(jobId);
+  if (!match) throw new Error("Runtime returned an invalid process session identifier.");
+  return `${CODEX_DURABLE_SESSION_PREFIX}${match[1]}`;
+}
+
+function codexInteractiveSnapshot(
+  snapshot: ProcessSnapshot,
+  exposedSessionId?: string,
+): CodexProcessSnapshot {
+  const { sessionId: internalSessionId, ...rest } = snapshot;
+  return {
+    ...rest,
+    sessionId: snapshot.running && internalSessionId !== undefined
+      ? exposedSessionId
+      : undefined,
+  };
+}
+
+function reactiveJobIdFromCodexSession(sessionId: string): string {
+  const opaque = /^proc_([a-f0-9]{32})$/.exec(sessionId);
+  if (opaque) return `job_${opaque[1]}`;
+
+  // Accept sessions issued by older Codex-mode Runtime builds across an upgrade,
+  // but never emit the internal job identifier on the model-facing surface.
+  if (/^job_[a-f0-9]{32}$/.test(sessionId)) return sessionId;
+  throw new Error("Unknown process session identifier.");
 }
 
 function registerApplyPatchTool(context: ToolRegistrationContext): void {
@@ -158,13 +197,14 @@ function registerCodexProcessTools(context: ToolRegistrationContext): void {
     processSessions,
     reactiveCommands,
   } = context;
+  const interactiveSessions = new Map<string, number>();
 
   server.registerTool(
     "exec_command",
     {
       title: "Execute command",
       description:
-        "Run a command in a workspace with the user's local permissions. If it is still running when this call returns, continue the returned session_id with write_stdin instead of rerunning the command. Set tty=true only for input-driven interactive commands.",
+        "Run a command in a workspace with the user's local permissions. If the result is still running, continue its session_id with write_stdin instead of running the command again. Set tty=true only for input-driven interactive commands.",
       inputSchema: {
         workspace_id: z.string().describe(workspaceIdDescription),
         cmd: z.string().min(1).describe("Shell command to execute."),
@@ -174,42 +214,12 @@ function registerCodexProcessTools(context: ToolRegistrationContext): void {
           .describe(
             "Allocate a pseudo-terminal for interactive commands. Defaults to false.",
           ),
-        columns: z
-          .number()
-          .int()
-          .min(1)
-          .max(1_000)
-          .optional()
-          .describe("Initial PTY width. Defaults to 80."),
-        rows: z
-          .number()
-          .int()
-          .min(1)
-          .max(1_000)
-          .optional()
-          .describe("Initial PTY height. Defaults to 24."),
         working_directory: z
           .string()
           .optional()
           .describe(
             "Working directory relative to the workspace root. Defaults to the workspace root.",
           ),
-        yield_time_ms: z
-          .number()
-          .int()
-          .min(0)
-          .max(MAX_PROCESS_YIELD_MS)
-          .optional()
-          .describe(
-            "Milliseconds to wait before returning a running session. Defaults to 3000, maximum 12000.",
-          ),
-        max_output_tokens: z
-          .number()
-          .int()
-          .positive()
-          .max(64_000)
-          .optional()
-          .describe("Approximate output token budget. Defaults to 10000."),
         timeout_seconds: z
           .number()
           .int()
@@ -227,18 +237,12 @@ function registerCodexProcessTools(context: ToolRegistrationContext): void {
       workspace_id,
       cmd,
       tty,
-      columns,
-      rows,
       working_directory,
-      yield_time_ms,
-      max_output_tokens,
       timeout_seconds,
     }) => {
       const startedAt = performance.now();
       const workspaceId = workspace_id;
       const workingDirectory = working_directory;
-      const yieldTimeMs = yield_time_ms;
-      const maxOutputTokens = max_output_tokens;
       const snapshot = await runLoggedToolOperation(
         config,
         {
@@ -256,17 +260,20 @@ function registerCodexProcessTools(context: ToolRegistrationContext): void {
             workingDirectory,
           );
           if (tty) {
-            return processSessions.start({
+            const process = await processSessions.start({
               workspaceId,
               command: cmd,
               cwd,
               workspaceRoot: workspace.root,
               tty: true,
-              columns,
-              rows,
-              yieldTimeMs,
-              maxOutputTokens,
+              yieldTimeMs: DEFAULT_CODEX_INTERACTIVE_YIELD_MS,
             });
+            if (!process.running || process.sessionId === undefined) {
+              return codexInteractiveSnapshot(process);
+            }
+            const exposedSessionId = newCodexProcessSessionId();
+            interactiveSessions.set(exposedSessionId, process.sessionId);
+            return codexInteractiveSnapshot(process, exposedSessionId);
           }
 
           const receipt = reactiveCommands.start({
@@ -281,8 +288,8 @@ function registerCodexProcessTools(context: ToolRegistrationContext): void {
             context,
             workspaceId,
             receipt.job_id,
-            yieldTimeMs ?? DEFAULT_CODEX_YIELD_MS,
-            maxOutputTokens,
+            DEFAULT_CODEX_YIELD_MS,
+            DEFAULT_MAX_OUTPUT_TOKENS,
           );
           if (!durableSnapshot.running) {
             reactiveCommands.discardTerminal(receipt.job_id);
@@ -299,52 +306,24 @@ function registerCodexProcessTools(context: ToolRegistrationContext): void {
   server.registerTool(
     "write_stdin",
     {
-      title: "Write to process",
+      title: "Continue process",
       description:
-        "Continue a session returned by exec_command. Omit chars to wait for more output or completion. Interactive sessions accept input; non-interactive sessions can be waited on or cancelled with \\u0003. Never rerun the original command just because it is still running.",
+        "Continue a session returned by exec_command. Omit chars to wait for completion. Interactive sessions accept input; \\u0003 interrupts or cancels the process. Do not rerun the original command while its session is still available.",
       inputSchema: {
         workspace_id: z
           .string()
           .describe("Workspace identifier used to start the process."),
         session_id: z
-          .union([z.number(), z.string().min(1).max(128)])
+          .string()
+          .min(1)
+          .max(128)
           .describe("Opaque process session identifier returned by exec_command."),
         chars: z
           .string()
           .optional()
           .describe(
-            "Characters to write. Omit or pass an empty string to poll.",
+            "Input for an interactive session. Omit to wait for completion; use \\u0003 to interrupt or cancel.",
           ),
-        columns: z
-          .number()
-          .int()
-          .min(1)
-          .max(1_000)
-          .optional()
-          .describe("Resize a PTY to this width."),
-        rows: z
-          .number()
-          .int()
-          .min(1)
-          .max(1_000)
-          .optional()
-          .describe("Resize a PTY to this height."),
-        yield_time_ms: z
-          .number()
-          .int()
-          .min(0)
-          .max(MAX_PROCESS_YIELD_MS)
-          .optional()
-          .describe(
-            "Milliseconds to wait for process output or completion. Maximum 12000; polling defaults to 5000 and interactive writes to 250.",
-          ),
-        max_output_tokens: z
-          .number()
-          .int()
-          .positive()
-          .max(64_000)
-          .optional()
-          .describe("Approximate output token budget. Defaults to 10000."),
       },
       outputSchema: processOutputSchema(),
       annotations: SHELL_TOOL_ANNOTATIONS,
@@ -353,53 +332,43 @@ function registerCodexProcessTools(context: ToolRegistrationContext): void {
       workspace_id,
       session_id,
       chars,
-      columns,
-      rows,
-      yield_time_ms,
-      max_output_tokens,
     }) => {
       const startedAt = performance.now();
       const workspaceId = workspace_id;
       const sessionId = session_id;
-      const yieldTimeMs = yield_time_ms;
-      const maxOutputTokens = max_output_tokens;
       const snapshot = await runLoggedToolOperation(
         config,
         { tool: "write_stdin", workspaceId },
         startedAt,
         async () => {
           await workspaces.getWorkspace(workspaceId);
-          if (typeof sessionId === "string") {
-            if (columns !== undefined || rows !== undefined) {
-              throw new Error(
-                "PTY resize is available only for interactive numeric sessions.",
-              );
-            }
-            if (chars && chars !== "\u0003") {
-              throw new Error(
-                "This non-interactive process session does not accept stdin. Start exec_command with tty=true for an input-driven process.",
-              );
-            }
-            if (chars === "\u0003") {
-              reactiveCommands.signal(sessionId, workspaceId, "SIGINT");
-            }
-            return durableProcessSnapshot(
-              context,
+          const interactiveSessionId = interactiveSessions.get(sessionId);
+          if (interactiveSessionId !== undefined) {
+            const process = await processSessions.write({
               workspaceId,
-              sessionId,
-              yieldTimeMs ?? DEFAULT_CODEX_POLL_YIELD_MS,
-              maxOutputTokens,
+              sessionId: interactiveSessionId,
+              chars,
+            });
+            if (!process.running) interactiveSessions.delete(sessionId);
+            return codexInteractiveSnapshot(process, sessionId);
+          }
+
+          const jobId = reactiveJobIdFromCodexSession(sessionId);
+          if (chars && chars !== "\u0003") {
+            throw new Error(
+              "This process session does not accept stdin. Start exec_command with tty=true for an input-driven process.",
             );
           }
-          return processSessions.write({
+          if (chars === "\u0003") {
+            reactiveCommands.signal(jobId, workspaceId, "SIGINT");
+          }
+          return durableProcessSnapshot(
+            context,
             workspaceId,
-            sessionId,
-            chars,
-            columns,
-            rows,
-            yieldTimeMs,
-            maxOutputTokens,
-          });
+            jobId,
+            DEFAULT_CODEX_POLL_YIELD_MS,
+            DEFAULT_MAX_OUTPUT_TOKENS,
+          );
         },
         processLogFields,
       );
@@ -419,7 +388,7 @@ async function durableProcessSnapshot(
   const { runtimeEvents, reactiveCommands } = context;
   let job = reactiveCommands.get(jobId);
   if (!job || job.workspace_id !== workspaceId) {
-    throw new Error(`Unknown process session ${jobId} for workspace ${workspaceId}.`);
+    throw new Error(`Unknown process session for workspace ${workspaceId}.`);
   }
 
   if (job.status === "running" && yieldTimeMs > 0) {
@@ -440,7 +409,7 @@ async function durableProcessSnapshot(
   );
   if (job.status === "running") {
     return {
-      sessionId: jobId,
+      sessionId: codexSessionIdForReactiveJob(jobId),
       output: "",
       outputTruncated: false,
       running: true,
@@ -454,19 +423,13 @@ async function durableProcessSnapshot(
   );
   const evidence = reactiveCommands.readEvidence(job.evidence_ref, maxCharacters);
   const orphaned = job.status === "orphaned";
-  const output = orphaned
-    ? [
-        evidence.text.replace(/\n$/, ""),
-        "Flyto2 Runtime restarted while this durable command was running; the final side-effect outcome is uncertain. Do not rerun it blindly.",
-      ].filter(Boolean).join("\n")
-    : evidence.text;
 
   return {
-    output,
+    output: evidence.text,
     outputTruncated: evidence.truncated,
     running: false,
     exitCode: job.exit_code,
-    signal: orphaned ? "RUNTIME_RESTART" : job.signal,
+    signal: orphaned ? CODEX_UNCERTAIN_OUTCOME_SIGNAL : job.signal,
     wallTimeMs,
   };
 }

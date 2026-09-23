@@ -54,6 +54,14 @@ flyto2-runtime doctor
 flyto2-runtime service status
 ```
 
+For the compact Codex-first surface on an existing installation:
+
+```bash
+flyto2-runtime config set tools.mode codex
+flyto2-runtime config set tools.exposeRuntimeInternals false
+flyto2-runtime service restart
+```
+
 Start or restart the native background service on macOS or Windows:
 
 ```bash

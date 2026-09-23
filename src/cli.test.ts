@@ -38,6 +38,47 @@ for (const flag of ["-v", "--version"]) {
   assert.equal(output, packageJson.version);
 }
 
+const configRoot = mkdtempSync(join(tmpdir(), "flyto2-cli-config-test-"));
+try {
+  const configDir = join(configRoot, ".devspace");
+  const configEnv = writeTestDevspaceConfig(configDir, {
+    tools: { mode: "claude", exposeRuntimeInternals: false },
+  });
+  const env = { ...process.env, ...configEnv };
+
+  execFileSync(
+    "node",
+    ["--import", "tsx", "src/cli.ts", "config", "set", "tools.mode", "codex"],
+    { cwd: process.cwd(), encoding: "utf8", env },
+  );
+  assert.equal(loadConfig(env).toolMode, "codex");
+
+  execFileSync(
+    "node",
+    [
+      "--import",
+      "tsx",
+      "src/cli.ts",
+      "config",
+      "set",
+      "tools.exposeRuntimeInternals",
+      "true",
+    ],
+    { cwd: process.cwd(), encoding: "utf8", env },
+  );
+  assert.equal(loadConfig(env).exposeRuntimeInternals, true);
+
+  const doctor = execFileSync(
+    "node",
+    ["--import", "tsx", "src/cli.ts", "doctor"],
+    { cwd: process.cwd(), encoding: "utf8", env },
+  );
+  assert.match(doctor, /Tool mode: codex/);
+  assert.match(doctor, /Runtime internals: exposed for diagnostics/);
+} finally {
+  rmSync(configRoot, { recursive: true, force: true });
+}
+
 const root = mkdtempSync(join(tmpdir(), "devspace-cli-agents-test-"));
 try {
   const configDir = join(root, ".devspace");

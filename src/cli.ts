@@ -450,6 +450,10 @@ async function runDoctor(): Promise<void> {
     console.log(`Public MCP URL: ${new URL("/mcp", config.publicBaseUrl).toString()}`);
     console.log(`Allowed roots: ${config.allowedRoots.join(", ")}`);
     console.log(`Allowed hosts: ${config.allowedHosts.join(", ")}`);
+    console.log(`Tool mode: ${config.toolMode}`);
+    console.log(
+      `Runtime internals: ${config.exposeRuntimeInternals ? "exposed for diagnostics" : "hidden"}`,
+    );
     const providers = buildLocalAgentProviderStatuses(
       config.subagents,
       getLocalAgentProviderAvailabilitySnapshot(process.env, config.subagents),
@@ -492,19 +496,41 @@ function runConfigCommand(args: string[]): void {
   if (subcommand !== "set") {
     throw new Error(`Unknown config command: ${subcommand}`);
   }
-  if (key !== "publicBaseUrl") {
-    throw new Error("Only `devspace config set publicBaseUrl <url|null>` is supported right now.");
-  }
 
   const value = rest.join(" ").trim();
-  if (!value) {
-    throw new Error("Missing publicBaseUrl value.");
+  if (!key || !value) {
+    throw new Error(
+      "Usage: devspace config set <publicBaseUrl|tools.mode|tools.exposeRuntimeInternals> <value>",
+    );
   }
 
-  setDevspaceConfigValue(
-    ["server", "publicBaseUrl"],
-    normalizeOptionalPublicBaseUrl(value),
-  );
+  switch (key) {
+    case "publicBaseUrl":
+      setDevspaceConfigValue(
+        ["server", "publicBaseUrl"],
+        normalizeOptionalPublicBaseUrl(value),
+      );
+      break;
+    case "tools.mode":
+      if (value !== "codex" && value !== "claude") {
+        throw new Error("tools.mode must be `codex` or `claude`.");
+      }
+      setDevspaceConfigValue(["tools", "mode"], value);
+      break;
+    case "tools.exposeRuntimeInternals":
+      if (value !== "true" && value !== "false") {
+        throw new Error("tools.exposeRuntimeInternals must be `true` or `false`.");
+      }
+      setDevspaceConfigValue(
+        ["tools", "exposeRuntimeInternals"],
+        value === "true",
+      );
+      break;
+    default:
+      throw new Error(
+        "Supported config keys: publicBaseUrl, tools.mode, tools.exposeRuntimeInternals.",
+      );
+  }
   console.log(`Updated ${files.configPath}`);
 }
 
@@ -915,6 +941,8 @@ function printHelp(): void {
       "  devspace doctor          Show config, runtime, and native dependency status",
       "  devspace config get      Print persisted config",
       "  devspace config set publicBaseUrl <url|null>",
+      "  flyto2-runtime config set tools.mode <codex|claude>",
+      "  flyto2-runtime config set tools.exposeRuntimeInternals <true|false>",
       "  devspace worktrees prune Prune managed worktrees unused for 3 days",
       "  devspace show-changes <review-ref> [--json]",
       "  flyto2-runtime flyto2 manifest",
@@ -932,6 +960,10 @@ function printHelp(): void {
       "  devspace agents wait <id>... [--timeout <seconds>] [--json]",
       "  devspace agents daemon <status|stop|logs>",
       "  devspace -v, --version   Print the installed version",
+      "",
+      "For Codex-first operation:",
+      "  flyto2-runtime config set tools.mode codex",
+      "  flyto2-runtime service restart",
       "",
       "For temporary tunnels:",
       "  devspace config set publicBaseUrl https://example.trycloudflare.com",

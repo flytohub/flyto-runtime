@@ -152,7 +152,7 @@ function serverInstructions(
   const agents = `Follow instructions returned by ${toolNames.openWorkspace}. Before working under a path listed in available_agents_files, use ${toolNames.read} to inspect that instruction file and follow it. `;
   const common = `Call ${toolNames.openWorkspace} when starting work in a project folder or isolated worktree without a usable workspace_id, then reuse the returned workspace_id for subsequent operations in that workspace.`;
   const execution = config.toolMode === "codex"
-    ? " For long-running non-interactive commands, use exec_command once and continue any returned session_id with write_stdin instead of rerunning the command. Flyto2 Runtime owns durable execution, reconnect recovery, event handling, and evidence internally."
+    ? " For a command that returns running=true, continue its session_id with write_stdin. Do not rerun the original command while that process session is available."
     : ` Long bash commands automatically continue as durable Flyto2 Runtime jobs. Follow any returned @flyto2/job <job_id> command later; never rerun the original side effect just because it is still running or a response was lost.`;
   const diagnostics = config.exposeRuntimeInternals
     ? ` Diagnostic Runtime internals are explicitly enabled. Use ${toolNames.runtimeEvents}, ${toolNames.runtimeWait}, ${toolNames.runtimeEvidence}, or watch tools only when diagnosing Runtime behavior; normal coding should still use the primary workspace/file/process primitives.`

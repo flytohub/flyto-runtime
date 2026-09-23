@@ -120,19 +120,23 @@ test("model-facing tool schemas use snake_case recursively", async (t) => {
   }
 });
 
-test("Codex process tools bound model-facing yield windows to 12 seconds", async (t) => {
+test("Codex process tools keep model-facing controls minimal", async (t) => {
   const context = await fixture(t, { toolMode: "codex", uiEnabled: false });
   const tools = await context.client.listTools();
+  const exec = tools.tools.find(({ name }) => name === "exec_command");
+  const stdin = tools.tools.find(({ name }) => name === "write_stdin");
 
-  for (const toolName of ["exec_command", "write_stdin"] as const) {
-    const tool = tools.tools.find(({ name }) => name === toolName);
-    const yieldSchema = tool?.inputSchema?.properties?.yield_time_ms as {
-      maximum?: number;
-      description?: string;
-    } | undefined;
+  assert.deepEqual(
+    Object.keys(exec?.inputSchema?.properties ?? {}).sort(),
+    ["cmd", "operation_id", "timeout_seconds", "tty", "working_directory", "workspace_id"].sort(),
+  );
+  assert.deepEqual(
+    Object.keys(stdin?.inputSchema?.properties ?? {}).sort(),
+    ["chars", "operation_id", "session_id", "workspace_id"].sort(),
+  );
 
-    assert.equal(yieldSchema?.maximum, 12_000);
-    assert.match(yieldSchema?.description ?? "", /maximum 12000/i);
+  for (const tool of [exec, stdin]) {
+    assert.doesNotMatch(tool?.description ?? "", /runtime_|job_|evidence|reactive/i);
   }
 });
 
@@ -147,24 +151,95 @@ test("Codex non-interactive commands become durable behind exec_command", async 
     name: "exec_command",
     arguments: {
       workspace_id: workspaceId,
-      cmd: "node -e \"setTimeout(()=>console.log('durable-finished'),300)\"",
-      yield_time_ms: 10,
+      cmd: "node -e \"setTimeout(()=>console.log('durable-finished'),3200)\"",
     },
   }));
   assert.equal(started.running, true);
-  assert.match(started.session_id as string, /^job_/);
+  assert.match(started.session_id as string, /^proc_[a-f0-9]{32}$/);
+  assert.match(started.result as string, new RegExp(String(started.session_id)));
+  assert.doesNotMatch(started.result as string, /job_/);
 
   const finished = structuredContent(await context.client.callTool({
     name: "write_stdin",
     arguments: {
       workspace_id: workspaceId,
       session_id: started.session_id,
-      yield_time_ms: 3_000,
     },
   }));
   assert.equal(finished.running, false);
   assert.equal(finished.exit_code, 0);
   assert.match(finished.result as string, /durable-finished/);
+});
+
+test("Codex exec_command replays a lost response without repeating the process side effect", async (t) => {
+  const context = await fixture(t, { toolMode: "codex", uiEnabled: false });
+  const workspaceId = structuredContent(
+    await callOpen(context.client, context.project, "durable-codex-retry"),
+  ).workspace_id;
+  assert.equal(typeof workspaceId, "string");
+
+  const arguments_ = {
+    workspace_id: workspaceId,
+    cmd: "printf 'once\\n' >> codex-effect.txt; sleep 3.2; printf 'done\\n'",
+    operation_id: "op.codex.exec.retry.0001",
+  };
+  const first = structuredContent(await context.client.callTool({
+    name: "exec_command",
+    arguments: arguments_,
+  }));
+  assert.equal(first.running, true);
+  assert.match(first.session_id as string, /^proc_[a-f0-9]{32}$/);
+
+  const replay = structuredContent(await context.client.callTool({
+    name: "exec_command",
+    arguments: arguments_,
+  }));
+  assert.equal(replay.session_id, first.session_id);
+  assert.equal(
+    await readFile(join(context.project, "codex-effect.txt"), "utf8"),
+    "once\n",
+  );
+
+  const finished = structuredContent(await context.client.callTool({
+    name: "write_stdin",
+    arguments: {
+      workspace_id: workspaceId,
+      session_id: first.session_id,
+    },
+  }));
+  assert.equal(finished.running, false);
+  assert.equal(finished.exit_code, 0);
+  assert.match(finished.result as string, /done/);
+});
+
+test("Codex interactive and non-interactive sessions share one opaque shape", async (t) => {
+  const context = await fixture(t, { toolMode: "codex", uiEnabled: false });
+  const workspaceId = structuredContent(
+    await callOpen(context.client, context.project, "opaque-codex-pty"),
+  ).workspace_id;
+  assert.equal(typeof workspaceId, "string");
+
+  const started = structuredContent(await context.client.callTool({
+    name: "exec_command",
+    arguments: {
+      workspace_id: workspaceId,
+      cmd: "sleep 0.4; printf 'pty-done\\n'",
+      tty: true,
+    },
+  }));
+  assert.equal(started.running, true);
+  assert.match(started.session_id as string, /^proc_[a-f0-9]{32}$/);
+
+  const finished = structuredContent(await context.client.callTool({
+    name: "write_stdin",
+    arguments: {
+      workspace_id: workspaceId,
+      session_id: started.session_id,
+    },
+  }));
+  assert.equal(finished.running, false);
+  assert.equal(finished.exit_code, 0);
+  assert.match(finished.result as string, /pty-done/);
 });
 
 test("runtime manifest identifies standalone Flyto2 Runtime in every tool mode", async (t) => {
@@ -1109,7 +1184,6 @@ test("server shutdown waits for an active MCP tool call", async (t) => {
       arguments: {
         workspace_id: workspaceId,
         cmd: `node -e \"${command}\"`,
-        yield_time_ms: 12_000,
       },
     },
   );
