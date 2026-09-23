@@ -32,11 +32,25 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup pnpm and Node
+        if: matrix.os != 'macos-15-intel'
         uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2 # v2
         with:
           runtime: node@22
           cache: true
           install: false
+
+      # pnpm 11 ships no working standalone binary for Intel macOS, so this
+      # runner installs the way the README tells users to: Node plus corepack,
+      # which runs pnpm's JavaScript build.
+      - name: Setup Node (Intel macOS)
+        if: matrix.os == 'macos-15-intel'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable corepack pnpm (Intel macOS)
+        if: matrix.os == 'macos-15-intel'
+        run: corepack enable && pnpm --version
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
