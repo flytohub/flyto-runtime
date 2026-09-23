@@ -1,33 +1,69 @@
 # Flyto2 Runtime
 
-**Flyto2 Runtime** is a local execution runtime for ChatGPT, Claude, coding agents, and Flyto2. It gives an authenticated MCP client a reliable way to work with local files, Git, tests, builds, processes, durable events, and filesystem watches while keeping execution on the user's machine.
+**Give ChatGPT secure access to your machine. Turn ChatGPT into Codex.**
 
-Flyto2 Cloud is optional. Runtime works standalone.
+ChatGPT can tell you what to change. **Flyto2 Runtime lets it actually do the work.**
 
-## Features
+No more copying files into chat, pasting commands into a terminal, sending the error back, and repeating the loop. Connect ChatGPT to your own machine over MCP and let it open your real project, edit code, run commands, test the result, use Git, and show you what changed.
 
-- MCP workspace access for local files, edits, Git, tests, and builds
-- Minimal Codex-grade MCP surface: workspace, files, patch/edit, process, and review primitives; durable jobs, events, evidence, and watches stay internal by default
-- Durable operation IDs to prevent accidental replay of side effects
-- Bounded local evidence for long-running process output
-- Persistent filesystem watches that survive Runtime restart
-- OAuth-protected remote MCP access for ChatGPT
-- Native macOS LaunchAgent and Windows Task Scheduler lifecycle with health-checked restart and rollback
-- Redundant two-connector Cloudflare tunnel supervision on macOS and Windows
-- Cross-platform Cloudflare tunnel import into Runtime-owned storage
-- Optional Flyto2 Cloud pairing through a versioned bridge
-- Minimal public `/healthz` liveness plus detailed local diagnostics through `doctor`, `service status`, and Runtime tools
+Your machine stays the execution environment. You choose which project folders it can access.
 
-## Installation
+## Why Flyto2 Runtime?
+
+Without a local runtime, coding with ChatGPT often looks like this:
+
+```text
+ChatGPT suggests code
+        ↓
+you copy it into the repo
+        ↓
+you run the command
+        ↓
+it fails
+        ↓
+you paste the error back
+        ↓
+repeat
+```
+
+With Flyto2 Runtime:
+
+```text
+You ask ChatGPT
+        ↓
+ChatGPT opens your project
+        ↓
+edits → runs → tests → fixes
+        ↓
+shows you the result
+```
+
+That is the point of Flyto2 Runtime: **close the loop between the AI and your machine.**
+
+## What it gives ChatGPT
+
+Once connected, ChatGPT can work inside an approved local workspace and:
+
+- read and edit your project files
+- run terminal commands, tests, builds, Git, and package scripts
+- keep long-running work alive without making you babysit the terminal
+- review what changed before you continue
+- work through OAuth instead of exposing an unauthenticated local shell
+- optionally hand work to local coding agents or connect to Flyto2 Cloud
+
+The normal model-facing surface stays intentionally small. Runtime handles process recovery, durable execution, filesystem events, service lifecycle, and tunnel supervision behind the scenes.
+
+## Quick start
 
 Requirements:
 
-- Node `>=22.19 <27`
-- pnpm
-- Git
-- Bash
+```text
+Node >=22.19 <27
+Git
+Bash / Git Bash / WSL
+```
 
-Build from source:
+Clone and build:
 
 ```bash
 git clone https://github.com/flytohub/flyto-runtime.git
@@ -37,122 +73,129 @@ pnpm install --frozen-lockfile
 pnpm build
 ```
 
-On macOS, double-click `Install.command`. On Windows, double-click `Install.cmd`. Both installers build a source checkout when necessary, create the native background service, and install Desktop launchers.
-
-## Usage
-
-Initialize or update local configuration:
+Then run setup:
 
 ```bash
 flyto2-runtime init
 ```
 
-Check the installation:
+On macOS you can double-click `Install.command`. On Windows, double-click `Install.cmd`. Flyto2 Runtime installs a native background service and Desktop launchers so you do not need to keep a terminal window open.
 
-```bash
-flyto2-runtime doctor
-flyto2-runtime service status
+## Connect ChatGPT
+
+ChatGPT needs a public HTTPS URL that reaches your local Runtime.
+
+During setup, choose **ChatGPT** and enter your public Runtime URL:
+
+```text
+https://your-runtime-host.example.com
 ```
 
-For the compact Codex-first surface on an existing installation:
+Flyto2 Runtime exposes MCP at:
 
-```bash
-flyto2-runtime config set tools.mode codex
-flyto2-runtime config set tools.exposeRuntimeInternals false
-flyto2-runtime service restart
+```text
+https://your-runtime-host.example.com/mcp
 ```
 
-Start or restart the native background service on macOS or Windows:
+Setup can also generate an upload-ready ChatGPT Plugin ZIP for you.
 
-```bash
-flyto2-runtime service start
-flyto2-runtime service restart
+Choose:
+
+```text
+Generate an upload-ready ChatGPT Plugin ZIP now?
+Yes / No
 ```
 
-For an existing Mac Kit installation, stage the Flyto2-native Runtime service and fixed Cloudflare tunnel without interrupting the currently running service:
+If you choose **Yes**, Runtime creates the ZIP from **your own configured MCP URL**. Nothing is hard-coded to a Flyto2 hostname.
 
-```bash
-flyto2-runtime service stage
-```
-
-On macOS the service is owned by `local.flyto2.runtime`; on Windows it is owned by the `Flyto2 Runtime` scheduled task. Redundant tunnel connectors are managed natively on both platforms. The old `local.devspace.mac-kit` labels remain macOS migration sources only and are not Runtime dependencies after cutover.
-
-### ChatGPT
-
-Point a public HTTPS endpoint at Runtime's local server, normally `http://127.0.0.1:7676`, and store the public origin as `server.publicBaseUrl`. Do not hard-code someone else's Runtime URL into a plugin.
-
-During `flyto2-runtime init`, choosing ChatGPT asks whether you want to generate a personalized, upload-ready portable Plugin ZIP. Choose **Yes** to write it to `~/Downloads` when that folder exists, or **No** to save only the Runtime/MCP configuration and generate the ZIP later. The package is built from the current Runtime URL and contains only portable plugin metadata, MCP configuration, and a small Runtime skill. It never contains the Owner password, OAuth tokens, tunnel credentials, or `auth.json`.
-
-You can regenerate it at any time:
+If you choose **No**, you can create it later:
 
 ```bash
 flyto2-runtime plugin build
 ```
 
-For another Runtime or a white-label package, override the connection and metadata without editing source:
+The ZIP contains only portable Plugin metadata, MCP configuration, and a small Runtime skill. It does **not** contain your Owner password, OAuth tokens, tunnel credentials, or `auth.json`.
+
+Need a custom package for another machine or deployment?
 
 ```bash
 flyto2-runtime plugin build \
-  --url https://runtime.customer.example/mcp \
-  --name customer-runtime \
-  --server-name customer-runtime \
-  --display-name "Customer Runtime" \
-  --output ./customer-runtime-plugin.zip
+  --url https://runtime.example.com/mcp \
+  --name my-runtime \
+  --server-name my-runtime \
+  --display-name "My Runtime" \
+  --output ./my-runtime-plugin.zip
 ```
 
-The generated ZIP contains root `plugin.json`, root `mcp.json`, and `skills/<plugin-name>/SKILL.md` using the portable Agent Plugins schemas. Upload the ZIP in ChatGPT Plugins and complete OAuth once when ChatGPT connects to the MCP endpoint.
+Upload the ZIP in ChatGPT Plugins, approve the OAuth connection, and start working.
 
-A client that cached an older MCP tool list may need its connection to be refreshed or a new conversation before the current compact surface appears.
+## The workflow
 
-### Runtime status and evidence
-
-Use:
-
-```bash
-curl http://127.0.0.1:7676/healthz
-```
-
-The public response intentionally contains only minimal liveness fields. Use `flyto2-runtime doctor` and `flyto2-runtime service status` for detailed diagnostics without leaking process, build, tunnel, or tool inventory publicly. Runtime-internal MCP diagnostics can be explicitly enabled for development, but are hidden from models by default.
-
-### Service lifecycle
-
-```bash
-flyto2-runtime service status
-flyto2-runtime service update
-flyto2-runtime service rollback
-flyto2-runtime service stop
-flyto2-runtime service start
-```
-
-`service rollback` restores the previous native service definition when one is available: LaunchAgent on macOS and the scheduled-task wrapper on Windows. Runtime keeps existing OAuth, workspace, SQLite state, and allowed-root configuration during migration.
-
-## Configuration
-
-`FLYTO2_RUNTIME_CONFIG_DIR` is the canonical configuration-directory override. `DEVSPACE_CONFIG_DIR` remains supported as a compatibility alias for existing installations.
-
-Existing state remains compatible with the current `config.jsonc`, OAuth data, workspace state, and SQLite layout. The migration path intentionally avoids creating a second competing state store.
-
-For ChatGPT-only installations, subagents may stay disabled.
-
-See [Setup Guide](docs/setup.md) for client setup, service migration, and operational details.
-
-## Architecture
-
-The standalone execution path is:
+A normal session is intentionally simple:
 
 ```text
-ChatGPT / MCP client
-  -> OAuth
-  -> Flyto2 Runtime
-  -> workspace / Git / process / reactive events / filesystem watches
-  -> optional Flyto2 Cloud
+ChatGPT
+   ↓
+OAuth + MCP
+   ↓
+Flyto2 Runtime
+   ↓
+your approved local workspace
+   ↓
+files / Git / terminal / tests / builds
 ```
 
-On macOS, LaunchAgent owns the Runtime process; on Windows, Task Scheduler owns a PowerShell supervisor that restarts failed Runtime processes with bounded backoff. Both platforms can own two independent Cloudflare connectors, while the Runtime watchdog repairs degraded connectivity. Client tooling, Runtime execution, and optional Cloud orchestration remain separate layers.
+Flyto2 Cloud is optional. Flyto2 Runtime works standalone.
 
-## Testing
+## Desktop and background service
 
-The repository verification loop is:
+Flyto2 Runtime is designed to stay available after setup.
+
+**macOS:** a LaunchAgent keeps Runtime running in the background.
+
+**Windows:** Task Scheduler starts Runtime at login and a small supervisor restarts it if the process exits unexpectedly.
+
+Useful commands:
+
+```bash
+flyto2-runtime doctor
+flyto2-runtime service status
+flyto2-runtime service start
+flyto2-runtime service restart
+flyto2-runtime service stop
+```
+
+The interactive launcher also includes setup, diagnostics, and **Export ChatGPT plugin**.
+
+## Security
+
+Flyto2 Runtime is powerful because it can operate on your machine. Treat a connected AI client like a trusted coding partner.
+
+Access is restricted to the workspace roots you approve. Remote MCP access uses OAuth. Keep your Owner credential, tunnel credentials, and `auth.json` private.
+
+Flyto2 Runtime does not pretend shell execution is a full OS sandbox. The security boundary is explicit workspace scope, authenticated access, and the permissions of the local user running Runtime.
+
+See [Security Model](docs/security.md) for details.
+
+## Built for real local work
+
+The parts you should not have to think about are handled by Runtime: long-running commands, lost responses, process continuation, filesystem changes, service restarts, health checks, MCP compatibility, and recovery.
+
+Those are implementation details, not the product.
+
+The product is simpler:
+
+> **Ask ChatGPT to work on your project, and let it finish the job on your machine.**
+
+## Documentation
+
+- [Setup Guide](docs/setup.md)
+- [ChatGPT Coding Workflow](docs/chatgpt-coding-workflow.md)
+- [Configuration Reference](docs/configuration.md)
+- [Security Model](docs/security.md)
+- [Troubleshooting](docs/gotchas.md)
+
+## Development
 
 ```bash
 pnpm typecheck
@@ -162,16 +205,12 @@ pnpm build
 flyto-index verify . --full-scan --strict --json
 ```
 
-Runtime-owned service, tunnel migration, MCP compatibility, health evidence, durable execution, and filesystem-watch behavior are covered by automated tests.
-
-## Security
-
-Runtime is intentionally bound to authenticated MCP/OAuth access. Keep owner credentials, tunnel credentials, and `auth.json` private. Restrict allowed workspace roots to directories the client should be able to modify. The Runtime does not claim that shell execution is an OS sandbox.
-
 ## Roadmap
 
-Flyto2 Runtime will connect with **Flyto2 Core** to extend local execution into reusable capabilities such as web crawling, browser testing, automated validation, security testing, and agent-driven workflows.
+Flyto2 Runtime will also connect with **Flyto2 Core** for reusable capabilities such as browser testing, crawling, automated validation, security testing, and agent-driven workflows.
 
 ## License
 
-MIT. This project is based on [Waishnav/devspace](https://github.com/Waishnav/devspace). The original copyright and license notice are preserved in [LICENSE](LICENSE).
+MIT.
+
+Flyto2 Runtime is based on [Waishnav/devspace](https://github.com/Waishnav/devspace). The original copyright and license notice are preserved in [LICENSE](LICENSE).

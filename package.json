@@ -1,7 +1,7 @@
 {
   "name": "flyto2-runtime",
   "version": "1.0.8",
-  "description": "Standalone local execution runtime for Flyto2 and MCP hosts.",
+  "description": "Give ChatGPT secure access to your machine. Turn ChatGPT into Codex.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/flytohub/flyto-runtime.git"
