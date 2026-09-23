@@ -216,7 +216,7 @@ test("reactive command failure emits failure facts without hiding evidence", asy
     workspace_id: "ws-2",
     workspace_root: stateDir,
     cwd: stateDir,
-    command: "printf 'boom\\n' >&2; exit 7",
+    command: "node -e \"process.stderr.write('boom\\\\n'); process.exit(7)\"",
   });
 
   const event = await events.wait({

@@ -32,7 +32,7 @@ export function renderWindowsScheduledTaskXml(
     : "";
 
   return [
-    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<?xml version="1.0"?>',
     '<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">',
     "  <RegistrationInfo>",
     "    <Description>Flyto2 Runtime managed task</Description>",

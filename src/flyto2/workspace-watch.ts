@@ -434,8 +434,9 @@ function assertRootIdentity(
   if (!existsSync(workspaceRoot)) {
     throw new Error(`Workspace root no longer exists: ${workspaceRoot}`);
   }
-  const currentCanonical = realpathSync(workspaceRoot);
-  if (resolve(currentCanonical) !== resolve(canonicalRoot)) {
+  const currentCanonical = realpathSync.native(workspaceRoot);
+  const expectedCanonical = realpathSync.native(canonicalRoot);
+  if (canonicalPathKey(currentCanonical) !== canonicalPathKey(expectedCanonical)) {
     throw new Error("Workspace root canonical identity changed; refusing to restore filesystem watch.");
   }
 }
@@ -447,11 +448,16 @@ function canonicalWatchTarget(
   if (!existsSync(targetPath)) {
     throw new Error(`Watch target does not exist: ${targetPath}`);
   }
-  const canonicalTarget = realpathSync(targetPath);
+  const canonicalTarget = realpathSync.native(targetPath);
   if (!isPathInside(canonicalTarget, canonicalRoot)) {
     throw new Error("Watch target escapes the workspace canonical root.");
   }
   return canonicalTarget;
+}
+
+function canonicalPathKey(path: string): string {
+  const resolved = resolve(path);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
 function isPathInside(path: string, root: string): boolean {
