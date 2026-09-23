@@ -180,7 +180,7 @@ test("Codex exec_command replays a lost response without repeating the process s
 
   const arguments_ = {
     workspace_id: workspaceId,
-    cmd: "node -e \"require('node:fs').appendFileSync('codex-effect.txt','once\\\\n');setTimeout(()=>console.log('done'),3200)\"",
+    cmd: "node -e \"require('node:fs').appendFileSync('codex-effect.txt','once');setTimeout(()=>console.log('done'),3200)\"",
     operation_id: "op.codex.exec.retry.0001",
   };
   const first = structuredContent(await context.client.callTool({
@@ -197,7 +197,7 @@ test("Codex exec_command replays a lost response without repeating the process s
   assert.equal(replay.session_id, first.session_id);
   assert.equal(
     await readFile(join(context.project, "codex-effect.txt"), "utf8"),
-    "once\n",
+    "once",
   );
 
   const finished = structuredContent(await context.client.callTool({
