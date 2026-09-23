@@ -59,7 +59,7 @@ export interface ToolLogFields {
   workingDirectory?: string;
   command?: string;
   commandLength?: number;
-  sessionId?: number;
+  sessionId?: number | string;
   jobId?: string;
   running?: boolean;
   exitCode?: number;

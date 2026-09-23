@@ -32,11 +32,11 @@ test("tool modes expose the expected host-facing tool surface", async (t) => {
   }> = [
     {
       mode: "claude",
-      expected: ["open_workspace", "read", "write", "edit", "bash", "runtime_manifest", "runtime_events", "runtime_wait", "runtime_run", "runtime_evidence", "runtime_signal", "runtime_watch", "runtime_unwatch", "runtime_watches", "show_changes"],
+      expected: ["open_workspace", "read", "write", "edit", "bash", "show_changes"],
     },
     {
       mode: "codex",
-      expected: ["open_workspace", "read", "apply_patch", "exec_command", "write_stdin", "runtime_manifest", "runtime_events", "runtime_wait", "runtime_run", "runtime_evidence", "runtime_signal", "runtime_watch", "runtime_unwatch", "runtime_watches", "show_changes"],
+      expected: ["open_workspace", "read", "apply_patch", "exec_command", "write_stdin", "show_changes"],
     },
   ];
 
@@ -136,10 +136,45 @@ test("Codex process tools bound model-facing yield windows to 12 seconds", async
   }
 });
 
+test("Codex non-interactive commands become durable behind exec_command", async (t) => {
+  const context = await fixture(t, { toolMode: "codex", uiEnabled: false });
+  const workspaceId = structuredContent(
+    await callOpen(context.client, context.project, "durable-codex-exec"),
+  ).workspace_id;
+  assert.equal(typeof workspaceId, "string");
+
+  const started = structuredContent(await context.client.callTool({
+    name: "exec_command",
+    arguments: {
+      workspace_id: workspaceId,
+      cmd: "node -e \"setTimeout(()=>console.log('durable-finished'),300)\"",
+      yield_time_ms: 10,
+    },
+  }));
+  assert.equal(started.running, true);
+  assert.match(started.session_id as string, /^job_/);
+
+  const finished = structuredContent(await context.client.callTool({
+    name: "write_stdin",
+    arguments: {
+      workspace_id: workspaceId,
+      session_id: started.session_id,
+      yield_time_ms: 3_000,
+    },
+  }));
+  assert.equal(finished.running, false);
+  assert.equal(finished.exit_code, 0);
+  assert.match(finished.result as string, /durable-finished/);
+});
+
 test("runtime manifest identifies standalone Flyto2 Runtime in every tool mode", async (t) => {
   for (const toolMode of ["claude", "codex"] as const) {
     await t.test(toolMode, async (nested) => {
-      const context = await fixture(nested, { toolMode, uiEnabled: false });
+      const context = await fixture(nested, {
+        toolMode,
+        uiEnabled: false,
+        exposeRuntimeInternals: true,
+      });
       const manifest = structuredContent(await context.client.callTool({
         name: "runtime_manifest",
         arguments: {},
@@ -193,7 +228,11 @@ test("durable operation_id replays a lost write response without repeating the s
 });
 
 test("durable file mutation emits one workspace event and replay emits none", async (t) => {
-  const context = await fixture(t, { toolMode: "claude", uiEnabled: false });
+  const context = await fixture(t, {
+    toolMode: "claude",
+    uiEnabled: false,
+    exposeRuntimeInternals: true,
+  });
   const workspaceId = structuredContent(
     await callOpen(context.client, context.project, "evented-write"),
   ).workspace_id;
@@ -238,7 +277,11 @@ test("durable file mutation emits one workspace event and replay emits none", as
 });
 
 test("reactive MCP command wakes once with shallow event and lazy evidence", async (t) => {
-  const context = await fixture(t, { toolMode: "codex", uiEnabled: false });
+  const context = await fixture(t, {
+    toolMode: "codex",
+    uiEnabled: false,
+    exposeRuntimeInternals: true,
+  });
   const workspaceId = structuredContent(
     await callOpen(context.client, context.project, "reactive-e2e"),
   ).workspace_id;
@@ -319,7 +362,11 @@ test("reactive MCP command wakes once with shallow event and lazy evidence", asy
 });
 
 test("runtime filesystem watch wakes on external edits and is durable", async (t) => {
-  const context = await fixture(t, { toolMode: "codex", uiEnabled: false });
+  const context = await fixture(t, {
+    toolMode: "codex",
+    uiEnabled: false,
+    exposeRuntimeInternals: true,
+  });
   const workspaceId = structuredContent(
     await callOpen(context.client, context.project, "watch-e2e"),
   ).workspace_id;
@@ -1168,6 +1215,7 @@ async function fixture(
     subagents?: SubagentsConfig;
     toolMode?: ToolMode;
     uiEnabled?: boolean;
+    exposeRuntimeInternals?: boolean;
   } = {},
 ): Promise<ServerFixture> {
   const root = await mkdtemp(join(tmpdir(), "devspace-server-test-"));
@@ -1203,6 +1251,10 @@ async function fixture(
   const loadedConfig = loadConfig(writeTestDevspaceConfig(join(root, ".config"), {
     server: { port: 1 },
     workspaces: { allowedRoots: [root], worktreeRoot: join(root, ".worktrees") },
+    tools: {
+      mode: options.toolMode ?? "codex",
+      exposeRuntimeInternals: options.exposeRuntimeInternals ?? false,
+    },
     skills: { agentDir },
     subagents: {
       enabled: options.localAgentProviders !== undefined,

@@ -7,7 +7,7 @@ Flyto2 Cloud is optional. Runtime works standalone.
 ## Features
 
 - MCP workspace access for local files, edits, Git, tests, and builds
-- Full reactive Runtime surface: `runtime_manifest`, `runtime_run`, `runtime_wait`, `runtime_events`, `runtime_evidence`, `runtime_signal`, `runtime_watch`, `runtime_unwatch`, and `runtime_watches`
+- Minimal Codex-grade MCP surface: workspace, files, patch/edit, process, and review primitives; durable jobs, events, evidence, and watches stay internal by default
 - Durable operation IDs to prevent accidental replay of side effects
 - Bounded local evidence for long-running process output
 - Persistent filesystem watches that survive Runtime restart
@@ -79,7 +79,7 @@ https://your-runtime-host.example.com/mcp
 
 Complete OAuth once. Runtime exposes the same MCP endpoint for modern and supported legacy client schemas.
 
-A client that cached an older MCP tool list may need its connector to be reconnected or a new conversation before newly added `runtime_*` tools appear. Cached legacy clients remain usable through the non-blocking compatibility surface.
+A client that cached an older MCP tool list may need its connector to be reconnected or a new conversation before the current compact surface appears. Cached legacy clients remain usable through the non-blocking compatibility surface.
 
 ### Runtime status and evidence
 
@@ -89,7 +89,7 @@ Use:
 curl http://127.0.0.1:7676/healthz
 ```
 
-The public response intentionally contains only minimal liveness fields. Use `flyto2-runtime doctor`, `flyto2-runtime service status`, and authenticated Runtime tools for detailed diagnostics without leaking process, build, tunnel, or tool inventory publicly.
+The public response intentionally contains only minimal liveness fields. Use `flyto2-runtime doctor` and `flyto2-runtime service status` for detailed diagnostics without leaking process, build, tunnel, or tool inventory publicly. Runtime-internal MCP diagnostics can be explicitly enabled for development, but are hidden from models by default.
 
 ### Service lifecycle
 

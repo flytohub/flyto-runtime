@@ -24,6 +24,7 @@ const storageConfigSchema = z.object({
 
 const toolsConfigSchema = z.object({
   mode: z.enum(["claude", "codex"]).default("codex"),
+  exposeRuntimeInternals: z.boolean().default(false),
 }).strict().prefault({});
 
 const uiConfigSchema = z.object({

@@ -241,6 +241,31 @@ export class ReactiveCommandRunner {
     return row ? reactiveJobFromRow(row) : undefined;
   }
 
+  signal(
+    jobId: string,
+    workspaceId: string,
+    signal: NodeJS.Signals = "SIGTERM",
+  ): ReactiveJobRecord {
+    const job = this.get(jobId);
+    if (!job || job.workspace_id !== workspaceId) {
+      throw new Error(`Unknown reactive job ${jobId} for workspace ${workspaceId}.`);
+    }
+    if (job.status !== "running") return job;
+
+    const active = this.active.get(jobId);
+    if (!active) {
+      throw new Error(
+        `Reactive job ${jobId} is marked running but has no active process.`,
+      );
+    }
+    terminateProcessTree(
+      active.child,
+      signal,
+      process.platform !== "win32",
+    );
+    return job;
+  }
+
   discardTerminal(jobId: string): boolean {
     if (this.active.has(jobId)) return false;
     const row = this.database.sqlite
@@ -513,8 +538,8 @@ function reactiveEnvironment(
 
 function normalizeTimeoutSeconds(value: number | undefined): number | undefined {
   if (value === undefined) return undefined;
-  if (!Number.isFinite(value) || value <= 0 || value > 300) {
-    throw new Error("timeout_seconds must be greater than 0 and at most 300.");
+  if (!Number.isFinite(value) || value <= 0 || value > 3_600) {
+    throw new Error("timeout_seconds must be greater than 0 and at most 3600.");
   }
   return value;
 }

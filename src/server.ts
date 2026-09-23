@@ -552,7 +552,7 @@ function registerMcpSurface(
           ? "Use this workspace_id for subsequent work in this isolated worktree. Keep reusing it while working in this worktree. Follow the project instructions, nested instruction files, skills, agent profiles, and diagnostics returned for it."
           : cardInstruction;
       const legacyReactiveInstruction = config.toolMode === "claude"
-        ? "If this host does not expose runtime_run/runtime_wait, long bash commands automatically yield into durable Flyto2 Runtime jobs. Follow any returned @flyto2/job <job_id> command later; do not rerun the original side effect while it is still running."
+        ? "Long bash commands automatically continue as durable Flyto2 Runtime jobs. Follow any returned @flyto2/job <job_id> command later; do not rerun the original side effect while it is still running."
         : undefined;
       const instructionParts = [
         workspaceInstruction,
@@ -738,14 +738,16 @@ function registerMcpSurface(
     },
   );
 
-  registerRuntimeTools({
-    server: registrationTarget,
-    config,
-    workspaces,
-    runtimeEvents,
-    reactiveCommands,
-    workspaceWatches,
-  });
+  if (config.exposeRuntimeInternals) {
+    registerRuntimeTools({
+      server: registrationTarget,
+      config,
+      workspaces,
+      runtimeEvents,
+      reactiveCommands,
+      workspaceWatches,
+    });
+  }
 
   toolSurface.register({
     server: registrationTarget,

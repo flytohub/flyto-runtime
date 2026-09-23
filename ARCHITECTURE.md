@@ -74,9 +74,9 @@ Compatibility choices are deliberate:
 
 ## Event-driven execution
 
-Flyto2 Runtime owns one durable local event stream for standalone MCP use and optional Cloud composition. File mutations performed through durable MCP tools emit shallow workspace events; long non-interactive commands can run through `runtime_run`, which stores bounded evidence locally and emits a completion event. Consumers use a monotonic sequence cursor and one-shot `runtime_wait` instead of model-driven busy polling. Cloud assignment lifecycle events use the same stream and correlation IDs.
+Flyto2 Runtime owns one durable local event stream for standalone MCP use and optional Cloud composition. File mutations emit shallow workspace events. In Codex mode, non-interactive `exec_command` calls automatically enter the durable reactive runner and return the same process abstraction through `write_stdin`; models do not need to orchestrate a separate run/wait/event protocol. Cloud assignment lifecycle events use the same internal stream and correlation IDs.
 
-Evidence is lazy by design: shallow events contain status, digests and evidence references, never full process output. `runtime_evidence` expands a referenced log only when needed. Runtime restart marks unresolved reactive jobs `orphaned` and explicitly reports the outcome as uncertain rather than replaying the command.
+Evidence is lazy by design: shallow events contain status, digests and evidence references, never full process output. Runtime reads bounded evidence internally when a durable process completes. Runtime restart marks unresolved reactive jobs `orphaned` and explicitly reports the outcome as uncertain rather than replaying the command. Direct manifest/event/evidence/watch MCP tools remain available only when `tools.exposeRuntimeInternals` is explicitly enabled for diagnostics or development.
 
 External filesystem changes use persistent native watches rather than polling. Watch specifications are stored in SQLite, targets are canonicalized before persistence, and every restore revalidates the logical workspace root against its original canonical identity. A retargeted symlink/root fails closed with `watch.error` instead of silently observing a different tree. Event batching uses a fixed window so sustained filesystem churn cannot indefinitely postpone wake-up.
 

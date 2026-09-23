@@ -99,6 +99,10 @@
             "claude",
             "codex"
           ]
+        },
+        "exposeRuntimeInternals": {
+          "default": false,
+          "type": "boolean"
         }
       },
       "additionalProperties": false

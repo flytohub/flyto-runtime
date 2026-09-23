@@ -21,6 +21,17 @@ import {
 
 type CodexRegistration = (context: ToolRegistrationContext) => void;
 
+type CodexSessionId = number | string;
+
+interface CodexProcessSnapshot extends Omit<ProcessSnapshot, "sessionId"> {
+  sessionId?: CodexSessionId;
+}
+
+const CODEX_DURABLE_EVENT_TYPE = "codex.exec.exited";
+const DEFAULT_CODEX_YIELD_MS = 3_000;
+const DEFAULT_CODEX_POLL_YIELD_MS = 5_000;
+const DEFAULT_MAX_OUTPUT_TOKENS = 10_000;
+
 const CODEX_INSTRUCTIONS = `Follow instructions returned by ${toolNames.openWorkspace}; read applicable instruction and skill files before working in their scope.`;
 
 export function codexInstructions(): string {
@@ -38,7 +49,7 @@ const CODEX_REGISTRATIONS: readonly CodexRegistration[] = [
   registerCodexProcessTools,
 ];
 
-function processResult(snapshot: ProcessSnapshot): string {
+function processResult(snapshot: CodexProcessSnapshot): string {
   const status = snapshot.running
     ? `Process running with session ID ${snapshot.sessionId}.`
     : snapshot.signal
@@ -51,7 +62,7 @@ function processResult(snapshot: ProcessSnapshot): string {
 
 function processOutputSchema(): z.ZodRawShape {
   return resultOutputSchema({
-    session_id: z.number().optional(),
+    session_id: z.union([z.number(), z.string()]).optional(),
     running: z.boolean(),
     exit_code: z.number().int().optional(),
     signal: z.string().optional(),
@@ -60,7 +71,7 @@ function processOutputSchema(): z.ZodRawShape {
   });
 }
 
-function processToolResponse(snapshot: ProcessSnapshot) {
+function processToolResponse(snapshot: CodexProcessSnapshot) {
   const result = processResult(snapshot);
   const content = [textBlock(result)];
   return {
@@ -140,14 +151,20 @@ function registerApplyPatchTool(context: ToolRegistrationContext): void {
 }
 
 function registerCodexProcessTools(context: ToolRegistrationContext): void {
-  const { server, config, workspaces, processSessions } = context;
+  const {
+    server,
+    config,
+    workspaces,
+    processSessions,
+    reactiveCommands,
+  } = context;
 
   server.registerTool(
     "exec_command",
     {
       title: "Execute command",
       description:
-        "Run an interactive or short shell command in a workspace with the user's local permissions. For long non-interactive tests/builds, prefer runtime_run + runtime_wait so the model does not poll. Returns the result when it exits during the yield window, otherwise returns a session_id for write_stdin.",
+        "Run a command in a workspace with the user's local permissions. Non-interactive commands automatically become durable Runtime jobs if they outlive the yield window; continue the returned session_id with write_stdin instead of rerunning the command. Set tty=true only for input-driven interactive commands.",
       inputSchema: {
         workspace_id: z.string().describe(workspaceIdDescription),
         cmd: z.string().min(1).describe("Shell command to execute."),
@@ -184,15 +201,24 @@ function registerCodexProcessTools(context: ToolRegistrationContext): void {
           .max(MAX_PROCESS_YIELD_MS)
           .optional()
           .describe(
-            "Milliseconds to wait before returning a running session. Defaults to 3000, maximum 12000. Prefer short receipts for long-running work and continue it reactively.",
+            "Milliseconds to wait before returning a running session. Defaults to 3000, maximum 12000. Long non-interactive commands remain durable after the response returns.",
           ),
         max_output_tokens: z
           .number()
           .int()
           .positive()
-          .max(100_000)
+          .max(64_000)
           .optional()
           .describe("Approximate output token budget. Defaults to 10000."),
+        timeout_seconds: z
+          .number()
+          .int()
+          .positive()
+          .max(3_600)
+          .optional()
+          .describe(
+            "Optional hard timeout for a non-interactive durable command. Maximum 3600 seconds.",
+          ),
       },
       outputSchema: processOutputSchema(),
       annotations: SHELL_TOOL_ANNOTATIONS,
@@ -206,6 +232,7 @@ function registerCodexProcessTools(context: ToolRegistrationContext): void {
       working_directory,
       yield_time_ms,
       max_output_tokens,
+      timeout_seconds,
     }) => {
       const startedAt = performance.now();
       const workspaceId = workspace_id;
@@ -228,17 +255,39 @@ function registerCodexProcessTools(context: ToolRegistrationContext): void {
             workspace,
             workingDirectory,
           );
-          return processSessions.start({
-            workspaceId,
+          if (tty) {
+            return processSessions.start({
+              workspaceId,
+              command: cmd,
+              cwd,
+              workspaceRoot: workspace.root,
+              tty: true,
+              columns,
+              rows,
+              yieldTimeMs,
+              maxOutputTokens,
+            });
+          }
+
+          const receipt = reactiveCommands.start({
+            workspace_id: workspaceId,
+            workspace_root: workspace.root,
             command: cmd,
             cwd,
-            workspaceRoot: workspace.root,
-            tty,
-            columns,
-            rows,
-            yieldTimeMs,
-            maxOutputTokens,
+            event_type: CODEX_DURABLE_EVENT_TYPE,
+            timeout_seconds,
           });
+          const durableSnapshot = await durableProcessSnapshot(
+            context,
+            workspaceId,
+            receipt.job_id,
+            yieldTimeMs ?? DEFAULT_CODEX_YIELD_MS,
+            maxOutputTokens,
+          );
+          if (!durableSnapshot.running) {
+            reactiveCommands.discardTerminal(receipt.job_id);
+          }
+          return durableSnapshot;
         },
         processLogFields,
       );
@@ -252,14 +301,14 @@ function registerCodexProcessTools(context: ToolRegistrationContext): void {
     {
       title: "Write to process",
       description:
-        "Interact with a process returned by exec_command. Use this for PTY/input-driven sessions; for long non-interactive work prefer runtime_run + runtime_wait instead of repeated polling. Pass \\u0003 to send Ctrl-C.",
+        "Continue a session returned by exec_command. Omit chars to wait for more output or completion. Interactive numeric sessions accept input; durable non-interactive job sessions accept polling and \\u0003 to cancel. Never rerun the original command just because it is still running.",
       inputSchema: {
         workspace_id: z
           .string()
           .describe("Workspace identifier used to start the process."),
         session_id: z
-          .number()
-          .describe("Process session identifier returned by exec_command."),
+          .union([z.number(), z.string().regex(/^job_[A-Za-z0-9]+$/)])
+          .describe("Opaque process session identifier returned by exec_command."),
         chars: z
           .string()
           .optional()
@@ -293,7 +342,7 @@ function registerCodexProcessTools(context: ToolRegistrationContext): void {
           .number()
           .int()
           .positive()
-          .max(100_000)
+          .max(64_000)
           .optional()
           .describe("Approximate output token budget. Defaults to 10000."),
       },
@@ -320,6 +369,28 @@ function registerCodexProcessTools(context: ToolRegistrationContext): void {
         startedAt,
         async () => {
           await workspaces.getWorkspace(workspaceId);
+          if (typeof sessionId === "string") {
+            if (columns !== undefined || rows !== undefined) {
+              throw new Error(
+                "PTY resize is available only for interactive numeric sessions.",
+              );
+            }
+            if (chars && chars !== "\u0003") {
+              throw new Error(
+                "Durable non-interactive sessions do not accept stdin. Start exec_command with tty=true for an input-driven process.",
+              );
+            }
+            if (chars === "\u0003") {
+              reactiveCommands.signal(sessionId, workspaceId, "SIGINT");
+            }
+            return durableProcessSnapshot(
+              context,
+              workspaceId,
+              sessionId,
+              yieldTimeMs ?? DEFAULT_CODEX_POLL_YIELD_MS,
+              maxOutputTokens,
+            );
+          }
           return processSessions.write({
             workspaceId,
             sessionId,
@@ -338,7 +409,69 @@ function registerCodexProcessTools(context: ToolRegistrationContext): void {
   );
 }
 
-export function processLogFields(result: ProcessSnapshot): Partial<ToolLogFields> {
+async function durableProcessSnapshot(
+  context: ToolRegistrationContext,
+  workspaceId: string,
+  jobId: string,
+  yieldTimeMs: number,
+  maxOutputTokens = DEFAULT_MAX_OUTPUT_TOKENS,
+): Promise<CodexProcessSnapshot> {
+  const { runtimeEvents, reactiveCommands } = context;
+  let job = reactiveCommands.get(jobId);
+  if (!job || job.workspace_id !== workspaceId) {
+    throw new Error(`Unknown durable process session ${jobId} for workspace ${workspaceId}.`);
+  }
+
+  if (job.status === "running" && yieldTimeMs > 0) {
+    await runtimeEvents.wait({
+      after_sequence: 0,
+      workspace_id: workspaceId,
+      type: job.event_type,
+      correlation_id: jobId,
+      timeout_ms: Math.min(MAX_PROCESS_YIELD_MS, Math.max(0, yieldTimeMs)),
+    });
+    job = reactiveCommands.get(jobId) ?? job;
+  }
+
+  const wallTimeMs = Math.max(
+    0,
+    Date.parse(job.completed_at ?? new Date().toISOString())
+      - Date.parse(job.started_at),
+  );
+  if (job.status === "running") {
+    return {
+      sessionId: jobId,
+      output: "",
+      outputTruncated: false,
+      running: true,
+      wallTimeMs,
+    };
+  }
+
+  const maxCharacters = Math.max(
+    256,
+    Math.min(256_000, Math.floor(maxOutputTokens) * 4),
+  );
+  const evidence = reactiveCommands.readEvidence(job.evidence_ref, maxCharacters);
+  const orphaned = job.status === "orphaned";
+  const output = orphaned
+    ? [
+        evidence.text.replace(/\n$/, ""),
+        "Flyto2 Runtime restarted while this durable command was running; the final side-effect outcome is uncertain. Do not rerun it blindly.",
+      ].filter(Boolean).join("\n")
+    : evidence.text;
+
+  return {
+    output,
+    outputTruncated: evidence.truncated,
+    running: false,
+    exitCode: job.exit_code,
+    signal: orphaned ? "RUNTIME_RESTART" : job.signal,
+    wallTimeMs,
+  };
+}
+
+export function processLogFields(result: CodexProcessSnapshot): Partial<ToolLogFields> {
   const success = result.running || (!result.signal && result.exitCode === 0);
   const termination = result.signal
     ? `Process terminated by signal ${result.signal}.`

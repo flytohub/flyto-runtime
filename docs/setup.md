@@ -50,21 +50,15 @@ Complete OAuth with the Runtime Owner credential. Keep the owner credential and 
 
 Runtime serves its MCP and OAuth discovery routes from the same origin. A reverse proxy or tunnel must therefore forward the whole origin, not only the `/mcp` path.
 
-### Full Runtime tool surface
+### Compact model-facing tool surface
 
-A current ChatGPT connection can expose:
+Flyto2 Runtime keeps scheduling, durable jobs, events, evidence, watches, recovery, service state, and tunnel supervision behind the execution boundary. A model should normally see only the primitives it needs to do work.
 
-- `runtime_manifest`
-- `runtime_run`
-- `runtime_wait`
-- `runtime_events`
-- `runtime_evidence`
-- `runtime_signal`
-- `runtime_watch`
-- `runtime_unwatch`
-- `runtime_watches`
+Codex mode exposes `open_workspace`, `read`, `apply_patch`, `exec_command`, `write_stdin`, and `show_changes`. Claude compatibility mode exposes `open_workspace`, `read`, `write`, `edit`, `bash`, and `show_changes`.
 
-If ChatGPT still shows only an older cached workspace/read/write/edit/bash surface, reconnect the connector or start a fresh conversation after Runtime has restarted. This is a client schema-cache issue. The legacy surface remains non-blocking for long commands through durable Runtime jobs.
+Long non-interactive Codex commands automatically continue as durable Runtime jobs behind `exec_command`; the returned session is continued with `write_stdin`. Claude compatibility `bash` uses the same internal durable runner. Models do not need separate event, wait, or evidence tools for normal work.
+
+If ChatGPT still shows a stale tool list, reconnect the connector or start a fresh conversation after Runtime has restarted. This is a client schema-cache issue.
 
 ## Claude, Codex, and custom MCP clients
 

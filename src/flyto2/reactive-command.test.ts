@@ -142,6 +142,66 @@ test("reactive timeout cannot be converted into success by a clean SIGTERM handl
   assert.equal(runner.get(receipt.job_id)?.status, "failed");
 });
 
+test("reactive command can be cancelled through the internal process boundary", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "flyto2-reactive-signal-"));
+  const events = new RuntimeEventStore(stateDir);
+  const runner = new ReactiveCommandRunner(stateDir, events);
+  t.after(async () => {
+    runner.shutdown();
+    events.close();
+    await rm(stateDir, { recursive: true, force: true });
+  });
+
+  const receipt = runner.start({
+    workspace_id: "ws-signal",
+    workspace_root: stateDir,
+    cwd: stateDir,
+    command: "node -e \"setInterval(() => {}, 1000)\"",
+  });
+  assert.equal(runner.get(receipt.job_id)?.status, "running");
+  runner.signal(receipt.job_id, "ws-signal", "SIGINT");
+
+  const event = await events.wait({
+    correlation_id: receipt.job_id,
+    type: receipt.event_type,
+    timeout_ms: 2_000,
+  });
+  assert.equal(event?.payload.success, false);
+  assert.equal(runner.get(receipt.job_id)?.status, "failed");
+});
+
+test("Runtime restart marks an unresolved durable command orphaned without replay", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "flyto2-reactive-restart-"));
+  const firstEvents = new RuntimeEventStore(stateDir);
+  const firstRunner = new ReactiveCommandRunner(stateDir, firstEvents);
+  const receipt = firstRunner.start({
+    workspace_id: "ws-restart",
+    workspace_root: stateDir,
+    cwd: stateDir,
+    command: "node -e \"setInterval(() => {}, 1000)\"",
+  });
+
+  firstRunner.shutdown();
+  firstEvents.close();
+
+  const recoveredEvents = new RuntimeEventStore(stateDir);
+  const recoveredRunner = new ReactiveCommandRunner(stateDir, recoveredEvents);
+  try {
+    const recovered = recoveredRunner.get(receipt.job_id);
+    assert.equal(recovered?.status, "orphaned");
+    const orphaned = recoveredEvents.list({
+      correlation_id: receipt.job_id,
+      type: "process.orphaned",
+    });
+    assert.equal(orphaned.length, 1);
+    assert.equal(orphaned[0]?.payload.retry_safe, false);
+  } finally {
+    recoveredRunner.shutdown();
+    recoveredEvents.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 test("reactive command failure emits failure facts without hiding evidence", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "flyto2-reactive-"));
   const events = new RuntimeEventStore(stateDir);

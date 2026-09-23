@@ -39,6 +39,7 @@ Run `devspace init` to create both files. `devspace config set publicBaseUrl
   },
   "tools": {
     "mode": "codex",
+    "exposeRuntimeInternals": false,
   },
   "ui": {
     "enabled": true,
@@ -101,6 +102,12 @@ After restarting, refresh tokens for removed aliases can no longer mint tokens.
 The dedicated MCP tools `grep`, `glob`, and `ls` are not exposed. Each mode uses
 its shell tool with programs such as `rg`, `find`, and `ls` when it needs those
 operations.
+
+`tools.exposeRuntimeInternals` defaults to `false`. Set it to `true` only for
+Runtime development or diagnostics when direct access to internal manifest,
+event, evidence, signal, and filesystem-watch tools is required. Normal model
+work should leave these mechanics hidden behind `exec_command` / `write_stdin`
+or the Claude compatibility `bash` tool.
 
 DevSpace attaches Apps UI metadata only to `open_workspace` and `show_changes`.
 This avoids rendering an iframe for every read, edit, search, or command call.

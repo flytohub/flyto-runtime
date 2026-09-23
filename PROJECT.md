@@ -15,6 +15,15 @@ Flyto2 Runtime is a standalone local execution runtime for coding and other mach
 - reactive background commands with lazy local evidence
 - persistent native filesystem watches for external editor/Git/build changes
 
+## Model-facing boundary
+
+Runtime internals are not the model API. In normal Codex mode the model-facing
+surface is intentionally limited to workspace, read, patch, command/process,
+and review primitives. Durable jobs, event streams, evidence, watches,
+recovery, service lifecycle, and tunnel supervision remain Runtime-owned
+implementation details unless an operator explicitly enables diagnostic
+internals.
+
 ## Does not own
 
 - Flyto2 Cloud tenancy, billing or hosted UI
