@@ -86,14 +86,19 @@ assert.match(clientConnectionInstructions("custom", "http://127.0.0.1:7676/mcp")
 
 {
   const { suggestedProjectRoots } = await import("./onboarding.js");
-  const base = { homeDirectory: "/Users/me", runtimePackageRoot: "/Users/me/Flyto2 Runtime" };
+  const { resolve: native } = await import("node:path");
+  const home = native("/Users/me");
+  const runtime = native("/Users/me/Flyto2 Runtime");
+  const base = { homeDirectory: home, runtimePackageRoot: runtime };
   // Existing configuration always wins.
-  assert.equal(suggestedProjectRoots({ ...base, configuredRoots: ["/a", "/b"], cwd: "/Users/me/Flyto2 Runtime" }), "/a, /b");
+  assert.equal(suggestedProjectRoots({ ...base, configuredRoots: ["/a", "/b"], cwd: runtime }), "/a, /b");
   // The launcher's own directory, anything inside it, and the whole home are never offered.
-  assert.equal(suggestedProjectRoots({ ...base, configuredRoots: [], cwd: "/Users/me/Flyto2 Runtime" }), "");
-  assert.equal(suggestedProjectRoots({ ...base, configuredRoots: [], cwd: "/Users/me/Flyto2 Runtime/dist" }), "");
-  assert.equal(suggestedProjectRoots({ ...base, configuredRoots: [], cwd: "/Users/me" }), "");
+  assert.equal(suggestedProjectRoots({ ...base, configuredRoots: [], cwd: runtime }), "");
+  assert.equal(suggestedProjectRoots({ ...base, configuredRoots: [], cwd: native(runtime, "dist") }), "");
+  assert.equal(suggestedProjectRoots({ ...base, configuredRoots: [], cwd: home }), "");
   // A sibling that merely shares the prefix is a real project.
-  assert.equal(suggestedProjectRoots({ ...base, configuredRoots: [], cwd: "/Users/me/Flyto2 Runtime Notes" }), "/Users/me/Flyto2 Runtime Notes");
-  assert.equal(suggestedProjectRoots({ ...base, configuredRoots: [], cwd: "/Users/me/Projects/app" }), "/Users/me/Projects/app");
+  const sibling = native("/Users/me/Flyto2 Runtime Notes");
+  assert.equal(suggestedProjectRoots({ ...base, configuredRoots: [], cwd: sibling }), sibling);
+  const project = native("/Users/me/Projects/app");
+  assert.equal(suggestedProjectRoots({ ...base, configuredRoots: [], cwd: project }), project);
 }

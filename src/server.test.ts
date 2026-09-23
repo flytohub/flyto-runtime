@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { access, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { platform, tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -1787,11 +1787,13 @@ test("open_workspace names the allowed roots so a host never has to guess or sea
   });
   const deniedText = await denied.text();
   assert.match(deniedText, /outside allowed roots/);
-  assert.ok(deniedText.includes(`Allowed roots: ${root}`), deniedText);
+  // Compare by folder name: Windows may spell the same root as an 8.3 short path.
+  assert.match(deniedText, /Allowed roots: /);
+  assert.ok(deniedText.includes(basename(root)), deniedText);
   assert.match(deniedText, /do not search outside these roots/);
 
   const listed = await postModernMcp(localBaseUrl, accessToken, "tools/list", {});
   const tools = (await listed.json() as { result: { tools: Array<{ name: string; inputSchema: { properties: { path?: { description?: string } } } }> } }).result.tools;
   const pathDescription = tools.find((tool) => tool.name === "open_workspace")?.inputSchema.properties.path?.description ?? "";
-  assert.ok(pathDescription.includes(`Allowed roots: ${root}`), pathDescription);
+  assert.ok(pathDescription.includes("Allowed roots: ") && pathDescription.includes(basename(root)), pathDescription);
 });
