@@ -26,6 +26,7 @@ export interface WindowsTunnelConnectorSpec {
   taskName: string;
   metricsPort: number;
   fileStem: string;
+  protocol: "quic" | "http2";
 }
 
 export const WINDOWS_TUNNEL_CONNECTORS: readonly WindowsTunnelConnectorSpec[] = [
@@ -33,11 +34,13 @@ export const WINDOWS_TUNNEL_CONNECTORS: readonly WindowsTunnelConnectorSpec[] = 
     taskName: FLYTO2_RUNTIME_WINDOWS_TUNNEL_TASK,
     metricsPort: 20_241,
     fileStem: "tunnel-primary",
+    protocol: "quic",
   },
   {
     taskName: FLYTO2_RUNTIME_WINDOWS_TUNNEL_STANDBY_TASK,
     metricsPort: 20_242,
     fileStem: "tunnel-standby",
+    protocol: "http2",
   },
 ];
 
@@ -142,7 +145,7 @@ export function renderWindowsTunnelTask(
     quoteWindowsArgument(profile.config_path),
     "--no-autoupdate",
     "--protocol",
-    "http2",
+    spec.protocol,
     "--metrics",
     `127.0.0.1:${spec.metricsPort}`,
     "run",

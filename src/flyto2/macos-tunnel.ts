@@ -19,11 +19,12 @@ interface TunnelConnectorSpec {
   label: string;
   metricsPort: number;
   logSuffix: string;
+  protocol: "quic" | "http2";
 }
 
 const TUNNEL_CONNECTORS: readonly TunnelConnectorSpec[] = [
-  { label: FLYTO2_RUNTIME_TUNNEL_LABEL, metricsPort: 20_241, logSuffix: "" },
-  { label: FLYTO2_RUNTIME_TUNNEL_STANDBY_LABEL, metricsPort: 20_242, logSuffix: "-standby" },
+  { label: FLYTO2_RUNTIME_TUNNEL_LABEL, metricsPort: 20_241, logSuffix: "", protocol: "quic" },
+  { label: FLYTO2_RUNTIME_TUNNEL_STANDBY_LABEL, metricsPort: 20_242, logSuffix: "-standby", protocol: "http2" },
 ];
 
 interface LegacyMacKitSettings {
@@ -242,7 +243,7 @@ export function renderNativeTunnelLaunchAgent(
     `    <string>${xmlEscape(profile.config_path)}</string>`,
     "    <string>--no-autoupdate</string>",
     "    <string>--protocol</string>",
-    "    <string>http2</string>",
+    `    <string>${xmlEscape(connector.protocol)}</string>`,
     "    <string>--metrics</string>",
     `    <string>127.0.0.1:${connector.metricsPort}</string>`,
     "    <string>run</string>",

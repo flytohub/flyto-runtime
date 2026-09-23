@@ -37,12 +37,13 @@ test("Windows tunnel tasks are redundant and use independent metrics ports", () 
   for (const xml of [primary, standby]) {
     assert.match(xml, /cloudflared\.exe/);
     assert.match(xml, /--no-autoupdate/);
-    assert.match(xml, /--protocol http2/);
     assert.match(xml, /run tunnel-123/);
     assert.match(xml, /<RestartOnFailure>/);
     assert.match(xml, /<Interval>PT1M<\/Interval>/);
     assert.match(xml, /<Count>255<\/Count>/);
   }
+  assert.match(primary, /--protocol quic/);
+  assert.match(standby, /--protocol http2/);
   assert.match(primary, /127\.0\.0\.1:20241/);
   assert.match(standby, /127\.0\.0\.1:20242/);
 });

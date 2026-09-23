@@ -138,7 +138,11 @@ test("legacy fixed tunnel assets migrate into Flyto2 Runtime-owned storage", {
     /127\.0\.0\.1:20242/,
   );
 
-  const initialPlist = await readFile(status.plist_path, "utf8");
+  const primaryPlist = await readFile(status.plist_path, "utf8");
+  assert.match(primaryPlist, /<string>quic<\/string>/);
+  assert.match(await readFile(standbyPlistPath, "utf8"), /<string>http2<\/string>/);
+
+  const initialPlist = primaryPlist;
   await writeFile(
     status.plist_path,
     initialPlist.replace("<integer>1</integer>", "<integer>9</integer>"),
