@@ -59,7 +59,7 @@ All of these work with the Cloud bridge absent.
 4. normalize one Cloud job into a provider-neutral Flyto2 assignment;
 5. claim/lease/progress/complete through the existing Cloud job lifecycle.
 
-The bridge does not decide how the assignment runs. That is an executor concern.
+The bridge does not decide how the assignment runs. That is an executor concern. When Cloud pairing returns an optional `space_id`, the bridge persists it as opaque credential metadata only; Runtime does not interpret AI Space, MCP routing, tenancy, or War Room state from that value.
 
 ## Compatibility with upstream DevSpace
 

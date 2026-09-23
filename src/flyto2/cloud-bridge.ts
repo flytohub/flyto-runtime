@@ -19,6 +19,7 @@ export interface Flyto2CloudCredentials {
   device_secret: string;
   workspace_id: string;
   workspace_name?: string;
+  space_id?: string;
   paired_at: string;
 }
 
@@ -73,6 +74,10 @@ export class Flyto2CloudBridge {
     return this.credentials?.device_id;
   }
 
+  get spaceId(): string | undefined {
+    return this.credentials?.space_id;
+  }
+
   async pair(
     pairingCode: string,
     manifest: Flyto2RuntimeManifest,
@@ -109,6 +114,7 @@ export class Flyto2CloudBridge {
       device_secret: deviceSecret,
       workspace_id: workspaceId,
       workspace_name: optionalString(body, "workspace_name"),
+      space_id: optionalString(body, "space_id"),
       paired_at: new Date().toISOString(),
     };
     this.writeCredentials(credentials);
@@ -276,6 +282,7 @@ export class Flyto2CloudBridge {
       device_secret: value.device_secret,
       workspace_id: value.workspace_id,
       workspace_name: value.workspace_name,
+      space_id: value.space_id,
       paired_at: value.paired_at ?? "",
     };
   }
