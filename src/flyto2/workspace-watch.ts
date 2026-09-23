@@ -83,7 +83,7 @@ export class WorkspaceWatchRegistry {
   start(input: WorkspaceWatchInput): WorkspaceWatchRecord {
     if (this.closed) throw new Error("Workspace watch registry is closed.");
 
-    const canonicalRoot = resolve(input.canonical_root);
+    const canonicalRoot = canonicalExistingPath(input.canonical_root);
     assertRootIdentity(input.workspace_root, canonicalRoot);
     const targetPath = canonicalWatchTarget(input.target_path, canonicalRoot);
 
@@ -434,8 +434,8 @@ function assertRootIdentity(
   if (!existsSync(workspaceRoot)) {
     throw new Error(`Workspace root no longer exists: ${workspaceRoot}`);
   }
-  const currentCanonical = realpathSync.native(workspaceRoot);
-  const expectedCanonical = realpathSync.native(canonicalRoot);
+  const currentCanonical = canonicalExistingPath(workspaceRoot);
+  const expectedCanonical = canonicalExistingPath(canonicalRoot);
   if (canonicalPathKey(currentCanonical) !== canonicalPathKey(expectedCanonical)) {
     throw new Error("Workspace root canonical identity changed; refusing to restore filesystem watch.");
   }
@@ -448,11 +448,16 @@ function canonicalWatchTarget(
   if (!existsSync(targetPath)) {
     throw new Error(`Watch target does not exist: ${targetPath}`);
   }
-  const canonicalTarget = realpathSync.native(targetPath);
-  if (!isPathInside(canonicalTarget, canonicalRoot)) {
+  const canonicalTarget = canonicalExistingPath(targetPath);
+  const canonicalBoundary = canonicalExistingPath(canonicalRoot);
+  if (!isPathInside(canonicalTarget, canonicalBoundary)) {
     throw new Error("Watch target escapes the workspace canonical root.");
   }
   return canonicalTarget;
+}
+
+function canonicalExistingPath(path: string): string {
+  return realpathSync.native(path);
 }
 
 function canonicalPathKey(path: string): string {
@@ -461,7 +466,7 @@ function canonicalPathKey(path: string): string {
 }
 
 function isPathInside(path: string, root: string): boolean {
-  const relationship = relative(resolve(root), resolve(path));
+  const relationship = relative(canonicalPathKey(root), canonicalPathKey(path));
   return relationship === ""
     || (!relationship.startsWith("..") && relationship !== ".." && !relationship.startsWith(`..${sep}`));
 }
