@@ -62,6 +62,13 @@ import { pruneStaleManagedWorktrees } from "./worktree-prune.js";
 import { Flyto2CloudBridge } from "./flyto2/cloud-bridge.js";
 import { runtimeManifest } from "./flyto2/manifest.js";
 import {
+  allConnectionDetails,
+  copyToClipboard,
+  formatSetupCompletion,
+  type SetupCompletionDetails,
+  type SetupNativeServiceStatus,
+} from "./setup-completion.js";
+import {
   DEFAULT_PLUGIN_DESCRIPTION,
   DEFAULT_PLUGIN_DISPLAY_NAME,
   DEFAULT_PLUGIN_NAME,
@@ -184,7 +191,7 @@ async function ensureConfigured(): Promise<void> {
   await runInit({ force: false });
 }
 
-async function runInit({ force }: { force: boolean }): Promise<void> {
+async function runInit({ force, returnToMenu = false }: { force: boolean; returnToMenu?: boolean }): Promise<void> {
   const files = loadDevspaceFiles();
   if (!force && files.configExists && files.authExists) {
     prompts.log.info(`DevSpace is already configured at ${files.dir}`);
@@ -356,11 +363,14 @@ async function runInit({ force }: { force: boolean }): Promise<void> {
         "Install the Subagents skill",
       );
     }
-    const nextSteps = [
-      "Choose Start Runtime in the launcher, or run `flyto2-runtime serve`, then authorize your MCP client.",
-      useCodingAgents && selectedProviders.length > 0 ? "The Subagents skill is optional for local CLI delegation." : undefined,
-    ].filter(Boolean).join(" ");
-    prompts.outro(nextSteps);
+    if (useCodingAgents && selectedProviders.length > 0) {
+      prompts.log.info("The Subagents skill is optional for local CLI delegation.");
+    }
+    await showSetupCompletion({
+      mcpUrl: connectionUrl,
+      ownerPassword: auth.ownerToken,
+      ...(chatGptPluginPath ? { pluginPath: chatGptPluginPath } : {}),
+    }, returnToMenu);
   } catch (error) {
     if (error instanceof SetupCancelledError) {
       prompts.cancel("Setup cancelled");
@@ -368,6 +378,115 @@ async function runInit({ force }: { force: boolean }): Promise<void> {
     }
     throw error;
   }
+}
+
+
+async function showSetupCompletion(
+  details: SetupCompletionDetails,
+  returnToMenu: boolean,
+): Promise<void> {
+  for (;;) {
+    const snapshot = await inspectSetupRuntime();
+    prompts.note(formatSetupCompletion(details, snapshot), "Setup complete");
+
+    const action = await prompts.select({
+      message: "Setup complete — what would you like to do?",
+      options: [
+        { value: "copy-all", label: "Copy all connection details" },
+        { value: "copy-url", label: "Copy MCP URL" },
+        { value: "copy-password", label: "Copy Owner password" },
+        ...(snapshot.service.supported
+          ? [{
+              value: "runtime",
+              label: snapshot.healthOk ? "Restart Runtime" : "Start Runtime",
+              hint: snapshot.healthOk ? "Restart the native background service" : "Install/start the native background service",
+            }]
+          : []),
+        { value: "retry", label: "Retry health check" },
+        { value: "back", label: returnToMenu ? "Back to main menu" : "Done" },
+      ],
+    });
+
+    if (prompts.isCancel(action) || action === "back") {
+      if (returnToMenu) {
+        prompts.log.success("Setup complete.");
+      } else {
+        prompts.outro("Setup complete.");
+      }
+      return;
+    }
+
+    try {
+      switch (action) {
+        case "copy-all":
+          copyToClipboard(allConnectionDetails(details));
+          prompts.log.success("Connection details copied.");
+          break;
+        case "copy-url":
+          copyToClipboard(details.mcpUrl);
+          prompts.log.success("MCP URL copied.");
+          break;
+        case "copy-password":
+          copyToClipboard(details.ownerPassword);
+          prompts.log.success("Owner password copied.");
+          break;
+        case "runtime": {
+          const service = await import("./flyto2/native-service.js");
+          const status = service.nativeRuntimeServiceStatus();
+          if (status.installed && status.loaded) {
+            service.restartNativeRuntimeService();
+            prompts.log.success("Flyto2 Runtime restarted.");
+          } else {
+            service.startNativeRuntimeService();
+            prompts.log.success("Flyto2 Runtime started.");
+          }
+          break;
+        }
+        case "retry":
+          break;
+      }
+    } catch (error) {
+      prompts.log.error(error instanceof Error ? error.message : String(error));
+    }
+  }
+}
+
+async function inspectSetupRuntime(): Promise<{
+  healthOk: boolean;
+  service: SetupNativeServiceStatus;
+}> {
+  const config = loadConfig();
+  const localHost = ["0.0.0.0", "::"].includes(config.host) ? "127.0.0.1" : config.host;
+  const formattedHost = localHost.includes(":") ? "[" + localHost + "]" : localHost;
+  const healthUrl = "http://" + formattedHost + ":" + config.port + "/healthz";
+
+  let healthOk = false;
+  try {
+    const response = await fetch(healthUrl, { signal: AbortSignal.timeout(1500) });
+    const health = await response.json() as { ok?: boolean; name?: string };
+    healthOk = response.ok && health.ok === true && health.name === "flyto2-runtime";
+  } catch {
+    healthOk = false;
+  }
+
+  if (process.platform !== "darwin" && process.platform !== "win32") {
+    return {
+      healthOk,
+      service: { supported: false, installed: false, loaded: false },
+    };
+  }
+
+  const service = await import("./flyto2/native-service.js");
+  const status = service.nativeRuntimeServiceStatus();
+  return {
+    healthOk,
+    service: {
+      supported: status.supported,
+      installed: status.installed,
+      loaded: status.loaded,
+      ...("state" in status && typeof status.state === "string" ? { state: status.state } : {}),
+    },
+  };
 }
 
 async function serve(): Promise<void> {
@@ -897,7 +1016,7 @@ async function runInteractiveMenu(): Promise<void> {
         break;
       }
       case "setup":
-        await runInit({ force: true });
+        await runInit({ force: true, returnToMenu: true });
         break;
       case "plugin":
         await runPluginCommand(["build"]);

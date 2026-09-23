@@ -75,18 +75,27 @@ export function parsePatch(patch: string): PatchAction[] {
     if (header.startsWith("*** Add File: ")) {
       const path = header.slice("*** Add File: ".length);
       const content: string[] = [];
+      let finalNewline = true;
       while (index < lines.length && !isTopLevelHeader(lines[index])) {
         const line = lines[index++];
+        if (line === "\\ No newline at end of file") {
+          finalNewline = false;
+          continue;
+        }
         if (!line.startsWith("+")) {
-          throw patchError(`added file line must start with +: ${line}`);
+          throw patchError("added file line must start with +: " + line);
         }
         content.push(line.slice(1));
       }
-      if (content.length === 0) throw patchError(`add file for ${path} has no content`);
+      if (content.length === 0 && finalNewline) {
+        throw patchError("add file for " + path + " has no content");
+      }
       actions.push({
         kind: "add",
         path,
-        content: `${content.join("\n")}\n`,
+        content: content.length === 0
+          ? ""
+          : content.join("\n") + (finalNewline ? "\n" : ""),
       });
       continue;
     }

@@ -1117,11 +1117,23 @@ export function createServer(
 
     let requestBody: unknown;
     try {
-      const legacyBashCall = config.toolMode === "codex"
-        && req.body?.method === "tools/call"
-        && req.body?.params?.name === "bash";
+      const legacyToolName = req.body?.method === "tools/call"
+        && typeof req.body?.params?.name === "string"
+        ? req.body.params.name
+        : undefined;
       requestBody = normalizeLegacyMcpInput(req.body, config.toolMode);
-      if (legacyBashCall) req.headers["mcp-name"] = "exec_command";
+      const normalizedToolName = requestBody
+        && typeof requestBody === "object"
+        && "params" in requestBody
+        && requestBody.params
+        && typeof requestBody.params === "object"
+        && "name" in requestBody.params
+        && typeof requestBody.params.name === "string"
+        ? requestBody.params.name
+        : undefined;
+      if (legacyToolName && normalizedToolName && legacyToolName !== normalizedToolName) {
+        req.headers["mcp-name"] = normalizedToolName;
+      }
     } catch (error) {
       sendJsonRpcError(res, 400, -32602, error instanceof Error ? error.message : "Invalid tool arguments");
       return;

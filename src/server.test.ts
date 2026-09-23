@@ -1628,6 +1628,38 @@ test("existing ChatGPT camelCase tool calls survive the Runtime migration", asyn
   assert.match(await conflict.text(), /Conflicting workspaceId/);
 });
 
+test("cached ChatGPT write and edit calls execute against the Codex tool surface", async (t) => {
+  const { root, localBaseUrl, accessToken } = await httpServerFixture(t, "runtime-cached-write-edit-", "codex");
+  const opened = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
+    name: "open_workspace", arguments: { path: root },
+  });
+  assert.equal(opened.status, 200, await opened.clone().text());
+  const openedBody = await opened.json() as { result: { structuredContent: { workspace_id: string } } };
+  const workspaceId = openedBody.result.structuredContent.workspace_id;
+
+  const written = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
+    name: "write",
+    arguments: {
+      workspaceId,
+      path: "cached-note.txt",
+      content: "before\n",
+    },
+  });
+  assert.equal(written.status, 200, await written.clone().text());
+  assert.equal(await readFile(join(root, "cached-note.txt"), "utf8"), "before\n");
+
+  const edited = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
+    name: "edit",
+    arguments: {
+      workspaceId,
+      path: "cached-note.txt",
+      edits: [{ oldText: "before", newText: "after" }],
+    },
+  });
+  assert.equal(edited.status, 200, await edited.clone().text());
+  assert.equal(await readFile(join(root, "cached-note.txt"), "utf8"), "after\n");
+});
+
 test("cached ChatGPT bash calls execute against the Codex tool surface", async (t) => {
   const { root, localBaseUrl, accessToken } = await httpServerFixture(t, "runtime-cached-bash-", "codex");
   const opened = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
