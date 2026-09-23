@@ -1493,6 +1493,7 @@ function postModernMcp(
   accessToken: string | undefined,
   method: string,
   params: Record<string, unknown>,
+  extraHeaders: Record<string, string> = {},
 ): Promise<Response> {
   const mcpName = typeof params.name === "string"
     ? params.name
@@ -1507,6 +1508,7 @@ function postModernMcp(
       "mcp-method": method,
       "mcp-protocol-version": "2026-07-28",
       ...(mcpName ? { "mcp-name": mcpName } : {}),
+      ...extraHeaders,
     },
     body: JSON.stringify({
       jsonrpc: "2.0",
@@ -1735,4 +1737,45 @@ test("a retried cached ChatGPT edit with the same operation_id replays instead o
   const reused = await edit("= 3");
   assert.match(await reused.text(), /already used with different arguments/);
   assert.equal(await readFile(join(root, "retry.txt"), "utf8"), "count = 2\n");
+});
+
+test("a cached ChatGPT bash call waits past the Codex yield window and polls via @flyto2/job", async (t) => {
+  const { root, localBaseUrl, accessToken } = await httpServerFixture(t, "runtime-cached-long-bash-", "codex");
+  const opened = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
+    name: "open_workspace", arguments: { path: root },
+  });
+  const openedBody = await opened.json() as { result: { structuredContent: { workspace_id: string } } };
+  const workspaceId = openedBody.result.structuredContent.workspace_id;
+
+  // Longer than the 3s Codex yield: a modern client gets a session, a cached one the output.
+  const waited = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
+    name: "bash", arguments: { workspaceId, command: "sleep 5 && echo legacy-waited" },
+  });
+  assert.equal(waited.status, 200, await waited.clone().text());
+  const waitedText = await waited.text();
+  assert.match(waitedText, /legacy-waited/);
+  assert.doesNotMatch(waitedText, /write_stdin/);
+
+  const started = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
+    name: "exec_command", arguments: { workspace_id: workspaceId, cmd: "sleep 5 && echo polled-later" },
+  });
+  const startedBody = await started.json() as { result: { structuredContent: { session_id: string; running: boolean } } };
+  assert.equal(startedBody.result.structuredContent.running, true);
+  const polled = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
+    name: "bash", arguments: { workspaceId, command: `@flyto2/job ${startedBody.result.structuredContent.session_id}` },
+  });
+  assert.equal(polled.status, 200, await polled.clone().text());
+  assert.match(await polled.text(), /polled-later/);
+});
+
+test("a client cannot opt a modern exec_command into legacy wording by sending the header", async (t) => {
+  const { root, localBaseUrl, accessToken } = await httpServerFixture(t, "runtime-legacy-header-spoof-", "codex");
+  const opened = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
+    name: "open_workspace", arguments: { path: root },
+  });
+  const openedBody = await opened.json() as { result: { structuredContent: { workspace_id: string } } };
+  const response = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
+    name: "exec_command", arguments: { workspace_id: openedBody.result.structuredContent.workspace_id, cmd: "sleep 5" },
+  }, { "x-flyto2-legacy-shell": "1" });
+  assert.match(await response.text(), /Continue it with write_stdin/);
 });

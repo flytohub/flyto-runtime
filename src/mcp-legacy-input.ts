@@ -1,6 +1,13 @@
 // Existing ChatGPT connections can retain the upstream DevSpace tool schemas.
 // Translate only the known legacy surface at the transport boundary; published
 // Runtime schemas and durable-operation payloads remain canonical snake_case.
+// Set by the transport on calls it translated from a cached `bash`. A client
+// holding that catalog has no write_stdin, so the Codex process tools wait
+// longer and describe continuation as another `bash` call instead.
+export const LEGACY_SHELL_HEADER = "x-flyto2-legacy-shell";
+export const LEGACY_JOB_COMMAND = "@flyto2/job";
+const LEGACY_JOB_COMMAND_PATTERN = /^@flyto2\/job\s+(proc_[a-f0-9]{32}|job_[a-f0-9]{32})(\s+--cancel)?$/;
+
 export function normalizeLegacyMcpInput(body: unknown, toolMode?: "claude" | "codex"): unknown {
   if (!isRecord(body) || body.method !== "tools/call" || !isRecord(body.params)) return body;
   const params = body.params;
@@ -24,6 +31,21 @@ export function normalizeLegacyMcpInput(body: unknown, toolMode?: "claude" | "co
   }
 
   if (toolMode === "codex" && params.name === "bash") {
+    const job = typeof args.command === "string" ? LEGACY_JOB_COMMAND_PATTERN.exec(args.command.trim()) : null;
+    if (job) {
+      return {
+        ...body,
+        params: {
+          ...params,
+          name: "write_stdin",
+          arguments: {
+            workspace_id: args.workspace_id,
+            session_id: job[1],
+            ...(job[2] ? { chars: "\u0003" } : {}),
+          },
+        },
+      };
+    }
     renameArgument(args, "command", "cmd");
     renameArgument(args, "timeout", "timeout_seconds");
     return { ...body, params: { ...params, name: "exec_command", arguments: args } };

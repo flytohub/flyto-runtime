@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import * as z from "zod/v4";
 import { applyPatch } from "../apply-patch.js";
+import { LEGACY_JOB_COMMAND, LEGACY_SHELL_HEADER } from "../mcp-legacy-input.js";
 import {
   MAX_PROCESS_YIELD_MS,
   type ProcessSnapshot,
@@ -33,6 +34,7 @@ const CODEX_DURABLE_SESSION_PREFIX = "proc_";
 const DEFAULT_CODEX_YIELD_MS = 3_000;
 const DEFAULT_CODEX_INTERACTIVE_YIELD_MS = 250;
 const DEFAULT_CODEX_POLL_YIELD_MS = 5_000;
+const LEGACY_SHELL_WAIT_MS = 45_000;
 const DEFAULT_MAX_OUTPUT_TOKENS = 10_000;
 const CODEX_UNCERTAIN_OUTCOME_SIGNAL = "OUTCOME_UNCERTAIN";
 
@@ -53,9 +55,11 @@ const CODEX_REGISTRATIONS: readonly CodexRegistration[] = [
   registerCodexProcessTools,
 ];
 
-function processResult(snapshot: CodexProcessSnapshot): string {
+function processResult(snapshot: CodexProcessSnapshot, legacyShell = false): string {
   const status = snapshot.running
-    ? `Process is still running with session_id=${snapshot.sessionId}. Continue it with write_stdin.`
+    ? legacyShell
+      ? `Still running (session ${snapshot.sessionId}). Get more output with this same bash tool using command exactly: ${LEGACY_JOB_COMMAND} ${snapshot.sessionId} (append --cancel to stop it). Do not rerun the original command.`
+      : `Process is still running with session_id=${snapshot.sessionId}. Continue it with write_stdin.`
     : snapshot.signal === CODEX_UNCERTAIN_OUTCOME_SIGNAL
       ? "Process outcome is uncertain. Do not rerun the command blindly."
       : snapshot.signal
@@ -77,8 +81,8 @@ function processOutputSchema(): z.ZodRawShape {
   });
 }
 
-function processToolResponse(snapshot: CodexProcessSnapshot) {
-  const result = processResult(snapshot);
+function processToolResponse(snapshot: CodexProcessSnapshot, legacyShell = false) {
+  const result = processResult(snapshot, legacyShell);
   const content = [textBlock(result)];
   return {
     content,
@@ -239,7 +243,8 @@ function registerCodexProcessTools(context: ToolRegistrationContext): void {
       tty,
       working_directory,
       timeout_seconds,
-    }) => {
+    }, extra) => {
+      const legacyShell = isLegacyShellCall(extra);
       const startedAt = performance.now();
       const workspaceId = workspace_id;
       const workingDirectory = working_directory;
@@ -284,13 +289,15 @@ function registerCodexProcessTools(context: ToolRegistrationContext): void {
             event_type: CODEX_DURABLE_EVENT_TYPE,
             timeout_seconds,
           });
-          const durableSnapshot = await durableProcessSnapshot(
-            context,
-            workspaceId,
-            receipt.job_id,
-            DEFAULT_CODEX_YIELD_MS,
-            DEFAULT_MAX_OUTPUT_TOKENS,
-          );
+          const durableSnapshot = legacyShell
+            ? await awaitDurableProcess(context, workspaceId, receipt.job_id)
+            : await durableProcessSnapshot(
+                context,
+                workspaceId,
+                receipt.job_id,
+                DEFAULT_CODEX_YIELD_MS,
+                DEFAULT_MAX_OUTPUT_TOKENS,
+              );
           if (!durableSnapshot.running) {
             reactiveCommands.discardTerminal(receipt.job_id);
           }
@@ -299,7 +306,7 @@ function registerCodexProcessTools(context: ToolRegistrationContext): void {
         processLogFields,
       );
 
-      return processToolResponse(snapshot);
+      return processToolResponse(snapshot, legacyShell);
     },
   );
 
@@ -332,7 +339,8 @@ function registerCodexProcessTools(context: ToolRegistrationContext): void {
       workspace_id,
       session_id,
       chars,
-    }) => {
+    }, extra) => {
+      const legacyShell = isLegacyShellCall(extra);
       const startedAt = performance.now();
       const workspaceId = workspace_id;
       const sessionId = session_id;
@@ -362,20 +370,49 @@ function registerCodexProcessTools(context: ToolRegistrationContext): void {
           if (chars === "\u0003") {
             reactiveCommands.signal(jobId, workspaceId, "SIGINT");
           }
-          return durableProcessSnapshot(
-            context,
-            workspaceId,
-            jobId,
-            DEFAULT_CODEX_POLL_YIELD_MS,
-            DEFAULT_MAX_OUTPUT_TOKENS,
-          );
+          return legacyShell
+            ? awaitDurableProcess(context, workspaceId, jobId)
+            : durableProcessSnapshot(
+                context,
+                workspaceId,
+                jobId,
+                DEFAULT_CODEX_POLL_YIELD_MS,
+                DEFAULT_MAX_OUTPUT_TOKENS,
+              );
         },
         processLogFields,
       );
 
-      return processToolResponse(snapshot);
+      return processToolResponse(snapshot, legacyShell);
     },
   );
+}
+
+function isLegacyShellCall(extra: unknown): boolean {
+  const headers = (extra as { requestInfo?: { headers?: unknown } } | undefined)?.requestInfo?.headers;
+  if (headers instanceof Headers) return headers.get(LEGACY_SHELL_HEADER) === "1";
+  return (headers as Record<string, unknown> | undefined)?.[LEGACY_SHELL_HEADER] === "1";
+}
+
+// A cached-catalog client cannot continue a session, so give its command most
+// of a normal tool-call budget to finish before handing back a continuation.
+async function awaitDurableProcess(
+  context: ToolRegistrationContext,
+  workspaceId: string,
+  jobId: string,
+  budgetMs = LEGACY_SHELL_WAIT_MS,
+): Promise<CodexProcessSnapshot> {
+  const deadline = Date.now() + budgetMs;
+  let snapshot = await durableProcessSnapshot(context, workspaceId, jobId, Math.min(MAX_PROCESS_YIELD_MS, budgetMs));
+  while (snapshot.running && Date.now() < deadline) {
+    snapshot = await durableProcessSnapshot(
+      context,
+      workspaceId,
+      jobId,
+      Math.min(MAX_PROCESS_YIELD_MS, deadline - Date.now()),
+    );
+  }
+  return snapshot;
 }
 
 async function durableProcessSnapshot(

@@ -1,4 +1,4 @@
-import { normalizeLegacyMcpInput } from "./mcp-legacy-input.js";
+import { LEGACY_SHELL_HEADER, normalizeLegacyMcpInput } from "./mcp-legacy-input.js";
 import { translateLegacyCodexWrite } from "./mcp-legacy-codex-writes.js";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -1132,8 +1132,12 @@ export function createServer(
       const legacyToolName = config.toolMode === "codex" && req.body?.method === "tools/call"
         ? req.body?.params?.name
         : undefined;
+      delete req.headers[LEGACY_SHELL_HEADER];
       requestBody = normalizeLegacyMcpInput(req.body, config.toolMode);
-      if (legacyToolName === "bash") req.headers["mcp-name"] = "exec_command";
+      if (legacyToolName === "bash") {
+        req.headers[LEGACY_SHELL_HEADER] = "1";
+        req.headers["mcp-name"] = (requestBody as { params: { name: string } }).params.name;
+      }
       if (legacyToolName === "write" || legacyToolName === "edit") {
         requestBody = await translateLegacyCodexWrite(
           requestBody,

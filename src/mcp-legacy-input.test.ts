@@ -69,3 +69,18 @@ test("cached ChatGPT bash calls route to exec_command in Codex tool mode", () =>
   });
   assert.equal((normalizeLegacyMcpInput(body, "claude") as typeof body).params.name, "bash");
 });
+
+test("cached ChatGPT @flyto2/job commands continue a Codex process session", () => {
+  const session = `proc_${"a".repeat(32)}`;
+  const poll = (command: string) => normalizeLegacyMcpInput({ method: "tools/call", params: { name: "bash", arguments: {
+    workspaceId: "ws_a", command,
+  } } }, "codex") as { params: { name: string; arguments: Record<string, unknown> } };
+  assert.deepEqual(poll(`@flyto2/job ${session}`).params, {
+    name: "write_stdin", arguments: { workspace_id: "ws_a", session_id: session },
+  });
+  assert.deepEqual(poll(`  @flyto2/job ${session} --cancel `).params.arguments, {
+    workspace_id: "ws_a", session_id: session, chars: "\u0003",
+  });
+  assert.equal(poll("@flyto2/job not-a-session").params.name, "exec_command");
+  assert.equal(poll(`echo @flyto2/job ${session}`).params.name, "exec_command");
+});
