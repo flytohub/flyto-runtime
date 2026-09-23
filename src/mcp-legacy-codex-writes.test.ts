@@ -80,3 +80,21 @@ test("translation routes legacy calls to apply_patch and preserves operation_id"
   const untouched = { method: "tools/call", params: { name: "read", arguments: {} } };
   assert.equal(await translateLegacyCodexWrite(untouched, async () => { throw new Error("unused"); }, async () => ""), untouched);
 });
+
+test("a journaled retry reuses the first translation instead of re-reading the file", async () => {
+  const journal = new Map<string, string>();
+  const memo = async (id: string, _payload: unknown, translate: () => Promise<string>) => {
+    if (!journal.has(id)) journal.set(id, await translate());
+    return journal.get(id)!;
+  };
+  let file = "value = 1\n";
+  const call = { method: "tools/call", params: { name: "edit", arguments: {
+    workspace_id: "ws_a", path: "f.txt", operation_id: "op-edit-1", edits: [{ old_text: "= 1", new_text: "= 2" }],
+  } } };
+  const resolve = async (_id: string, path: string) => ({ relativePath: path, absolutePath: path });
+  const first = await translateLegacyCodexWrite(call, resolve, async () => file, memo) as { params: { arguments: { patch: string } } };
+  file = "value = 2\n"; // the first attempt already applied
+  const retry = await translateLegacyCodexWrite(call, resolve, async () => file, memo) as { params: { arguments: { patch: string } } };
+  assert.equal(retry.params.arguments.patch, first.params.arguments.patch);
+  await assert.rejects(translateLegacyCodexWrite(call, resolve, async () => file), /not found/);
+});

@@ -68,8 +68,11 @@ import {
   formatConnectionDetails,
   formatSetupStatus,
   setupIsConnectable,
+  describeServiceState,
+  nativeServiceState,
+  probeRuntimeHealth,
   type SetupConnectionDetails,
-  type SetupRuntimeStatus,
+  waitForRuntimeHealth,
 } from "./setup-completion.js";
 import {
   DEFAULT_PLUGIN_DESCRIPTION,
@@ -498,20 +501,6 @@ async function showSetupCompletion(options: SetupCompletionOptions): Promise<voi
   }
 }
 
-// A freshly started service needs a moment to bind; poll instead of reporting
-// the first failed probe as a failure.
-async function waitForRuntimeHealth(
-  probe: () => Promise<SetupRuntimeStatus>,
-  attempts = 10,
-): Promise<SetupRuntimeStatus> {
-  let status = await probe();
-  for (let attempt = 1; attempt < attempts && status.local !== "ok"; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    status = await probe();
-  }
-  return status;
-}
-
 async function serve(): Promise<void> {
   const sqliteStatus = checkSqliteNative();
   if (sqliteStatus !== "ok") {
@@ -630,6 +619,16 @@ async function runDoctor(): Promise<void> {
   try {
     const config = loadConfig();
     console.log(`Local MCP URL: http://${config.host}:${config.port}/mcp`);
+    const localHost = ["0.0.0.0", "::"].includes(config.host) ? "127.0.0.1" : config.host;
+    const localHealth = await probeRuntimeHealth(
+      `http://${localHost.includes(":") ? `[${localHost}]` : localHost}:${config.port}/healthz`,
+    );
+    console.log(`Local Runtime health: ${{
+      ok: "ok",
+      foreign: "another program answers on this port, not Flyto2 Runtime",
+      unreachable: "unreachable",
+      not_configured: "not configured",
+    }[localHealth]}`);
     console.log(`Public MCP URL: ${new URL("/mcp", config.publicBaseUrl).toString()}`);
     console.log(`Allowed roots: ${config.allowedRoots.join(", ")}`);
     console.log(`Allowed hosts: ${config.allowedHosts.join(", ")}`);
@@ -648,8 +647,9 @@ async function runDoctor(): Promise<void> {
       const tunnel = await import("./flyto2/native-tunnel.js");
       const runtimeService = service.nativeRuntimeServiceStatus();
       const tunnelStatus = tunnel.nativeTunnelStatus();
+      const serviceLastExit = "lastExitStatus" in runtimeService ? runtimeService.lastExitStatus : undefined;
       console.log(
-        `Background service: ${runtimeService.loaded ? "running" : runtimeService.installed ? "installed" : "not installed"} (${runtimeService.label})`,
+        `Background service: ${describeServiceState(nativeServiceState(runtimeService), serviceLastExit)} (${runtimeService.label})`,
       );
       console.log(
         `Tunnel redundancy: ${tunnelStatus.redundant ? "ready" : tunnelStatus.configured ? "degraded" : "not configured"} (${tunnelStatus.running_connectors}/${tunnelStatus.connector_count})`,

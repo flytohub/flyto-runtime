@@ -10,8 +10,11 @@ import {
   formatConnectionDetails,
   formatSetupStatus,
   maskSecret,
+  nativeServiceState,
   probeRuntimeHealth,
   setupIsConnectable,
+  waitForRuntimeHealth,
+  type SetupRuntimeStatus,
 } from "./setup-completion.js";
 
 const details = { mcpUrl: "https://runtime.example.com/mcp", ownerPassword: "owner-secret-1234" };
@@ -21,14 +24,14 @@ test("status reports each layer separately so a failure names its layer", async 
     localBaseUrl: "http://127.0.0.1:1",
     publicBaseUrl: "https://runtime.example.com",
     fetchHealth: async (url) => (url.startsWith("http://127.0.0.1") ? "ok" : "unreachable"),
-    serviceStatus: () => ({ supported: true, installed: true, loaded: true }),
+    serviceStatus: () => ({ supported: true, installed: true, loaded: true, state: "running", pid: 42 }),
   });
-  assert.deepEqual(status, { local: "ok", publicEndpoint: "unreachable", service: "loaded" });
+  assert.deepEqual(status, { local: "ok", publicEndpoint: "unreachable", service: "running" });
   assert.equal(setupIsConnectable(status), false);
   const lines = formatSetupStatus(status).join("\n");
   assert.match(lines, /\[ok\] Runtime: +Running/);
   assert.match(lines, /\[!!\] Public endpoint: +Unreachable/);
-  assert.match(lines, /\[ok\] Background service: Loaded/);
+  assert.match(lines, /\[ok\] Background service: Running/);
 });
 
 test("a local-only setup is connectable without a public endpoint", async () => {
@@ -96,4 +99,39 @@ test("clipboard uses the platform tool over stdin and falls back on Linux", asyn
   assert.equal(copied, true);
   assert.deepEqual(tried, ["wl-copy", "xclip"]);
   assert.equal(await copyToClipboard("x", "linux", async () => false), false);
+});
+
+test("a loaded launchd job without a process is reported as not running", async () => {
+  assert.equal(nativeServiceState({ supported: true, installed: true, loaded: true, state: "not running" }), "stopped");
+  assert.equal(nativeServiceState({ supported: true, installed: true, loaded: true, pid: 7 }), "running");
+  assert.equal(nativeServiceState({ supported: true, installed: true, loaded: true, state: "running" }), "running");
+  assert.equal(nativeServiceState({ supported: true, installed: true, loaded: false }), "installed");
+  assert.equal(nativeServiceState({ supported: true, installed: false, loaded: false }), "not_installed");
+  assert.equal(nativeServiceState({ supported: false, installed: false, loaded: false }), "unsupported");
+  const status = await collectSetupStatus({
+    localBaseUrl: "http://127.0.0.1:1",
+    publicBaseUrl: null,
+    fetchHealth: async () => "unreachable",
+    serviceStatus: () => ({ supported: true, installed: true, loaded: true, state: "not running", lastExitStatus: 1 }),
+  });
+  assert.match(formatSetupStatus(status).join("\n"), /\[!!\] Background service: Loaded but not running \(last exit status 1\)/);
+});
+
+test("start and restart wait for the Runtime to pass its health check", async () => {
+  const sleeps: number[] = [];
+  const sequence: SetupRuntimeStatus["local"][] = ["unreachable", "unreachable", "ok"];
+  const probe = async (): Promise<SetupRuntimeStatus> => ({
+    local: sequence.shift() ?? "ok", publicEndpoint: "not_configured", service: "running",
+  });
+  const status = await waitForRuntimeHealth(probe, { sleep: async (ms) => { sleeps.push(ms); } });
+  assert.equal(status.local, "ok");
+  assert.deepEqual(sleeps, [1000, 1000]);
+
+  let probes = 0;
+  const neverUp = await waitForRuntimeHealth(async () => {
+    probes += 1;
+    return { local: "unreachable", publicEndpoint: "not_configured", service: "stopped" };
+  }, { attempts: 3, sleep: async () => {} });
+  assert.equal(neverUp.local, "unreachable");
+  assert.equal(probes, 3);
 });

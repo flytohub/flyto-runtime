@@ -11,9 +11,44 @@ export type ProbeState = "ok" | "foreign" | "unreachable" | "not_configured";
 export interface SetupRuntimeStatus {
   local: ProbeState;
   publicEndpoint: ProbeState;
-  // launchd/Task Scheduler "loaded" means registered, not that the process is up;
-  // the local health probe is what proves the Runtime is serving.
-  service: "loaded" | "installed" | "not_installed" | "unsupported";
+  service: ServiceState;
+  serviceExitStatus?: number;
+}
+
+// launchd "loaded" means registered, not that a process is up: a job whose
+// process exits (for example because another program holds its port) stays
+// loaded. Only a running state or a live PID counts as running.
+export type ServiceState = "running" | "stopped" | "installed" | "not_installed" | "unsupported";
+
+export interface NativeServiceSnapshot {
+  supported: boolean;
+  installed: boolean;
+  loaded: boolean;
+  state?: string;
+  pid?: number;
+  lastExitStatus?: number;
+}
+
+export function nativeServiceState(service: NativeServiceSnapshot | undefined): ServiceState {
+  if (!service || !service.supported) return "unsupported";
+  if (service.state === "running" || service.pid !== undefined) return "running";
+  if (service.loaded) return "stopped";
+  return service.installed ? "installed" : "not_installed";
+}
+
+export function describeServiceState(state: ServiceState, lastExitStatus?: number): string {
+  switch (state) {
+    case "running":
+      return "Running";
+    case "stopped":
+      return `Loaded but not running${lastExitStatus ? ` (last exit status ${lastExitStatus})` : ""}`;
+    case "installed":
+      return "Installed, not loaded";
+    case "not_installed":
+      return "Not installed";
+    case "unsupported":
+      return "Not supported on this platform";
+  }
 }
 
 export interface SetupConnectionDetails {
@@ -26,7 +61,7 @@ export interface SetupStatusProbes {
   localBaseUrl: string;
   publicBaseUrl: string | null;
   fetchHealth?: (url: string) => Promise<ProbeState>;
-  serviceStatus?: () => { supported: boolean; installed: boolean; loaded: boolean };
+  serviceStatus?: () => NativeServiceSnapshot;
 }
 
 export async function collectSetupStatus(probes: SetupStatusProbes): Promise<SetupRuntimeStatus> {
@@ -39,9 +74,8 @@ export async function collectSetupStatus(probes: SetupStatusProbes): Promise<Set
   return {
     local,
     publicEndpoint: publicEndpoint ?? "not_configured",
-    service: !service || !service.supported
-      ? "unsupported"
-      : service.loaded ? "loaded" : service.installed ? "installed" : "not_installed",
+    service: nativeServiceState(service),
+    ...(service?.lastExitStatus ? { serviceExitStatus: service.lastExitStatus } : {}),
   };
 }
 
@@ -54,6 +88,28 @@ export async function probeRuntimeHealth(url: string): Promise<ProbeState> {
   } catch {
     return "unreachable";
   }
+}
+
+// A freshly started service needs a moment to bind; poll instead of reporting
+// the first failed probe as a failure.
+export async function waitForRuntimeHealth(
+  probe: () => Promise<SetupRuntimeStatus>,
+  { attempts = 10, intervalMs = 1000, sleep = defaultSleep }: {
+    attempts?: number;
+    intervalMs?: number;
+    sleep?: (ms: number) => Promise<void>;
+  } = {},
+): Promise<SetupRuntimeStatus> {
+  let status = await probe();
+  for (let attempt = 1; attempt < attempts && status.local !== "ok"; attempt += 1) {
+    await sleep(intervalMs);
+    status = await probe();
+  }
+  return status;
+}
+
+function defaultSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export function setupIsConnectable(status: SetupRuntimeStatus): boolean {
@@ -78,8 +134,7 @@ export function formatSetupStatus(status: SetupRuntimeStatus): string[] {
     lines.push(`${mark(status.publicEndpoint === "ok")} Public endpoint:    ${endpoint}`);
   }
   if (status.service !== "unsupported") {
-    const label = { loaded: "Loaded", installed: "Installed, not loaded", not_installed: "Not installed" }[status.service];
-    lines.push(`${mark(status.service === "loaded")} Background service: ${label}`);
+    lines.push(`${mark(status.service === "running")} Background service: ${describeServiceState(status.service, status.serviceExitStatus)}`);
   }
   return lines;
 }

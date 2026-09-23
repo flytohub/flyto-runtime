@@ -309,3 +309,10 @@ await assert.rejects(
   ),
   /not valid UTF-8|binary/,
 );
+
+// Overwriting a CRLF file with Add File keeps its line endings; new files stay LF.
+await writeFile(join(root, "win.txt"), "old\r\nfile\r\n");
+await applyPatch(root, "*** Begin Patch\n*** Add File: win.txt\n+new\n+lines\n*** End Patch");
+assert.equal(await readFile(join(root, "win.txt"), "utf8"), "new\r\nlines\r\n");
+await applyPatch(root, "*** Begin Patch\n*** Add File: fresh-lf.txt\n+lf\n*** End Patch");
+assert.equal(await readFile(join(root, "fresh-lf.txt"), "utf8"), "lf\n");

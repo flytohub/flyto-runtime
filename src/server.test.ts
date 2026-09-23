@@ -1711,3 +1711,28 @@ test("cached ChatGPT write and edit calls apply through the Codex apply_patch su
   assert.equal(escaped.status, 400);
   assert.match(await escaped.text(), /outside allowed roots/);
 });
+
+test("a retried cached ChatGPT edit with the same operation_id replays instead of failing", async (t) => {
+  const { root, localBaseUrl, accessToken } = await httpServerFixture(t, "runtime-cached-edit-retry-", "codex");
+  await writeFile(join(root, "retry.txt"), "count = 1\n");
+  const opened = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
+    name: "open_workspace", arguments: { path: root },
+  });
+  const openedBody = await opened.json() as { result: { structuredContent: { workspace_id: string } } };
+  const workspaceId = openedBody.result.structuredContent.workspace_id;
+  const edit = (newText: string) => postModernMcp(localBaseUrl, accessToken, "tools/call", {
+    name: "edit",
+    arguments: { workspaceId, path: "retry.txt", operation_id: "retry-edit-0001", edits: [{ oldText: "= 1", newText }] },
+  });
+
+  const first = await edit("= 2");
+  assert.equal(first.status, 200, await first.clone().text());
+  const retried = await edit("= 2");
+  assert.equal(retried.status, 200, await retried.clone().text());
+  assert.match(await retried.text(), /Applied patch to 1 file/);
+  assert.equal(await readFile(join(root, "retry.txt"), "utf8"), "count = 2\n");
+
+  const reused = await edit("= 3");
+  assert.match(await reused.text(), /already used with different arguments/);
+  assert.equal(await readFile(join(root, "retry.txt"), "utf8"), "count = 2\n");
+});

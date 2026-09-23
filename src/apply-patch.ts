@@ -372,8 +372,13 @@ export async function applyPatch(root: string, patch: string): Promise<ApplyPatc
     if (action.kind === "add") {
       const absolute = await resolveConfinedPath(root, action.path);
       const original = await readStagedOptional(absolute, action.path);
-      staged.set(absolute, { content: action.content, mode: original?.mode });
-      patches.push(unifiedFilePatch(action.path, action.path, original?.content ?? null, action.content));
+      // Patch text is always LF; overwriting a CRLF file keeps its line endings,
+      // as an update hunk already does.
+      const content = original?.content.includes("\r\n")
+        ? action.content.replace(/\n/g, "\r\n")
+        : action.content;
+      staged.set(absolute, { content, mode: original?.mode });
+      patches.push(unifiedFilePatch(action.path, action.path, original?.content ?? null, content));
       results.push({ path: action.path, operation: original ? "update" : "add" });
       continue;
     }

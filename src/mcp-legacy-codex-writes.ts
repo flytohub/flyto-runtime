@@ -94,22 +94,39 @@ export interface LegacyWritePathResolver {
   (workspaceId: string, path: string): Promise<{ relativePath: string; absolutePath: string }>;
 }
 
+// Journals one translation under the caller's operation_id. A retry must replay
+// the patch produced the first time: re-reading a file the first attempt
+// already changed would yield a different patch (or "old_text not found"), so
+// apply_patch could never recognise the retry and replay its own result.
+export type LegacyTranslationJournal = (
+  operationId: string,
+  payload: unknown,
+  translate: () => Promise<string>,
+) => Promise<string>;
+
 export async function translateLegacyCodexWrite(
   body: unknown,
   resolvePath: LegacyWritePathResolver,
   readText: (absolutePath: string) => Promise<string>,
+  journal?: LegacyTranslationJournal,
 ): Promise<unknown> {
   if (!isRecord(body) || body.method !== "tools/call" || !isRecord(body.params)) return body;
   const params = body.params;
   if (params.name !== "write" && params.name !== "edit") return body;
+  const tool = params.name;
   const args = isRecord(params.arguments) ? params.arguments : {};
   const workspaceId = requireString(args.workspace_id, "workspace_id");
-  const target = await resolvePath(workspaceId, requireString(args.path, "path"));
+  const path = requireString(args.path, "path");
+  const operationId = args.operation_id;
+  if (operationId !== undefined && typeof operationId !== "string") {
+    throw new Error("operation_id must be a string.");
+  }
 
-  let patch: string;
-  if (params.name === "write") {
-    patch = legacyWriteToPatch({ path: target.relativePath, content: requireString(args.content, "content") });
-  } else {
+  const translate = async (): Promise<string> => {
+    const target = await resolvePath(workspaceId, path);
+    if (tool === "write") {
+      return legacyWriteToPatch({ path: target.relativePath, content: requireString(args.content, "content") });
+    }
     if (!Array.isArray(args.edits)) throw new Error("edits must be an array.");
     const edits = args.edits.map((entry, index) => {
       if (!isRecord(entry)) throw new Error(`edits[${index}] must be an object.`);
@@ -118,8 +135,13 @@ export async function translateLegacyCodexWrite(
         new_text: requireString(entry.new_text, `edits[${index}].new_text`),
       };
     });
-    patch = legacyEditToPatch({ path: target.relativePath, edits }, await readText(target.absolutePath));
-  }
+    return legacyEditToPatch({ path: target.relativePath, edits }, await readText(target.absolutePath));
+  };
+
+  const { operation_id: _operationId, ...legacyArgs } = args;
+  const patch = operationId && journal
+    ? await journal(operationId, { tool, arguments: legacyArgs }, translate)
+    : await translate();
 
   return {
     ...body,
@@ -129,7 +151,7 @@ export async function translateLegacyCodexWrite(
       arguments: {
         workspace_id: workspaceId,
         patch,
-        ...(args.operation_id === undefined ? {} : { operation_id: args.operation_id }),
+        ...(operationId === undefined ? {} : { operation_id: operationId }),
       },
     },
   };

@@ -1,7 +1,7 @@
 import { normalizeLegacyMcpInput } from "./mcp-legacy-input.js";
 import { translateLegacyCodexWrite } from "./mcp-legacy-codex-writes.js";
 import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { access, readFile, realpath } from "node:fs/promises";
 import { relative as relativePath } from "node:path";
@@ -53,7 +53,7 @@ import { shutdownHttpServer } from "./server-shutdown.js";
 import { formatPathForPrompt } from "./skills.js";
 import { DEVSPACE_VERSION } from "./version.js";
 import { createWorkspaceStore } from "./workspace-store.js";
-import { DurableOperationStore } from "./flyto2/durable-operations.js";
+import { DurableOperationStore, runDurableOperation } from "./flyto2/durable-operations.js";
 import {
   nativeTunnelManagementSupported,
   nativeTunnelReadiness,
@@ -1133,6 +1133,16 @@ export function createServer(
             return { absolutePath, relativePath: relativePath(workspace.canonicalRoot, absolutePath) };
           },
           (absolutePath) => readFile(absolutePath, "utf8"),
+          async (operationId, payload, translate) => {
+            // Derived key: the caller's operation_id itself journals apply_patch.
+            const journalId = `legacy-translation:${createHash("sha256").update(operationId).digest("hex").slice(0, 40)}`;
+            const translated = await runDurableOperation(
+              durableOperations,
+              { tool: "legacy_codex_translation", operationId: journalId, payload },
+              translate,
+            );
+            return translated.value;
+          },
         );
         req.headers["mcp-name"] = "apply_patch";
       }
