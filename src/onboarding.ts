@@ -1,3 +1,4 @@
+import { resolve as resolvePath, sep as pathSeparator } from "node:path";
 import type { SubagentsConfig } from "./local-agent-config.js";
 import {
   LOCAL_AGENT_PROVIDERS,
@@ -85,4 +86,21 @@ export function clientConnectionInstructions(client: OnboardingDestination, url:
     default:
       return `Streamable HTTP MCP URL: ${url}\nUse OAuth discovery and approve access with your Owner password. Flyto2 Cloud is not required.`;
   }
+}
+
+// The launcher starts inside the Runtime's own install directory, so the
+// working directory is only a sensible default when it is a real project:
+// never the Runtime itself, never the whole home directory.
+export function suggestedProjectRoots(options: {
+  configuredRoots: string[];
+  cwd: string;
+  homeDirectory: string;
+  runtimePackageRoot: string;
+}): string {
+  if (options.configuredRoots.length > 0) return options.configuredRoots.join(", ");
+  const cwd = resolvePath(options.cwd);
+  const runtimeRoot = resolvePath(options.runtimePackageRoot);
+  const insideRuntime = cwd === runtimeRoot || cwd.startsWith(`${runtimeRoot}${pathSeparator}`);
+  if (insideRuntime || cwd === resolvePath(options.homeDirectory)) return "";
+  return cwd;
 }

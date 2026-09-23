@@ -83,3 +83,17 @@ assert.match(clientConnectionInstructions("claude", "https://runtime.example/mcp
 assert.match(clientConnectionInstructions("chatgpt", "https://runtime.example/mcp"), /OAuth/);
 assert.match(clientConnectionInstructions("chatgpt", "https://runtime.example/mcp"), /refresh or recreate/);
 assert.match(clientConnectionInstructions("custom", "http://127.0.0.1:7676/mcp"), /Cloud is not required/);
+
+{
+  const { suggestedProjectRoots } = await import("./onboarding.js");
+  const base = { homeDirectory: "/Users/me", runtimePackageRoot: "/Users/me/Flyto2 Runtime" };
+  // Existing configuration always wins.
+  assert.equal(suggestedProjectRoots({ ...base, configuredRoots: ["/a", "/b"], cwd: "/Users/me/Flyto2 Runtime" }), "/a, /b");
+  // The launcher's own directory, anything inside it, and the whole home are never offered.
+  assert.equal(suggestedProjectRoots({ ...base, configuredRoots: [], cwd: "/Users/me/Flyto2 Runtime" }), "");
+  assert.equal(suggestedProjectRoots({ ...base, configuredRoots: [], cwd: "/Users/me/Flyto2 Runtime/dist" }), "");
+  assert.equal(suggestedProjectRoots({ ...base, configuredRoots: [], cwd: "/Users/me" }), "");
+  // A sibling that merely shares the prefix is a real project.
+  assert.equal(suggestedProjectRoots({ ...base, configuredRoots: [], cwd: "/Users/me/Flyto2 Runtime Notes" }), "/Users/me/Flyto2 Runtime Notes");
+  assert.equal(suggestedProjectRoots({ ...base, configuredRoots: [], cwd: "/Users/me/Projects/app" }), "/Users/me/Projects/app");
+}

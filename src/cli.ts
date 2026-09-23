@@ -2,6 +2,8 @@
 import { createRequire } from "node:module";
 import { stdin as input, stdout as output } from "node:process";
 import { resolve } from "node:path";
+import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 import type { Result as BetterResult } from "better-result";
 import * as prompts from "@clack/prompts";
 import { getShellConfig } from "@earendil-works/pi-coding-agent";
@@ -43,6 +45,7 @@ import {
   SUBAGENT_SKILL_INSTALL_COMMAND,
   resolveOnboardingUsage,
   resolveToolModeForDestinations,
+  suggestedProjectRoots,
   updateOnboardingSubagentsConfig,
   usesChatGpt,
   usesCodingAgents,
@@ -229,12 +232,19 @@ async function runInit({
 
     let allowedRoots: string[] | undefined;
     {
-      const defaultRoots = files.config.workspaces.allowedRoots.join(", ") || process.cwd();
+      const defaultRoots = suggestedProjectRoots({
+        configuredRoots: files.config.workspaces.allowedRoots,
+        cwd: process.cwd(),
+        homeDirectory: homedir(),
+        runtimePackageRoot: fileURLToPath(new URL("..", import.meta.url)),
+      });
       const rootsAnswer = await textPrompt({
-        message: `Which project folders can Flyto2 Runtime access? Press Enter to use ${defaultRoots}`,
-        placeholder: defaultRoots,
+        message: defaultRoots
+          ? `Which project folders can Flyto2 Runtime access? Press Enter to use ${defaultRoots}`
+          : "Which project folders can Flyto2 Runtime access? Separate several with commas.",
+        placeholder: defaultRoots || "~/Projects",
         defaultValue: defaultRoots,
-        validate: (value) => value?.trim() ? undefined : "Enter at least one project root.",
+        validate: (value) => value?.trim() || defaultRoots ? undefined : "Enter at least one project folder.",
       });
       allowedRoots = rootsAnswer
         .split(",")
