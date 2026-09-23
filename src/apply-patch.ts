@@ -49,6 +49,11 @@ function patchError(message: string): Error {
   return new Error(`Invalid patch: ${message}`);
 }
 
+interface PatchCursor {
+  lines: string[];
+  index: number;
+}
+
 export function parsePatch(patch: string): PatchAction[] {
   const lines = patchLines(patch);
   if (lines.shift()?.trim() !== "*** Begin Patch") {
@@ -58,116 +63,172 @@ export function parsePatch(patch: string): PatchAction[] {
     throw patchError("missing *** End Patch marker");
   }
 
+  const cursor: PatchCursor = { lines, index: 0 };
   const actions: PatchAction[] = [];
-  let index = 0;
-
-  while (index < lines.length) {
-    const header = lines[index++].trim();
+  while (cursor.index < cursor.lines.length) {
+    const header = cursor.lines[cursor.index++].trim();
     if (header === "") continue;
-
-    if (header.startsWith("*** Environment ID: ")) {
-      if (!header.slice("*** Environment ID: ".length).trim()) {
-        throw patchError("environment id cannot be empty");
-      }
-      continue;
-    }
-
-    if (header.startsWith("*** Add File: ")) {
-      const path = header.slice("*** Add File: ".length);
-      const content: string[] = [];
-      let finalNewline = true;
-      while (index < lines.length && !isTopLevelHeader(lines[index])) {
-        const line = lines[index++];
-        if (line === "\\ No newline at end of file") {
-          finalNewline = false;
-          continue;
-        }
-        if (!line.startsWith("+")) {
-          throw patchError("added file line must start with +: " + line);
-        }
-        content.push(line.slice(1));
-      }
-      if (content.length === 0 && finalNewline) {
-        throw patchError("add file for " + path + " has no content");
-      }
-      actions.push({
-        kind: "add",
-        path,
-        content: content.length === 0
-          ? ""
-          : content.join("\n") + (finalNewline ? "\n" : ""),
-      });
-      continue;
-    }
-
-    if (header.startsWith("*** Delete File: ")) {
-      actions.push({ kind: "delete", path: header.slice("*** Delete File: ".length) });
-      continue;
-    }
-
-    if (header.startsWith("*** Update File: ")) {
-      const path = header.slice("*** Update File: ".length);
-      let moveTo: string | undefined;
-      const hunks: UpdateHunk[] = [];
-
-      if (lines[index]?.trim().startsWith("*** Move to: ")) {
-        moveTo = lines[index++].trim().slice("*** Move to: ".length);
-      }
-
-      let current: UpdateHunk | undefined;
-      const finishCurrent = (): void => {
-        if (!current) return;
-        if (current.lines.length === 0) throw patchError(`empty update hunk for ${path}`);
-        hunks.push(current);
-        current = undefined;
-      };
-
-      while (index < lines.length) {
-        const line = lines[index];
-        const trimmed = line.trim();
-        if (!current && trimmed === "") {
-          index++;
-          continue;
-        }
-        if (trimmed === "*** End of File") {
-          if (!current) throw patchError(`end-of-file marker without update hunk for ${path}`);
-          current.endOfFile = true;
-          index++;
-          continue;
-        }
-
-        if ((!current || !line.startsWith(" ")) && isTopLevelHeader(line)) break;
-
-        if (trimmed.startsWith("@@") && !line.startsWith(" ")) {
-          finishCurrent();
-          const changeContext = trimmed.slice(2).trim();
-          current = { lines: [], changeContext: changeContext || undefined };
-          index++;
-          continue;
-        }
-
-        current ??= { lines: [] };
-        index++;
-        if (line.startsWith(" ")) current.lines.push({ kind: "context", text: line.slice(1) });
-        else if (line.startsWith("+")) current.lines.push({ kind: "add", text: line.slice(1) });
-        else if (line.startsWith("-")) current.lines.push({ kind: "remove", text: line.slice(1) });
-        else if (line === "\\ No newline at end of file") continue;
-        else throw patchError(`hunk line must start with space, +, or -: ${line}`);
-      }
-      finishCurrent();
-
-      if (hunks.length === 0 && !moveTo) {
-        throw patchError(`update for ${path} has no hunks or move destination`);
-      }
-      actions.push({ kind: "update", path, moveTo, hunks });
-      continue;
-    }
-
-    throw patchError(`unknown action header: ${header}`);
+    const action = parsePatchAction(cursor, header);
+    if (action) actions.push(action);
   }
 
   if (actions.length === 0) throw patchError("contains no file actions");
   return actions;
+}
+
+function parsePatchAction(
+  cursor: PatchCursor,
+  header: string,
+): PatchAction | undefined {
+  if (header.startsWith("*** Environment ID: ")) {
+    assertEnvironmentId(header);
+    return undefined;
+  }
+  if (header.startsWith("*** Add File: ")) {
+    return parseAddFile(cursor, header.slice("*** Add File: ".length));
+  }
+  if (header.startsWith("*** Delete File: ")) {
+    return {
+      kind: "delete",
+      path: header.slice("*** Delete File: ".length),
+    };
+  }
+  if (header.startsWith("*** Update File: ")) {
+    return parseUpdateFile(
+      cursor,
+      header.slice("*** Update File: ".length),
+    );
+  }
+  throw patchError(`unknown action header: ${header}`);
+}
+
+function assertEnvironmentId(header: string): void {
+  if (!header.slice("*** Environment ID: ".length).trim()) {
+    throw patchError("environment id cannot be empty");
+  }
+}
+
+function parseAddFile(cursor: PatchCursor, path: string): PatchAction {
+  const content: string[] = [];
+  let finalNewline = true;
+
+  while (
+    cursor.index < cursor.lines.length
+    && !isTopLevelHeader(cursor.lines[cursor.index])
+  ) {
+    const line = cursor.lines[cursor.index++];
+    if (line === "\\ No newline at end of file") {
+      finalNewline = false;
+      continue;
+    }
+    if (!line.startsWith("+")) {
+      throw patchError("added file line must start with +: " + line);
+    }
+    content.push(line.slice(1));
+  }
+
+  if (content.length === 0 && finalNewline) {
+    throw patchError("add file for " + path + " has no content");
+  }
+  return {
+    kind: "add",
+    path,
+    content: content.length === 0
+      ? ""
+      : content.join("\n") + (finalNewline ? "\n" : ""),
+  };
+}
+
+function parseUpdateFile(cursor: PatchCursor, path: string): PatchAction {
+  const hunks: UpdateHunk[] = [];
+  const moveTo = parseMoveDestination(cursor);
+  let current: UpdateHunk | undefined;
+
+  while (cursor.index < cursor.lines.length) {
+    const line = cursor.lines[cursor.index];
+    const trimmed = line.trim();
+
+    if (!current && trimmed === "") {
+      cursor.index++;
+      continue;
+    }
+    if (trimmed === "*** End of File") {
+      markEndOfFile(current, path);
+      cursor.index++;
+      continue;
+    }
+    if ((!current || !line.startsWith(" ")) && isTopLevelHeader(line)) {
+      break;
+    }
+    if (trimmed.startsWith("@@") && !line.startsWith(" ")) {
+      flushUpdateHunk(hunks, current, path);
+      const changeContext = trimmed.slice(2).trim();
+      current = {
+        lines: [],
+        changeContext: changeContext || undefined,
+      };
+      cursor.index++;
+      continue;
+    }
+
+    current ??= { lines: [] };
+    cursor.index++;
+    appendHunkLine(current, line);
+  }
+
+  flushUpdateHunk(hunks, current, path);
+  if (hunks.length === 0 && !moveTo) {
+    throw patchError(`update for ${path} has no hunks or move destination`);
+  }
+  return { kind: "update", path, moveTo, hunks };
+}
+
+function parseMoveDestination(cursor: PatchCursor): string | undefined {
+  const line = cursor.lines[cursor.index];
+  if (!line?.trim().startsWith("*** Move to: ")) return undefined;
+  cursor.index++;
+  return line.trim().slice("*** Move to: ".length);
+}
+
+function markEndOfFile(
+  current: UpdateHunk | undefined,
+  path: string,
+): void {
+  if (!current) {
+    throw patchError(
+      `end-of-file marker without update hunk for ${path}`,
+    );
+  }
+  current.endOfFile = true;
+}
+
+function flushUpdateHunk(
+  hunks: UpdateHunk[],
+  current: UpdateHunk | undefined,
+  path: string,
+): void {
+  if (!current) return;
+  if (current.lines.length === 0) {
+    throw patchError(`empty update hunk for ${path}`);
+  }
+  hunks.push(current);
+}
+
+function appendHunkLine(hunk: UpdateHunk, line: string): void {
+  if (line.startsWith(" ")) {
+    hunk.lines.push({ kind: "context", text: line.slice(1) });
+    return;
+  }
+  if (line.startsWith("+")) {
+    hunk.lines.push({ kind: "add", text: line.slice(1) });
+    return;
+  }
+  if (line.startsWith("-")) {
+    hunk.lines.push({ kind: "remove", text: line.slice(1) });
+    return;
+  }
+  if (line === "\\ No newline at end of file") return;
+  throw patchError(`hunk line must start with space, +, or -: ${line}`);
 }
 
 function patchLines(patch: string): string[] {

@@ -193,17 +193,31 @@ function registerApplyPatchTool(context: ToolRegistrationContext): void {
   );
 }
 
-function registerCodexProcessTools(context: ToolRegistrationContext): void {
-  const {
-    server,
-    config,
-    workspaces,
-    processSessions,
-    reactiveCommands,
-  } = context;
-  const interactiveSessions = new Map<string, number>();
+interface ExecCommandInput {
+  workspace_id: string;
+  cmd: string;
+  tty?: boolean;
+  working_directory?: string;
+  timeout_seconds?: number;
+}
 
-  server.registerTool(
+interface WriteStdinInput {
+  workspace_id: string;
+  session_id: string;
+  chars?: string;
+}
+
+function registerCodexProcessTools(context: ToolRegistrationContext): void {
+  const interactiveSessions = new Map<string, number>();
+  registerExecCommandTool(context, interactiveSessions);
+  registerWriteStdinTool(context, interactiveSessions);
+}
+
+function registerExecCommandTool(
+  context: ToolRegistrationContext,
+  interactiveSessions: Map<string, number>,
+): void {
+  context.server.registerTool(
     "exec_command",
     {
       title: "Execute command",
@@ -237,80 +251,101 @@ function registerCodexProcessTools(context: ToolRegistrationContext): void {
       outputSchema: processOutputSchema(),
       annotations: SHELL_TOOL_ANNOTATIONS,
     },
-    async ({
-      workspace_id,
-      cmd,
-      tty,
-      working_directory,
-      timeout_seconds,
-    }, extra) => {
-      const legacyShell = isLegacyShellCall(extra);
-      const startedAt = performance.now();
-      const workspaceId = workspace_id;
-      const workingDirectory = working_directory;
-      const snapshot = await runLoggedToolOperation(
-        config,
-        {
-          tool: "exec_command",
-          workspaceId,
-          workingDirectory: workingDirectory ?? ".",
-          command: cmd,
-          commandLength: cmd.length,
-        },
-        startedAt,
-        async () => {
-          const workspace = await workspaces.getWorkspace(workspaceId);
-          const cwd = await workspaces.resolveWorkingDirectory(
-            workspace,
-            workingDirectory,
-          );
-          if (tty) {
-            const process = await processSessions.start({
-              workspaceId,
-              command: cmd,
-              cwd,
-              workspaceRoot: workspace.root,
-              tty: true,
-              yieldTimeMs: DEFAULT_CODEX_INTERACTIVE_YIELD_MS,
-            });
-            if (!process.running || process.sessionId === undefined) {
-              return codexInteractiveSnapshot(process);
-            }
-            const exposedSessionId = newCodexProcessSessionId();
-            interactiveSessions.set(exposedSessionId, process.sessionId);
-            return codexInteractiveSnapshot(process, exposedSessionId);
-          }
+    async (input, extra) => handleExecCommand(context, interactiveSessions, input, extra),
+  );
+}
 
-          const receipt = reactiveCommands.start({
-            workspace_id: workspaceId,
-            workspace_root: workspace.root,
-            command: cmd,
-            cwd,
-            event_type: CODEX_DURABLE_EVENT_TYPE,
-            timeout_seconds,
-          });
-          const durableSnapshot = legacyShell
-            ? await awaitDurableProcess(context, workspaceId, receipt.job_id)
-            : await durableProcessSnapshot(
-                context,
-                workspaceId,
-                receipt.job_id,
-                DEFAULT_CODEX_YIELD_MS,
-                DEFAULT_MAX_OUTPUT_TOKENS,
-              );
-          if (!durableSnapshot.running) {
-            reactiveCommands.discardTerminal(receipt.job_id);
-          }
-          return durableSnapshot;
-        },
-        processLogFields,
-      );
-
-      return processToolResponse(snapshot, legacyShell);
+async function handleExecCommand(
+  context: ToolRegistrationContext,
+  interactiveSessions: Map<string, number>,
+  input: ExecCommandInput,
+  extra: unknown,
+) {
+  const { config } = context;
+  const legacyShell = isLegacyShellCall(extra);
+  const startedAt = performance.now();
+  const workspaceId = input.workspace_id;
+  const workingDirectory = input.working_directory;
+  const snapshot = await runLoggedToolOperation(
+    config,
+    {
+      tool: "exec_command",
+      workspaceId,
+      workingDirectory: workingDirectory ?? ".",
+      command: input.cmd,
+      commandLength: input.cmd.length,
     },
+    startedAt,
+    () => executeCodexCommand(
+      context,
+      interactiveSessions,
+      input,
+      legacyShell,
+    ),
+    processLogFields,
   );
 
-  server.registerTool(
+  return processToolResponse(snapshot, legacyShell);
+}
+
+async function executeCodexCommand(
+  context: ToolRegistrationContext,
+  interactiveSessions: Map<string, number>,
+  input: ExecCommandInput,
+  legacyShell: boolean,
+): Promise<CodexProcessSnapshot> {
+  const { workspaces, processSessions, reactiveCommands } = context;
+  const workspace = await workspaces.getWorkspace(input.workspace_id);
+  const cwd = await workspaces.resolveWorkingDirectory(
+    workspace,
+    input.working_directory,
+  );
+
+  if (input.tty) {
+    const process = await processSessions.start({
+      workspaceId: input.workspace_id,
+      command: input.cmd,
+      cwd,
+      workspaceRoot: workspace.root,
+      tty: true,
+      yieldTimeMs: DEFAULT_CODEX_INTERACTIVE_YIELD_MS,
+    });
+    if (!process.running || process.sessionId === undefined) {
+      return codexInteractiveSnapshot(process);
+    }
+    const exposedSessionId = newCodexProcessSessionId();
+    interactiveSessions.set(exposedSessionId, process.sessionId);
+    return codexInteractiveSnapshot(process, exposedSessionId);
+  }
+
+  const receipt = reactiveCommands.start({
+    workspace_id: input.workspace_id,
+    workspace_root: workspace.root,
+    command: input.cmd,
+    cwd,
+    event_type: CODEX_DURABLE_EVENT_TYPE,
+    timeout_seconds: input.timeout_seconds,
+  });
+  const durableSnapshot = legacyShell
+    ? await awaitDurableProcess(context, input.workspace_id, receipt.job_id)
+    : await durableProcessSnapshot(
+        context,
+        input.workspace_id,
+        receipt.job_id,
+        DEFAULT_CODEX_YIELD_MS,
+        DEFAULT_MAX_OUTPUT_TOKENS,
+      );
+  if (!durableSnapshot.running) {
+    reactiveCommands.discardTerminal(receipt.job_id);
+  }
+  return durableSnapshot;
+}
+
+function registerWriteStdinTool(
+  context: ToolRegistrationContext,
+  interactiveSessions: Map<string, number>,
+): void {
+  context.server.registerTool(
     "write_stdin",
     {
       title: "Continue process",
@@ -335,57 +370,68 @@ function registerCodexProcessTools(context: ToolRegistrationContext): void {
       outputSchema: processOutputSchema(),
       annotations: SHELL_TOOL_ANNOTATIONS,
     },
-    async ({
-      workspace_id,
-      session_id,
-      chars,
-    }, extra) => {
-      const legacyShell = isLegacyShellCall(extra);
-      const startedAt = performance.now();
-      const workspaceId = workspace_id;
-      const sessionId = session_id;
-      const snapshot = await runLoggedToolOperation(
-        config,
-        { tool: "write_stdin", workspaceId },
-        startedAt,
-        async () => {
-          await workspaces.getWorkspace(workspaceId);
-          const interactiveSessionId = interactiveSessions.get(sessionId);
-          if (interactiveSessionId !== undefined) {
-            const process = await processSessions.write({
-              workspaceId,
-              sessionId: interactiveSessionId,
-              chars,
-            });
-            if (!process.running) interactiveSessions.delete(sessionId);
-            return codexInteractiveSnapshot(process, sessionId);
-          }
-
-          const jobId = reactiveJobIdFromCodexSession(sessionId);
-          if (chars && chars !== "\u0003") {
-            throw new Error(
-              "This process session does not accept stdin. Start exec_command with tty=true for an input-driven process.",
-            );
-          }
-          if (chars === "\u0003") {
-            reactiveCommands.signal(jobId, workspaceId, "SIGINT");
-          }
-          return legacyShell
-            ? awaitDurableProcess(context, workspaceId, jobId)
-            : durableProcessSnapshot(
-                context,
-                workspaceId,
-                jobId,
-                DEFAULT_CODEX_POLL_YIELD_MS,
-                DEFAULT_MAX_OUTPUT_TOKENS,
-              );
-        },
-        processLogFields,
-      );
-
-      return processToolResponse(snapshot, legacyShell);
-    },
+    async (input, extra) => handleWriteStdin(context, interactiveSessions, input, extra),
   );
+}
+
+async function handleWriteStdin(
+  context: ToolRegistrationContext,
+  interactiveSessions: Map<string, number>,
+  input: WriteStdinInput,
+  extra: unknown,
+) {
+  const { config } = context;
+  const legacyShell = isLegacyShellCall(extra);
+  const startedAt = performance.now();
+  const snapshot = await runLoggedToolOperation(
+    config,
+    { tool: "write_stdin", workspaceId: input.workspace_id },
+    startedAt,
+    () => continueCodexProcess(context, interactiveSessions, input, legacyShell),
+    processLogFields,
+  );
+
+  return processToolResponse(snapshot, legacyShell);
+}
+
+async function continueCodexProcess(
+  context: ToolRegistrationContext,
+  interactiveSessions: Map<string, number>,
+  input: WriteStdinInput,
+  legacyShell: boolean,
+): Promise<CodexProcessSnapshot> {
+  const { workspaces, processSessions, reactiveCommands } = context;
+  await workspaces.getWorkspace(input.workspace_id);
+
+  const interactiveSessionId = interactiveSessions.get(input.session_id);
+  if (interactiveSessionId !== undefined) {
+    const process = await processSessions.write({
+      workspaceId: input.workspace_id,
+      sessionId: interactiveSessionId,
+      chars: input.chars,
+    });
+    if (!process.running) interactiveSessions.delete(input.session_id);
+    return codexInteractiveSnapshot(process, input.session_id);
+  }
+
+  const jobId = reactiveJobIdFromCodexSession(input.session_id);
+  if (input.chars && input.chars !== "\u0003") {
+    throw new Error(
+      "This process session does not accept stdin. Start exec_command with tty=true for an input-driven process.",
+    );
+  }
+  if (input.chars === "\u0003") {
+    reactiveCommands.signal(jobId, input.workspace_id, "SIGINT");
+  }
+  return legacyShell
+    ? awaitDurableProcess(context, input.workspace_id, jobId)
+    : durableProcessSnapshot(
+        context,
+        input.workspace_id,
+        jobId,
+        DEFAULT_CODEX_POLL_YIELD_MS,
+        DEFAULT_MAX_OUTPUT_TOKENS,
+      );
 }
 
 function isLegacyShellCall(extra: unknown): boolean {

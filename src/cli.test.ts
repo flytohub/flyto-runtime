@@ -76,6 +76,26 @@ try {
   );
   assert.match(doctor, /Tool mode: codex/);
   assert.match(doctor, /Runtime internals: exposed for diagnostics/);
+
+  const serviceStatus = JSON.parse(execFileSync(
+    "node",
+    ["--import", "tsx", "src/cli.ts", "service", "status"],
+    { cwd: process.cwd(), encoding: "utf8", env },
+  )) as {
+    runtime?: { supported?: boolean };
+    tunnel?: { supported?: boolean };
+  };
+  assert.equal(typeof serviceStatus.runtime?.supported, "boolean");
+  assert.equal(typeof serviceStatus.tunnel?.supported, "boolean");
+
+  assert.throws(
+    () => execFileSync(
+      "node",
+      ["--import", "tsx", "src/cli.ts", "service", "tunnel-import"],
+      { cwd: process.cwd(), encoding: "utf8", env, stdio: "pipe" },
+    ),
+    /tunnel-import <config-path>/,
+  );
 } finally {
   rmSync(configRoot, { recursive: true, force: true });
 }

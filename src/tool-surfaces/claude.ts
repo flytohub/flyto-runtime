@@ -42,10 +42,48 @@ const LEGACY_JOB_COMMAND_PREFIX = "@flyto2/job";
 const CLAUDE_SHELL_DESCRIPTION =
   "Run a shell command in a workspace with the user's local permissions. Short commands return normally. Commands still running after a brief yield window continue as durable Flyto2 Runtime jobs and return immediately with a job_id instead of blocking the host. Follow the returned @flyto2/job command to inspect a legacy job later; never rerun the original side effect just because its first response was lost or still running.";
 
-function registerClaudeMutationTools(context: ToolRegistrationContext): void {
-  const { server, config, workspaces } = context;
+const CLAUDE_EDIT_INPUT_SCHEMA = {
+  workspace_id: z.string().describe(workspaceIdDescription),
+  path: z
+    .string()
+    .describe("File path to edit, relative to the workspace root."),
+  edits: z
+    .array(
+      z.object({
+        old_text: z
+          .string()
+          .describe(
+            "Exact text to replace. Must match uniquely in the original file.",
+          ),
+        new_text: z.string().describe("Replacement text."),
+      }),
+    )
+    .min(1),
+};
 
-  server.registerTool(
+const CLAUDE_EDIT_OUTPUT_SCHEMA = resultOutputSchema({
+  status: z.literal("applied"),
+});
+
+interface ClaudeWriteInput {
+  workspace_id: string;
+  path: string;
+  content: string;
+}
+
+interface ClaudeEditInput {
+  workspace_id: string;
+  path: string;
+  edits: Array<{ old_text: string; new_text: string }>;
+}
+
+function registerClaudeMutationTools(context: ToolRegistrationContext): void {
+  registerClaudeWriteTool(context);
+  registerClaudeEditTool(context);
+}
+
+function registerClaudeWriteTool(context: ToolRegistrationContext): void {
+  context.server.registerTool(
     toolNames.write,
     {
       title: "Write file",
@@ -60,123 +98,121 @@ function registerClaudeMutationTools(context: ToolRegistrationContext): void {
       outputSchema: resultOutputSchema(),
       annotations: WRITE_TOOL_ANNOTATIONS,
     },
-    async ({ workspace_id, ...input }) => {
-      const startedAt = performance.now();
-      const workspaceId = workspace_id;
-      const workspace = await workspaces.getWorkspace(workspaceId);
-      const path = await workspaces.resolvePath(workspace, input.path);
-      const response = await writeFileTool({ ...input, path }, { cwd: workspace.root });
+    async (input) => handleClaudeWrite(context, input),
+  );
+}
 
-      if (response.isError) {
-        logFailedToolResponse(
-          config,
-          {
-            tool: toolNames.write,
-            workspaceId,
-            path: input.path,
-          },
-          response.content,
-          startedAt,
-        );
-        return response;
-      }
+async function handleClaudeWrite(
+  context: ToolRegistrationContext,
+  input: ClaudeWriteInput,
+) {
+  const { config, workspaces } = context;
+  const startedAt = performance.now();
+  const workspaceId = input.workspace_id;
+  const workspace = await workspaces.getWorkspace(workspaceId);
+  const path = await workspaces.resolvePath(workspace, input.path);
+  const response = await writeFileTool(
+    { path, content: input.content },
+    { cwd: workspace.root },
+  );
 
-      logToolCall(config, {
+  if (response.isError) {
+    logFailedToolResponse(
+      config,
+      {
         tool: toolNames.write,
         workspaceId,
         path: input.path,
-        success: true,
-        durationMs: Math.round(performance.now() - startedAt),
-      });
+      },
+      response.content,
+      startedAt,
+    );
+    return response;
+  }
 
-      return {
-        ...response,
-        structuredContent: {
-          result: contentText(response.content),
-        },
-      };
+  logToolCall(config, {
+    tool: toolNames.write,
+    workspaceId,
+    path: input.path,
+    success: true,
+    durationMs: Math.round(performance.now() - startedAt),
+  });
+
+  return {
+    ...response,
+    structuredContent: {
+      result: contentText(response.content),
     },
-  );
+  };
+}
 
-  server.registerTool(
+function registerClaudeEditTool(context: ToolRegistrationContext): void {
+  context.server.registerTool(
     toolNames.edit,
     {
       title: "Edit file",
       description:
         "Edit one file in a workspace by replacing exact text blocks. Each old_text must match a unique, non-overlapping region of the original file.",
-      inputSchema: {
-        workspace_id: z.string().describe(workspaceIdDescription),
-        path: z
-          .string()
-          .describe("File path to edit, relative to the workspace root."),
-        edits: z
-          .array(
-            z.object({
-              old_text: z
-                .string()
-                .describe(
-                  "Exact text to replace. Must match uniquely in the original file.",
-                ),
-              new_text: z.string().describe("Replacement text."),
-            }),
-          )
-          .min(1),
-      },
-      outputSchema: resultOutputSchema({
-        status: z.literal("applied"),
-      }),
+      inputSchema: CLAUDE_EDIT_INPUT_SCHEMA,
+      outputSchema: CLAUDE_EDIT_OUTPUT_SCHEMA,
       annotations: EDIT_TOOL_ANNOTATIONS,
     },
-    async ({ workspace_id, edits, ...input }) => {
-      const startedAt = performance.now();
-      const workspaceId = workspace_id;
-      const workspace = await workspaces.getWorkspace(workspaceId);
-      const path = await workspaces.resolvePath(workspace, input.path);
-      const response = await editFileTool({
-        ...input,
-        path,
-        edits: edits.map(({ old_text, new_text }) => ({
-          oldText: old_text,
-          newText: new_text,
-        })),
-      }, { cwd: workspace.root });
+    async (input) => handleClaudeEdit(context, input),
+  );
+}
 
-      if (response.isError) {
-        logFailedToolResponse(
-          config,
-          {
-            tool: toolNames.edit,
-            workspaceId,
-            path: input.path,
-          },
-          response.content,
-          startedAt,
-        );
-        return response;
-      }
+async function handleClaudeEdit(
+  context: ToolRegistrationContext,
+  input: ClaudeEditInput,
+) {
+  const { config, workspaces } = context;
+  const startedAt = performance.now();
+  const workspaceId = input.workspace_id;
+  const workspace = await workspaces.getWorkspace(workspaceId);
+  const path = await workspaces.resolvePath(workspace, input.path);
+  const response = await editFileTool({
+    path,
+    edits: input.edits.map(({ old_text, new_text }) => ({
+      oldText: old_text,
+      newText: new_text,
+    })),
+  }, { cwd: workspace.root });
 
-      const stats = countDiffStats(
-        response.details?.patch ?? response.details?.diff,
-      );
-      const editResultText = `Edited ${input.path} (+${stats.additions} -${stats.removals}).`;
-      const editContent = [textBlock(editResultText)];
-      logToolCall(config, {
+  if (response.isError) {
+    logFailedToolResponse(
+      config,
+      {
         tool: toolNames.edit,
         workspaceId,
         path: input.path,
-        success: true,
-        durationMs: Math.round(performance.now() - startedAt),
-      });
+      },
+      response.content,
+      startedAt,
+    );
+    return response;
+  }
 
-      return {
-        content: editContent,
-        structuredContent: {
-          status: "applied",
-          result: contentText(editContent),
-        },
-      };
-    },
+  const stats = countDiffStats(
+    response.details?.patch ?? response.details?.diff,
   );
+  const editResultText =
+    "Edited " + input.path + " (+" + stats.additions + " -" + stats.removals + ").";
+  const editContent = [textBlock(editResultText)];
+  logToolCall(config, {
+    tool: toolNames.edit,
+    workspaceId,
+    path: input.path,
+    success: true,
+    durationMs: Math.round(performance.now() - startedAt),
+  });
+
+  return {
+    content: editContent,
+    structuredContent: {
+      status: "applied",
+      result: contentText(editContent),
+    },
+  };
 }
 
 function registerShellTool(context: ToolRegistrationContext): void {
