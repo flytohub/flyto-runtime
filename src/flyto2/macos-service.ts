@@ -396,7 +396,11 @@ export function uninstallMacRuntimeService(
   const homeDirectory = options.homeDirectory ?? homedir();
   const paths = macRuntimeServicePaths(homeDirectory);
   bootoutLabel(FLYTO2_RUNTIME_LAUNCH_AGENT_LABEL);
-  rmSync(paths.plistPath, { force: true });
+  // The active and previous copies only matter while the service exists; left
+  // behind they make the next install take the reload path for no reason.
+  for (const path of [paths.plistPath, paths.activePlistPath, paths.previousPlistPath]) {
+    rmSync(path, { force: true });
+  }
   return macRuntimeServiceStatus({ packageRoot, configDirectory, homeDirectory });
 }
 
