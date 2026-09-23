@@ -47,3 +47,25 @@ test("legacy translation is restricted to known tool arguments", () => {
   assert.deepEqual(normalizeLegacyMcpInput({ method: "tools/call", params: { name: "open_workspace", arguments: { path: "/project", baseRef: "main" } } }),
     { method: "tools/call", params: { name: "open_workspace", arguments: { path: "/project", base_ref: "main" } } });
 });
+
+test("cached ChatGPT bash calls route to exec_command in Codex tool mode", () => {
+  const body = { method: "tools/call", params: { name: "bash", arguments: {
+    workspaceId: "ws_a",
+    workingDirectory: ".",
+    command: "pwd",
+    timeout: 10,
+  } } };
+  assert.deepEqual(normalizeLegacyMcpInput(body, "codex"), {
+    method: "tools/call",
+    params: {
+      name: "exec_command",
+      arguments: {
+        workspace_id: "ws_a",
+        working_directory: ".",
+        cmd: "pwd",
+        timeout_seconds: 10,
+      },
+    },
+  });
+  assert.equal((normalizeLegacyMcpInput(body, "claude") as typeof body).params.name, "bash");
+});

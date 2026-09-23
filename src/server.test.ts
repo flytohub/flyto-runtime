@@ -1571,6 +1571,7 @@ test("existing ChatGPT camelCase tool calls survive the Runtime migration", asyn
   const opened = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
     name: "open_workspace", arguments: { path: root },
   });
+  assert.equal(opened.status, 200, await opened.clone().text());
   const openedBody = await opened.json() as { result: { structuredContent: { workspace_id: string } } };
   const workspaceId = openedBody.result.structuredContent.workspace_id;
   const ran = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
@@ -1625,4 +1626,24 @@ test("existing ChatGPT camelCase tool calls survive the Runtime migration", asyn
   });
   assert.equal(conflict.status, 400);
   assert.match(await conflict.text(), /Conflicting workspaceId/);
+});
+
+test("cached ChatGPT bash calls execute against the Codex tool surface", async (t) => {
+  const { root, localBaseUrl, accessToken } = await httpServerFixture(t, "runtime-cached-bash-", "codex");
+  const opened = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
+    name: "open_workspace", arguments: { path: root },
+  });
+  assert.equal(opened.status, 200, await opened.clone().text());
+  const openedBody = await opened.json() as { result: { structuredContent: { workspace_id: string } } };
+  const ran = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
+    name: "bash",
+    arguments: {
+      workspaceId: openedBody.result.structuredContent.workspace_id,
+      workingDirectory: ".",
+      command: "echo cached-chatgpt-bash-ok",
+      timeout: 10,
+    },
+  });
+  assert.equal(ran.status, 200, await ran.clone().text());
+  assert.match(await ran.text(), /cached-chatgpt-bash-ok/);
 });

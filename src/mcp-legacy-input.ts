@@ -1,7 +1,7 @@
 // Existing ChatGPT connections can retain the upstream DevSpace tool schemas.
 // Translate only the known legacy surface at the transport boundary; published
 // Runtime schemas and durable-operation payloads remain canonical snake_case.
-export function normalizeLegacyMcpInput(body: unknown): unknown {
+export function normalizeLegacyMcpInput(body: unknown, toolMode?: "claude" | "codex"): unknown {
   if (!isRecord(body) || body.method !== "tools/call" || !isRecord(body.params)) return body;
   const params = body.params;
   if (typeof params.name !== "string" || !["open_workspace", "read", "write", "edit", "bash"].includes(params.name)) return body;
@@ -23,7 +23,26 @@ export function normalizeLegacyMcpInput(body: unknown): unknown {
     args.edits = args.edits.map((entry, index) => normalizeLegacyEditEntry(entry, index));
   }
 
+  if (toolMode === "codex" && params.name === "bash") {
+    renameArgument(args, "command", "cmd");
+    renameArgument(args, "timeout", "timeout_seconds");
+    return { ...body, params: { ...params, name: "exec_command", arguments: args } };
+  }
+
   return { ...body, params: { ...params, arguments: args } };
+}
+
+function renameArgument(
+  args: Record<string, unknown>,
+  legacy: string,
+  canonical: string,
+): void {
+  if (!Object.hasOwn(args, legacy)) return;
+  if (Object.hasOwn(args, canonical) && args[canonical] !== args[legacy]) {
+    throw new Error(`Conflicting ${legacy} and ${canonical} arguments`);
+  }
+  args[canonical] = args[legacy];
+  delete args[legacy];
 }
 
 function normalizeLegacyEditEntry(value: unknown, index: number): unknown {
