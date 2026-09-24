@@ -172,7 +172,26 @@ jobs:
       contents: write
       id-token: write
       attestations: write
+      actions: read
     steps:
+      # A candidate is only as good as the commit: its full CI matrix must
+      # have passed on main, not just this packaging workflow.
+      - name: Require green CI for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for _ in $(seq 1 90); do
+            state="$(gh run list -R "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$GITHUB_SHA" --event push \
+              --limit 1 --json status,conclusion --jq '.[0] | "\(.status):\(.conclusion)"')"
+            case "$state" in
+              completed:success) echo "CI passed for $GITHUB_SHA."; exit 0 ;;
+              completed:*) echo "CI for $GITHUB_SHA finished as ${state#completed:}; no candidate." >&2; exit 1 ;;
+            esac
+            sleep 20
+          done
+          echo "CI for $GITHUB_SHA did not finish within 30 minutes (last state: ${state:-no run})." >&2
+          exit 1
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
