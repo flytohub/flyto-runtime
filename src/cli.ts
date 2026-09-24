@@ -898,9 +898,9 @@ async function runSelfUpdateCommand(args: string[]): Promise<void> {
   const paths = selfUpdate.selfUpdatePaths(flyto2NativeRuntimeHome());
   const [action, requestId, ...extra] = args;
   const usage = "Usage: flyto2-runtime service self-update [status]";
-  const { packagedDistribution, FLYTO2_RUNTIME_RELEASES_URL } = await import("./flyto2/distribution.js");
+  const { packagedDistribution, FLYTO2_RUNTIME_DOWNLOADS_URL } = await import("./flyto2/distribution.js");
   if (action !== "status" && packagedDistribution()) {
-    throw new Error(`This Runtime was installed from the Flyto2 Runtime app, which updates by installing the new version from ${FLYTO2_RUNTIME_RELEASES_URL}.`);
+    throw new Error(`This Runtime was installed from the Flyto2 Runtime app, which updates by installing the new version from ${FLYTO2_RUNTIME_DOWNLOADS_URL}.`);
   }
 
   if (action === undefined) {

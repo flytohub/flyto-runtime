@@ -55,6 +55,12 @@ The normal model-facing surface stays intentionally small. Runtime handles proce
 
 ## Quick start
 
+**On a Mac, use the app.** Download it from the
+[Flyto2 Runtime download page](https://github.com/flytohub/flyto2/blob/main/products/runtime/README.md),
+drag it into Applications and open it. It includes its own Node.js and
+cloudflared, so nothing needs to be installed first. The rest of this section
+installs from source instead.
+
 Requirements: Node.js 22.19 or newer, below 27 (the installer from
 [nodejs.org](https://nodejs.org) is fine). Nothing else needs to be installed
 first: not pnpm, not Homebrew, not cloudflared, and no administrator password.

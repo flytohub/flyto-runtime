@@ -6,7 +6,9 @@ import { flyto2RuntimePackageRoot } from "./macos-launcher.js";
 // and has no source to rebuild. scripts/package-macos.sh writes this marker next
 // to package.json; a source checkout or npm install has none.
 export const DISTRIBUTION_FILE = "distribution.json";
-export const FLYTO2_RUNTIME_RELEASES_URL = "https://github.com/flytohub/flyto-runtime/releases/latest";
+// Installers are published by flytohub/flyto2, the distribution authority, not
+// by this repository.
+export const FLYTO2_RUNTIME_DOWNLOADS_URL = "https://github.com/flytohub/flyto2/blob/main/products/runtime/README.md";
 
 export interface PackagedDistribution {
   kind: "macos-app";

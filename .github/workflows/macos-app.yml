@@ -1,15 +1,20 @@
 name: macOS App
 
 # Builds "Flyto2 Runtime.app" and its disk image on each Mac architecture,
-# signs and notarizes them when the Apple credentials are configured, and
-# attaches them to a GitHub release when a tag is given.
+# signs and notarizes them when the Apple credentials are configured, and, when
+# dispatched as a candidate, assembles the release candidate that
+# flytohub/flyto2 verifies and publishes: disk images, a CycloneDX SBOM,
+# GitHub artifact attestations, SHA256SUMS and release-manifest.json.
+# flyto-runtime never publishes installers itself; flyto2 is the distribution
+# authority (see its docs/DISTRIBUTION.md).
 on:
   workflow_dispatch:
     inputs:
-      release_tag:
-        description: Existing GitHub release tag to attach the disk images to (for example v1.0.9); empty builds only
+      candidate:
+        description: Build a release candidate for flytohub/flyto2 (tags v<package.json version> on this commit)
         required: false
-        type: string
+        type: boolean
+        default: false
   push:
     branches:
       - main
@@ -21,7 +26,7 @@ on:
       - .github/workflows/macos-app.yml
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -84,6 +89,20 @@ jobs:
             echo "notarize=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Require a notarized main build for a candidate
+        if: inputs.candidate
+        env:
+          NOTARIZE: ${{ steps.signing.outputs.notarize }}
+        run: |
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "Release candidates come from main; got $GITHUB_REF." >&2
+            exit 1
+          fi
+          if [[ "$NOTARIZE" != "true" ]]; then
+            echo "A release candidate must be signed and notarized; the Apple credentials are incomplete." >&2
+            exit 1
+          fi
+
       - name: Import Apple certificate
         if: steps.signing.outputs.enabled == 'true'
         env:
@@ -126,6 +145,16 @@ jobs:
             xcrun stapler validate "$dmg"
           fi
 
+      # Inventory of what the app actually ships, read from the built bundle.
+      - name: SBOM
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          path: ${{ runner.temp }}/Flyto2 Runtime.app/Contents/Resources/runtime
+          format: cyclonedx-json
+          output-file: macos-app-out/sbom-${{ matrix.arch }}.cdx.json
+          upload-artifact: false
+          dependency-snapshot: false
+
       - name: Upload disk image
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -133,10 +162,92 @@ jobs:
           path: macos-app-out/*
           if-no-files-found: error
 
-      # Only a notarized app opens on someone else's Mac, so nothing else is published.
-      - name: Attach to release
-        if: inputs.release_tag != '' && steps.signing.outputs.notarize == 'true'
+  candidate:
+    name: Release candidate
+    needs: app
+    if: inputs.candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Collect the disk images and SBOMs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: flyto2-runtime-macos-*
+          path: candidate
+          merge-multiple: true
+
+      - name: Tag the source commit
+        id: source
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          tag="v$version"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
+            git fetch --quiet origin "refs/tags/$tag:refs/tags/$tag"
+            tagged="$(git rev-parse "$tag^{commit}")"
+            if [[ "$tagged" != "$GITHUB_SHA" ]]; then
+              echo "$tag already points to $tagged, not $GITHUB_SHA. Bump package.json for a new candidate." >&2
+              exit 1
+            fi
+          else
+            git tag "$tag" "$GITHUB_SHA"
+            git push origin "refs/tags/$tag"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Merge the SBOMs
+        run: |
+          rm -f candidate/*.dmg.sha256
+          node scripts/release-candidate.mjs sbom candidate
+
+      - name: Attest build provenance
+        id: provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: candidate/*.dmg
+
+      - name: Attest the SBOM
+        id: sbom
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: candidate/*.dmg
+          sbom-path: candidate/flyto2-runtime-${{ steps.source.outputs.version }}.cdx.json
+
+      - name: Write checksums and the release manifest
         env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.release_tag }}
-        run: gh release upload "$TAG" macos-app-out/*.dmg macos-app-out/*.dmg.sha256 --clobber
+          PROVENANCE_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+          SBOM_BUNDLE: ${{ steps.sbom.outputs.bundle-path }}
+        run: |
+          cp "$PROVENANCE_BUNDLE" candidate/provenance.intoto.jsonl
+          cp "$SBOM_BUNDLE" candidate/sbom.intoto.jsonl
+          node scripts/release-candidate.mjs manifest candidate
+          (cd candidate && sha256sum -c SHA256SUMS)
+          ls -la candidate
+
+      - name: Upload the release candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: flyto2-runtime-candidate
+          path: candidate/*
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Hand off to flyto2
+        env:
+          VERSION: ${{ steps.source.outputs.version }}
+        run: |
+          {
+            echo "### Release candidate v$VERSION"
+            echo
+            echo "Publish it from flytohub/flyto2 with the **Ingest release** workflow:"
+            echo
+            echo '```'
+            echo "gh workflow run ingest-release.yml -R flytohub/flyto2 -f product=runtime -f source_run_id=$GITHUB_RUN_ID"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
