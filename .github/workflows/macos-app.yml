@@ -107,13 +107,13 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: ./scripts/package-macos.sh .release
+        run: ./scripts/package-macos.sh macos-app-out
 
       - name: Check the packaged app
         env:
           NOTARIZED: ${{ steps.signing.outputs.notarize }}
         run: |
-          dmg="$(ls .release/*.dmg)"
+          dmg="$(ls macos-app-out/*.dmg)"
           mount="$(hdiutil attach -nobrowse -readonly "$dmg" | tail -n 1 | awk -F'\t' '{print $NF}')"
           ditto "$mount/Flyto2 Runtime.app" "$RUNNER_TEMP/Flyto2 Runtime.app"
           hdiutil detach "$mount"
@@ -130,7 +130,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: flyto2-runtime-macos-${{ matrix.arch }}
-          path: .release/*
+          path: macos-app-out/*
           if-no-files-found: error
 
       # Only a notarized app opens on someone else's Mac, so nothing else is published.
@@ -139,4 +139,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.release_tag }}
-        run: gh release upload "$TAG" .release/*.dmg .release/*.dmg.sha256 --clobber
+        run: gh release upload "$TAG" macos-app-out/*.dmg macos-app-out/*.dmg.sha256 --clobber
