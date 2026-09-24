@@ -14,6 +14,14 @@
 set -euo pipefail
 
 NODE_VERSION=24.21.0
+# Pinned so a commit always packages the same cloudflared. Two digests per
+# architecture: GitHub's digest of the release archive, and the digest of the
+# binary inside it that Cloudflare publishes in its release notes.
+CLOUDFLARED_VERSION=2026.9.1
+CLOUDFLARED_TGZ_SHA256_arm64=c27ab8fd0aa489449e3d201eb02f957ef460a13b613662928b1b23394bf1bcfe
+CLOUDFLARED_BIN_SHA256_arm64=9a0b19f67dc7a3011bc6b972c7ce06a5fcea8784ac6bd599ffa382ea4aeb5a6e
+CLOUDFLARED_TGZ_SHA256_amd64=ff0d3b51d5ff70eceef89d6b32145fee985018a2174596a5dbe405e2766e2ac4
+CLOUDFLARED_BIN_SHA256_amd64=1ea07ae775b03236bd6be18ca1848d6bdc4af2f4f3bce398823b5a36e5761b75
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$(mkdir -p "${1:-$ROOT/.release}" && cd "${1:-$ROOT/.release}" && pwd)"
@@ -78,11 +86,15 @@ find "$RUNTIME/node_modules" -type f \( -name '*.map' -o -name '*.d.ts' -o -name
 ')
 "$RUNTIME/node/bin/node" "$RUNTIME/dist/cli.js" version
 
-echo "==> cloudflared"
+echo "==> cloudflared $CLOUDFLARED_VERSION"
 mkdir -p "$RUNTIME/vendor"
 curl -fsSL -o "$WORK/cloudflared.tgz" \
-  "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-$CLOUDFLARED_ARCH.tgz"
+  "https://github.com/cloudflare/cloudflared/releases/download/$CLOUDFLARED_VERSION/cloudflared-darwin-$CLOUDFLARED_ARCH.tgz"
+tgz_sha256_var="CLOUDFLARED_TGZ_SHA256_$CLOUDFLARED_ARCH"
+bin_sha256_var="CLOUDFLARED_BIN_SHA256_$CLOUDFLARED_ARCH"
+echo "${!tgz_sha256_var}  $WORK/cloudflared.tgz" | shasum -a 256 -c -
 tar -xzf "$WORK/cloudflared.tgz" -C "$RUNTIME/vendor"
+echo "${!bin_sha256_var}  $RUNTIME/vendor/cloudflared" | shasum -a 256 -c -
 codesign --verify --strict \
   -R="anchor apple generic and certificate leaf[subject.OU] = \"$CLOUDFLARE_TEAM_ID\"" \
   "$RUNTIME/vendor/cloudflared"
@@ -153,7 +165,10 @@ mkdir -p "$WORK/dmg"
 mv "$APP" "$WORK/dmg/"
 ln -s /Applications "$WORK/dmg/Applications"
 rm -f "$DMG"
-hdiutil create -quiet -volname "Flyto2 Runtime" -srcfolder "$WORK/dmg" -ov -format UDZO "$DMG"
+# An explicit format: hdiutil's default compression differs between macOS
+# releases (the same app was 208 MB on the CI runner and 163 MB locally).
+# LZMA is the smallest and opens on every macOS the app supports.
+hdiutil create -quiet -volname "Flyto2 Runtime" -srcfolder "$WORK/dmg" -ov -format ULMO "$DMG"
 if [[ "$IDENTITY" != "-" ]]; then
   codesign --force --sign "$IDENTITY" --timestamp "$DMG"
 fi

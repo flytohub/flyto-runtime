@@ -665,7 +665,9 @@ const socketDaemon = new LocalAgentDaemon({
   stateDir: socketStateDir,
   configRevision: CONFIG_REVISION,
   manager: socketManager,
-  requestReadTimeoutMs: 30,
+  // Long enough for a 512 KiB request on a loaded CI runner, short enough to
+  // exercise the incomplete-request timeout below.
+  requestReadTimeoutMs: 500,
   shutdownTimeoutMs: 100,
   idleShutdownMs: 60_000,
 });

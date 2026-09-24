@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { gt as semverGt, valid as semverValid } from "semver";
 import { flyto2RuntimePackageRoot } from "./macos-launcher.js";
 
 // A packaged app carries its own Node, production dependencies and cloudflared,
@@ -47,3 +48,37 @@ export function packagedLocationProblem(packageRoot: string): string | undefined
 // so a packaged Runtime runs the user's own `claude`. Someone who turns on the
 // Claude subagent has Claude Code installed already.
 export const PACKAGED_CLAUDE_COMMAND = "claude";
+
+// The packaged app cannot rebuild itself, so it tells the user when flyto2's
+// stable channel points at a newer version. The channel pointer is the
+// distribution contract; the repository-wide latest release is not.
+export const FLYTO2_RUNTIME_STABLE_CHANNEL_URL =
+  "https://raw.githubusercontent.com/flytohub/flyto2/main/products/runtime/stable.json";
+
+export interface AvailableAppUpdate {
+  version: string;
+  url: string;
+}
+
+export function newerStableRelease(channel: unknown, currentVersion: string): AvailableAppUpdate | undefined {
+  if (!channel || typeof channel !== "object") return undefined;
+  const { product, state, version, release_url: url } = channel as Record<string, unknown>;
+  if (product !== "runtime" || state !== "promoted" || typeof version !== "string" || typeof url !== "string") return undefined;
+  if (!semverValid(version) || !semverValid(currentVersion) || !semverGt(version, currentVersion)) return undefined;
+  if (!url.startsWith("https://github.com/flytohub/flyto2/releases/tag/")) return undefined;
+  return { version, url };
+}
+
+export async function checkForAppUpdate(
+  currentVersion: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<AvailableAppUpdate | undefined> {
+  try {
+    const response = await fetchImpl(FLYTO2_RUNTIME_STABLE_CHANNEL_URL, { signal: AbortSignal.timeout(3_000) });
+    if (!response.ok) return undefined;
+    return newerStableRelease(await response.json(), currentVersion);
+  } catch {
+    // Offline or unreachable: say nothing rather than delay the menu.
+    return undefined;
+  }
+}

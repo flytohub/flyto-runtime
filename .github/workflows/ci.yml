@@ -32,6 +32,11 @@ jobs:
             runner: macos-15-intel
           - os: windows-latest
             runner: windows-latest
+          # The macOS app ships Node 24 (scripts/package-macos.sh), so the suite
+          # also runs on the Node the app users actually get.
+          - os: macos-latest-node24
+            runner: macos-latest
+            node: 24
 
     env:
       DEVSPACE_OAUTH_OWNER_TOKEN: ci-owner-token-that-is-long-enough
@@ -44,7 +49,7 @@ jobs:
         if: matrix.os != 'macos-15-intel'
         uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2 # v2
         with:
-          runtime: node@22
+          runtime: node@${{ matrix.node || 22 }}
           cache: true
           install: false
 

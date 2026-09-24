@@ -153,3 +153,12 @@ test("ChatGPT globals also accept result metadata exposed directly", () => {
     },
   });
 });
+
+test("a failed tool call carries no card, so the widget renders nothing for it", () => {
+  const failed: CallToolResult = {
+    content: [{ type: "text", text: "Workspace ws_missing was not found." }],
+    isError: true,
+  };
+  assert.deepEqual(decodeToolResult(failed), { kind: "invalid" });
+  assert.deepEqual(decodeToolResult({ content: [] }), { kind: "invalid" });
+});

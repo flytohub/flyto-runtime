@@ -45,6 +45,7 @@ import type {
 import type { LocalAgentRecord, LocalAgentWorkspaceScope } from "./local-agent-store.js";
 
 const MAX_REQUEST_BYTES = 512 * 1024;
+const OVERSIZED_REQUEST_LINGER_MS = 2_000;
 const DEFAULT_DAEMON_IDLE_SHUTDOWN_MS = 30_000;
 const DEFAULT_IDLE_CHECK_INTERVAL_MS = 1_000;
 const DEFAULT_REQUEST_READ_TIMEOUT_MS = 5_000;
@@ -248,7 +249,7 @@ export class LocalAgentDaemon {
           message: "Daemon request is too large.",
           retryable: false,
           operation: "request",
-        })));
+        })), { drainClient: true });
         return;
       }
       const newline = buffer.indexOf("\n");
@@ -373,13 +374,31 @@ export class LocalAgentDaemon {
     }
   }
 
-  private writeError(socket: Socket, requestId: string, error: LocalAgentDaemonErrorPayload): void {
-    socket.end(encodeLocalAgentDaemonResponse({
+  private writeError(
+    socket: Socket,
+    requestId: string,
+    error: LocalAgentDaemonErrorPayload,
+    { drainClient = false }: { drainClient?: boolean } = {},
+  ): void {
+    const response = encodeLocalAgentDaemonResponse({
       requestId,
       protocolVersion: LOCAL_AGENT_DAEMON_PROTOCOL_VERSION,
       ok: false,
       error,
-    }), () => socket.destroy());
+    });
+    if (!drainClient) {
+      socket.end(response, () => socket.destroy());
+      return;
+    }
+    // An oversized request is answered while the client is still sending it.
+    // Closing the connection at once fails the rest of its write with EPIPE,
+    // which can reach the client before this response and hide it. Close only
+    // our side, keep discarding what arrives, and let the client finish.
+    socket.end(response);
+    const linger = setTimeout(() => socket.destroy(), OVERSIZED_REQUEST_LINGER_MS);
+    linger.unref();
+    socket.once("end", () => socket.destroy());
+    socket.once("close", () => clearTimeout(linger));
   }
 
   private assertAuthenticated(authToken: string): void {

@@ -1,0 +1,66 @@
+name: Apple notarization check
+
+# Notarization stops the day Apple publishes a new developer agreement until
+# the account holder accepts it, and the signing certificate expires on a
+# fixed date. Both surface only when a release fails, so check them weekly;
+# a failed run is emailed to the repository's maintainers.
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Notarization and signing certificate
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - name: Notarization account
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [[ -z "$APPLE_ID" || -z "$APPLE_PASSWORD" || -z "$APPLE_TEAM_ID" ]]; then
+            echo "::error::APPLE_ID, APPLE_PASSWORD and APPLE_TEAM_ID must be set to notarize the macOS app."
+            exit 1
+          fi
+          if ! output="$(xcrun notarytool history --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" 2>&1)"; then
+            echo "$output" | tail -n 5
+            if grep -qi "agreement" <<<"$output"; then
+              echo "::error::Apple requires a new developer agreement. The account holder accepts it at https://developer.apple.com/account; notarization fails until then."
+            elif grep -qiE "401|credentials|password" <<<"$output"; then
+              echo "::error::Apple rejected the notarization credentials. APPLE_PASSWORD is an app-specific password from https://account.apple.com."
+            else
+              echo "::error::The Apple notary service could not be reached with these credentials."
+            fi
+            exit 1
+          fi
+          echo "The notary service accepts these credentials."
+
+      - name: Signing certificate expiry
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          WARN_DAYS: 60
+        run: |
+          CERTIFICATE_PATH="$RUNNER_TEMP/certificate.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/check.keychain-db"
+          echo -n "$APPLE_CERTIFICATE" | base64 --decode -o "$CERTIFICATE_PATH"
+          security create-keychain -p "" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -t cert -f pkcs12 -k "$KEYCHAIN_PATH" >/dev/null
+          rm -f "$CERTIFICATE_PATH"
+          name="${APPLE_SIGNING_IDENTITY#*: }"
+          not_after="$(security find-certificate -c "$name" -p "$KEYCHAIN_PATH" | openssl x509 -noout -enddate | cut -d= -f2)"
+          security delete-keychain "$KEYCHAIN_PATH"
+          expires="$(date -j -f "%b %e %T %Y %Z" "$not_after" +%s)"
+          days=$(( (expires - $(date +%s)) / 86400 ))
+          echo "\"$APPLE_SIGNING_IDENTITY\" expires $not_after ($days days)."
+          if (( days < WARN_DAYS )); then
+            echo "::error::The Developer ID Application certificate expires in $days days. Create a new one at https://developer.apple.com/account/resources/certificates and update APPLE_CERTIFICATE here and in flyto-cloud."
+            exit 1
+          fi

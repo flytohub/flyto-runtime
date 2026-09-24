@@ -24,8 +24,11 @@ if [[ -f "$ROOT/distribution.json" && -x "$ROOT/node/bin/node" ]]; then
   PACKAGED=1
   export PATH="$ROOT/node/bin:$PATH"
 else
+  # The caller's PATH wins: a Desktop launcher puts the Node the background
+  # service runs on first, and the native modules must stay built for it. The
+  # login shell only fills in what a double-click leaves out.
   LOGIN_PATH="$(login_shell_path)"
-  export PATH="${LOGIN_PATH:+$LOGIN_PATH:}$PATH:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin"
+  export PATH="$PATH${LOGIN_PATH:+:$LOGIN_PATH}:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin"
 fi
 cd "$ROOT" || exit 1
 
@@ -67,6 +70,15 @@ if [[ "$PACKAGED" == 0 ]]; then
     echo "First launch: installing Flyto2 Runtime dependencies..."
     "${PNPM[@]}" install --frozen-lockfile || fail "Dependency installation failed."
   fi
+  # Native modules are built for one Node ABI. After switching Node (nvm, an
+  # upgrade) they fail to load with NODE_MODULE_VERSION, so rebuild them for
+  # this Node here instead of failing once Runtime is running.
+  # better-sqlite3 loads its binary only when a database opens, so open one.
+  if ! node -e 'new (require("better-sqlite3"))(":memory:").close(); try { require.resolve("node-pty") } catch { process.exit(0) } require("node-pty")' >/dev/null 2>&1; then
+    echo "Rebuilding native modules for Node $(node -v)..."
+    "${PNPM[@]}" rebuild || fail "Rebuilding native modules for Node $(node -v) failed."
+    REBUILT_NATIVE=1
+  fi
 
   needs_build=0
   if [[ ! -f dist/cli.js ]]; then
@@ -77,6 +89,13 @@ if [[ "$PACKAGED" == 0 ]]; then
   if [[ "$needs_build" == 1 ]]; then
     echo "Updating Flyto2 Runtime build..."
     "${PNPM[@]}" build || fail "Build failed."
+  fi
+  # The modules now match this Node, so a background service still running this
+  # checkout on another Node would fail on its next start. Move it to this one.
+  SERVICE_PLIST="$HOME/Library/LaunchAgents/local.flyto2.runtime.plist"
+  if [[ "${REBUILT_NATIVE:-0}" == 1 && -f "$SERVICE_PLIST" ]] && grep -qF "$ROOT/dist/cli.js" "$SERVICE_PLIST"; then
+    echo "Moving the background service to Node $(node -v)..."
+    node dist/cli.js service install >/dev/null || fail "Reinstalling the background service on Node $(node -v) failed."
   fi
 fi
 

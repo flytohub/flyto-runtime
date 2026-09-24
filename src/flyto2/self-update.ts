@@ -137,6 +137,7 @@ const REQUIRED_SELF_UPDATE_CHECKS = [
   "Smoke (macos-latest)",
   "Smoke (macos-15-intel)",
   "Smoke (windows-latest)",
+  "Smoke (macos-latest-node24)",
 ] as const;
 
 // Only a commit whose complete cross-platform smoke matrix exists and finished

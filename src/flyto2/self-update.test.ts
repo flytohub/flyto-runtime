@@ -21,6 +21,7 @@ const green: CheckRun[] = [
   { name: "Smoke (macos-latest)", status: "completed", conclusion: "success" },
   { name: "Smoke (macos-15-intel)", status: "completed", conclusion: "success" },
   { name: "Smoke (windows-latest)", status: "completed", conclusion: "success" },
+  { name: "Smoke (macos-latest-node24)", status: "completed", conclusion: "success" },
   { name: "Analyze", status: "completed", conclusion: "neutral" },
 ];
 

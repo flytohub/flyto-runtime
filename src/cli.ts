@@ -710,6 +710,14 @@ async function runDoctor(): Promise<void> {
   console.log(`Auth file: ${files.authExists ? files.authPath : "missing"}`);
   console.log(`Node: ${process.version} (${nodeVersionStatus()})`);
   console.log(`Node ABI: ${process.versions.modules}`);
+  const { checkForAppUpdate, packagedDistribution } = await import("./flyto2/distribution.js");
+  const packaged = packagedDistribution();
+  if (packaged) {
+    const update = await checkForAppUpdate(packaged.version);
+    console.log(`App: ${packaged.version} (macOS ${packaged.arch}); ${update
+      ? `${update.version} is available at ${update.url}`
+      : "no newer stable release found"}`);
+  }
   console.log(`Platform: ${process.platform} ${process.arch}`);
   console.log(`Git: ${checkGitAvailable()}`);
   console.log(`Bash shell: ${checkBashShell()}`);
@@ -1038,6 +1046,12 @@ async function runPackagedApp(): Promise<void> {
 
 async function runInteractiveMenu(): Promise<void> {
   prompts.intro("Flyto2 Runtime");
+  const { checkForAppUpdate, packagedDistribution } = await import("./flyto2/distribution.js");
+  const packaged = packagedDistribution();
+  const update = packaged ? await checkForAppUpdate(packaged.version) : undefined;
+  if (packaged && update) {
+    prompts.log.info(`Flyto2 Runtime ${update.version} is available (this app is ${packaged.version}). Download it from ${update.url}`);
+  }
 
   for (;;) {
     const action = await prompts.select({

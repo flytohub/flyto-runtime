@@ -12,6 +12,17 @@ if errorlevel 1 goto :missing_node
 node -e "const [a,b]=process.versions.node.split('.').map(Number);process.exit((a>22||(a===22&&b>=19))&&a<27?0:1)" >nul 2>nul
 if errorlevel 1 goto :bad_node
 
+rem Native modules are built for one Node ABI; after switching Node they fail
+rem to load, so a source checkout rebuilds them before running. better-sqlite3
+rem loads its binary only when a database opens, so open one.
+set "REBUILD_NATIVE="
+if exist "%ROOT%\pnpm-lock.yaml" if exist "%ROOT%\node_modules" (
+  pushd "%ROOT%" >nul
+  node.exe -e "new (require('better-sqlite3'))(':memory:').close(); try { require.resolve('node-pty') } catch { process.exit(0) } require('node-pty')" >nul 2>nul
+  if errorlevel 1 set "REBUILD_NATIVE=1"
+  popd >nul
+)
+if defined REBUILD_NATIVE goto :prepare_source
 if /I "%MODE%"=="install" (
   if exist "%ROOT%\pnpm-lock.yaml" goto :prepare_source
   if exist "%ROOT%\dist\cli.js" goto :run
@@ -35,6 +46,11 @@ if not defined PNPM goto :missing_pnpm
 echo Preparing Flyto2 Runtime...
 call %PNPM% install --frozen-lockfile
 if errorlevel 1 goto :install_failed
+if defined REBUILD_NATIVE (
+  echo Rebuilding native modules for this Node...
+  call %PNPM% rebuild
+  if errorlevel 1 goto :build_failed
+)
 call %PNPM% build
 if errorlevel 1 goto :build_failed
 popd >nul

@@ -55,6 +55,10 @@ let card: ToolResultCard | null = null;
 let expanded = false;
 let reviewFilesExpanded = false;
 let errorMessage: string | null = null;
+// Set by a result that carries no card, such as a failed tool call. The model
+// already relays its text, so the frame renders nothing and takes no room in
+// the conversation.
+let resultWithoutCard = false;
 let currentPayload: MountedPayload | null = null;
 let currentPayloadContainer: HTMLElement | null = null;
 let openWorkspaceInstructionKey: string | null = null;
@@ -141,7 +145,12 @@ async function applyToolResult(result: CallToolResult): Promise<void> {
     return;
   }
   if (decoded.kind === "invalid") {
-    clearCard("No result card is available for this tool result.");
+    pendingReviewKey = null;
+    card = null;
+    errorMessage = null;
+    resultWithoutCard = true;
+    resetCardInteractions();
+    render();
     return;
   }
 
@@ -149,6 +158,7 @@ async function applyToolResult(result: CallToolResult): Promise<void> {
   pendingReviewKey = reviewKey;
   card = null;
   errorMessage = null;
+  resultWithoutCard = false;
   resetCardInteractions();
   render();
 
@@ -174,6 +184,7 @@ async function applyToolResult(result: CallToolResult): Promise<void> {
 function setCard(nextCard: ToolResultCard): void {
   pendingReviewKey = null;
   card = nextCard;
+  resultWithoutCard = false;
   expanded = isInitiallyExpandedCard(nextCard);
   reviewFilesExpanded = false;
   openWorkspaceInstructionKey = null;
@@ -186,6 +197,7 @@ function clearCard(message: string): void {
   pendingReviewKey = null;
   card = null;
   errorMessage = message;
+  resultWithoutCard = false;
   resetCardInteractions();
   render();
 }
@@ -251,6 +263,11 @@ function render(): void {
 
   if (!connected) {
     renderEmpty("Connecting to host...");
+    return;
+  }
+
+  if (!card && resultWithoutCard) {
+    appRoot.replaceChildren();
     return;
   }
 
