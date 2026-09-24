@@ -178,13 +178,16 @@ test("Codex non-interactive commands become durable behind exec_command", async 
   assert.match(started.result as string, new RegExp(String(started.session_id)));
   assert.doesNotMatch(started.result as string, /job_/);
 
-  const finished = structuredContent(await context.client.callTool({
-    name: "write_stdin",
-    arguments: {
-      workspace_id: workspaceId,
-      session_id: started.session_id,
-    },
-  }));
+  let finished = started;
+  for (let attempt = 0; attempt < 4 && finished.running; attempt += 1) {
+    finished = structuredContent(await context.client.callTool({
+      name: "write_stdin",
+      arguments: {
+        workspace_id: workspaceId,
+        session_id: started.session_id,
+      },
+    }));
+  }
   assert.equal(finished.running, false);
   assert.equal(finished.exit_code, 0);
   assert.match(finished.result as string, /durable-finished/);
@@ -219,13 +222,16 @@ test("Codex exec_command replays a lost response without repeating the process s
     "once",
   );
 
-  const finished = structuredContent(await context.client.callTool({
-    name: "write_stdin",
-    arguments: {
-      workspace_id: workspaceId,
-      session_id: first.session_id,
-    },
-  }));
+  let finished = first;
+  for (let attempt = 0; attempt < 4 && finished.running; attempt += 1) {
+    finished = structuredContent(await context.client.callTool({
+      name: "write_stdin",
+      arguments: {
+        workspace_id: workspaceId,
+        session_id: first.session_id,
+      },
+    }));
+  }
   assert.equal(finished.running, false);
   assert.equal(finished.exit_code, 0);
   assert.match(finished.result as string, /done/);
@@ -812,10 +818,13 @@ test("show_changes can reopen a historical review without advancing the checkpoi
   assert.equal(current._meta, undefined);
 });
 
-test("open_workspace keeps lifecycle flags and duplicate card metadata out of model output", async (t) => {
-  const providerNote = "available";
+test("Codex open_workspace returns required discovery without unusable local-agent catalogs", async (t) => {
+  let providerLookups = 0;
   const context = await fixture(t, {
-    localAgentProviders: [{ name: "codex", available: true, note: providerNote }],
+    localAgentProviders: () => {
+      providerLookups += 1;
+      return [{ name: "codex", available: true, note: "available" }];
+    },
   });
   const first = await callOpen(context.client, context.project, "chat-1");
   const repeated = await callOpen(context.client, context.project, "chat-1");
@@ -829,10 +838,9 @@ test("open_workspace keeps lifecycle flags and duplicate card metadata out of mo
   assert.equal(outputProperties && "workspaceId" in outputProperties, false);
   assert.equal(outputProperties && "workspaceReused" in outputProperties, false);
   assert.equal(outputProperties && "includeBootstrapContext" in outputProperties, false);
-  const providerSchema = outputProperties?.agent_providers as {
-    items?: { properties?: Record<string, unknown> };
-  } | undefined;
-  assert.ok(providerSchema?.items?.properties?.note);
+  assert.equal(outputProperties?.agent_providers, undefined);
+  assert.equal(outputProperties?.agents, undefined);
+  assert.equal(outputProperties?.skill_diagnostics, undefined);
 
   const firstStructured = structuredContent(first);
   assert.equal(typeof firstStructured.workspace_id, "string");
@@ -841,17 +849,9 @@ test("open_workspace keeps lifecycle flags and duplicate card metadata out of mo
   assert.ok(Array.isArray(firstStructured.agents_files));
   assert.ok(Array.isArray(firstStructured.available_agents_files));
   assert.ok(Array.isArray(firstStructured.skills));
-  assert.ok(Array.isArray(firstStructured.agent_providers));
-  assert.equal(
-    (firstStructured.agent_providers as Array<Record<string, unknown>>)[0]?.id,
-    "codex",
-  );
-  assert.equal(
-    (firstStructured.agent_providers as Array<Record<string, unknown>>)[0]?.note,
-    providerNote,
-  );
-  assert.ok(Array.isArray(firstStructured.agents));
-  assert.ok(Array.isArray(firstStructured.skill_diagnostics));
+  assert.equal(firstStructured.agent_providers, undefined);
+  assert.equal(firstStructured.agents, undefined);
+  assert.equal(firstStructured.skill_diagnostics, undefined);
   assert.equal("workspaceReused" in firstStructured, false);
   assert.equal("includeBootstrapContext" in firstStructured, false);
 
@@ -866,6 +866,7 @@ test("open_workspace keeps lifecycle flags and duplicate card metadata out of mo
   assert.equal(repeatedStructured.agent_providers, undefined);
   assert.equal(repeatedStructured.agents, undefined);
   assert.equal(repeatedStructured.skill_diagnostics, undefined);
+  assert.equal(providerLookups, 1, "Codex workspace opens must not probe unusable local-agent providers");
   assert.equal("workspaceReused" in repeatedStructured, false);
   assert.equal("includeBootstrapContext" in repeatedStructured, false);
 });
@@ -873,6 +874,7 @@ test("open_workspace keeps lifecycle flags and duplicate card metadata out of mo
 test("open_workspace refreshes provider availability for each catalog", async (t) => {
   let available = false;
   const context = await fixture(t, {
+    toolMode: "claude",
     localAgentProviders: () => [{ name: "codex", available }],
   });
 
@@ -894,6 +896,7 @@ test("open_workspace refreshes provider availability for each catalog", async (t
 
 test("open_workspace omits providers disabled by configuration", async (t) => {
   const context = await fixture(t, {
+    toolMode: "claude",
     localAgentProviders: [
       { name: "codex", available: true },
       { name: "claude", available: true },
@@ -1720,7 +1723,7 @@ test("a retried cached ChatGPT edit with the same operation_id replays instead o
   assert.equal(await readFile(join(root, "retry.txt"), "utf8"), "count = 2\n");
 });
 
-test("a cached ChatGPT bash call waits past the Codex yield window and polls via @flyto2/job", async (t) => {
+test("a cached ChatGPT bash call yields quickly and polls via @flyto2/job", async (t) => {
   const { root, localBaseUrl, accessToken } = await httpServerFixture(t, "runtime-cached-long-bash-", "codex");
   const opened = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
     name: "open_workspace", arguments: { path: root },
@@ -1728,25 +1731,45 @@ test("a cached ChatGPT bash call waits past the Codex yield window and polls via
   const openedBody = await opened.json() as { result: { structuredContent: { workspace_id: string } } };
   const workspaceId = openedBody.result.structuredContent.workspace_id;
 
-  // Longer than the 3s Codex yield: a modern client gets a session, a cached one the output.
+  const startedAt = performance.now();
   const waited = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
-    name: "bash", arguments: { workspaceId, command: "sleep 5 && echo legacy-waited" },
+    name: "bash", arguments: {
+      workspaceId,
+      command: "node -e \"setTimeout(() => console.log('legacy-waited'), 2200)\"",
+    },
   });
   assert.equal(waited.status, 200, await waited.clone().text());
+  assert.ok(performance.now() - startedAt < 2_000, "cached ChatGPT bash must yield before a proxy sees it as stalled");
   const waitedText = await waited.text();
-  assert.match(waitedText, /legacy-waited/);
+  assert.match(waitedText, /@flyto2\/job proc_[a-f0-9]{32}/);
   assert.doesNotMatch(waitedText, /write_stdin/);
+  const legacySessionId = /proc_[a-f0-9]{32}/.exec(waitedText)?.[0];
+  assert.ok(legacySessionId);
+
+  let resumedText = "";
+  for (let attempt = 0; attempt < 3 && !/legacy-waited/.test(resumedText); attempt += 1) {
+    const resumed = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
+      name: "bash", arguments: { workspaceId, command: `@flyto2/job ${legacySessionId}` },
+    });
+    assert.equal(resumed.status, 200, await resumed.clone().text());
+    resumedText = await resumed.text();
+  }
+  assert.match(resumedText, /legacy-waited/);
 
   const started = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
-    name: "exec_command", arguments: { workspace_id: workspaceId, cmd: "sleep 5 && echo polled-later" },
+    name: "exec_command", arguments: { workspace_id: workspaceId, cmd: "sleep 2 && echo polled-later" },
   });
   const startedBody = await started.json() as { result: { structuredContent: { session_id: string; running: boolean } } };
   assert.equal(startedBody.result.structuredContent.running, true);
-  const polled = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
-    name: "bash", arguments: { workspaceId, command: `@flyto2/job ${startedBody.result.structuredContent.session_id}` },
-  });
-  assert.equal(polled.status, 200, await polled.clone().text());
-  assert.match(await polled.text(), /polled-later/);
+  let polledText = "";
+  for (let attempt = 0; attempt < 3 && !/polled-later/.test(polledText); attempt += 1) {
+    const polled = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
+      name: "bash", arguments: { workspaceId, command: `@flyto2/job ${startedBody.result.structuredContent.session_id}` },
+    });
+    assert.equal(polled.status, 200, await polled.clone().text());
+    polledText = await polled.text();
+  }
+  assert.match(polledText, /polled-later/);
 });
 
 test("a client cannot opt a modern exec_command into legacy wording by sending the header", async (t) => {

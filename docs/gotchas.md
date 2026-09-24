@@ -226,8 +226,10 @@ It also checks compatibility and custom paths:
 - additional paths from `skills.paths`
 
 When Subagents are enabled, DevSpace loads agent profiles from
-`~/.devspace/agents/*.md` and project `.devspace/agents/*.md`, then exposes a
-compact profile catalog through `open_workspace`. DevSpace also synchronizes
+`~/.devspace/agents/*.md` and project `.devspace/agents/*.md`. Claude
+compatibility mode exposes that compact profile catalog through
+`open_workspace`; Codex mode leaves it out of ChatGPT's initial context and
+advertises only the on-demand workflow skill. DevSpace also synchronizes
 its managed `subagents` skill to `~/.devspace/skills/subagents/SKILL.md` and
 uses that copy instead of a package-manager path. The skill keeps the
 model-facing workflow to

@@ -130,9 +130,13 @@ function registerOpenWorkspaceTool(options: WorkspaceToolRegistrationOptions): v
         agents_files: z.array(workspaceAgentsFileOutputSchema).optional(),
         available_agents_files: z.array(workspaceAvailableAgentsFileOutputSchema).optional(),
         skills: z.array(workspaceSkillOutputSchema).optional(),
-        agent_providers: z.array(workspaceLocalAgentProviderOutputSchema).optional(),
-        agents: z.array(workspaceLocalAgentOutputSchema).optional(),
-        skill_diagnostics: z.array(z.unknown()).optional(),
+        ...(config.toolMode === "claude"
+          ? {
+              agent_providers: z.array(workspaceLocalAgentProviderOutputSchema).optional(),
+              agents: z.array(workspaceLocalAgentOutputSchema).optional(),
+              skill_diagnostics: z.array(z.unknown()).optional(),
+            }
+          : {}),
         review: z.discriminatedUnion("available", [
           z.object({ available: z.literal(true) }),
           z.object({
@@ -203,14 +207,18 @@ async function handleOpenWorkspace(
           }
         : undefined,
       review,
-      ...(context.includeBootstrapContext
+      ...(context.includeDiscoveryContext
         ? {
             agents_files: presentation.loadedAgentsFiles,
             available_agents_files: presentation.availableAgentsFileOutputs,
             skills: presentation.visibleSkills,
-            agent_providers: presentation.visibleAgentProviders,
-            agents: presentation.visibleAgents,
-            skill_diagnostics: workspace.skillDiagnostics,
+            ...(config.toolMode === "claude"
+              ? {
+                  agent_providers: presentation.visibleAgentProviders,
+                  agents: presentation.visibleAgents,
+                  skill_diagnostics: workspace.skillDiagnostics,
+                }
+              : {}),
           }
         : {}),
       instruction: presentation.instruction,
@@ -250,7 +258,8 @@ function buildWorkspacePresentation(
   const preloadSubagents = config.subagents.enabled
     && config.subagents.instructions === "preload";
   const subagentsSkill = workspace.skills.find((skill) => skill.name === "subagents");
-  const preloadedSubagentInstructions = preloadSubagents && subagentsSkill
+  const preloadedSubagentInstructions = context.includeDiscoveryContext
+    && preloadSubagents && subagentsSkill
     ? readFileSync(subagentsSkill.filePath, "utf8")
     : undefined;
   const availableSkills = workspace.skills
@@ -261,11 +270,16 @@ function buildWorkspacePresentation(
       description: skill.description,
       path: formatPathForPrompt(skill.filePath),
     }));
-  const agentCatalog = buildLocalAgentCatalog(
-    config.subagents,
-    workspace.agentProfiles,
-    resolveLocalAgentProviders(),
-  );
+  // Codex mode exposes only the six workspace primitives, so local-agent
+  // provider/profile data cannot lead to a callable tool. Keep that catalog
+  // out of ChatGPT's initial context and avoid probing providers for it.
+  const agentCatalog = context.includeDiscoveryContext && config.toolMode === "claude"
+    ? buildLocalAgentCatalog(
+        config.subagents,
+        workspace.agentProfiles,
+        resolveLocalAgentProviders(),
+      )
+    : { providers: [], profiles: [] };
   const availableAgentProviders = agentCatalog.providers
     .filter((provider) => provider.usable)
     .map((provider) => ({
@@ -282,11 +296,11 @@ function buildWorkspacePresentation(
   const allAvailableAgentsFiles = availableAgentsFiles.map((file) => ({
     path: formatAgentsPath(file.path, workspace.root),
   }));
-  const visibleSkills = context.includeBootstrapContext ? availableSkills : [];
-  const visibleAgentProviders = context.includeBootstrapContext ? availableAgentProviders : [];
-  const visibleAgents = context.includeBootstrapContext ? availableAgents : [];
-  const loadedAgentsFiles = context.includeBootstrapContext ? allLoadedAgentsFiles : [];
-  const availableAgentsFileOutputs = context.includeBootstrapContext
+  const visibleSkills = context.includeDiscoveryContext ? availableSkills : [];
+  const visibleAgentProviders = context.includeDiscoveryContext ? availableAgentProviders : [];
+  const visibleAgents = context.includeDiscoveryContext ? availableAgents : [];
+  const loadedAgentsFiles = context.includeDiscoveryContext ? allLoadedAgentsFiles : [];
+  const availableAgentsFileOutputs = context.includeDiscoveryContext
     ? allAvailableAgentsFiles
     : [];
   const baseInstruction = workspaceBaseInstruction(config.skillsEnabled);
@@ -343,7 +357,7 @@ function workspaceInstruction(
   const instructionParts = [
     workspaceInstruction,
     legacyReactiveInstruction,
-    ...(preloadedSubagentInstructions && context.includeBootstrapContext
+    ...(preloadedSubagentInstructions && context.includeDiscoveryContext
       ? ["Subagent workflow instructions:", preloadedSubagentInstructions]
       : []),
   ].filter((part): part is string => Boolean(part));

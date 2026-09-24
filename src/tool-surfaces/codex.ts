@@ -31,10 +31,10 @@ interface CodexProcessSnapshot extends Omit<ProcessSnapshot, "sessionId"> {
 
 const CODEX_DURABLE_EVENT_TYPE = "codex.exec.exited";
 const CODEX_DURABLE_SESSION_PREFIX = "proc_";
-const DEFAULT_CODEX_YIELD_MS = 3_000;
+const DEFAULT_CODEX_YIELD_MS = 1_000;
 const DEFAULT_CODEX_INTERACTIVE_YIELD_MS = 250;
-const DEFAULT_CODEX_POLL_YIELD_MS = 5_000;
-const LEGACY_SHELL_WAIT_MS = 45_000;
+const DEFAULT_CODEX_POLL_YIELD_MS = 1_000;
+const LEGACY_SHELL_WAIT_MS = 1_000;
 const DEFAULT_MAX_OUTPUT_TOKENS = 4_000;
 const CODEX_UNCERTAIN_OUTCOME_SIGNAL = "OUTCOME_UNCERTAIN";
 
@@ -440,8 +440,9 @@ function isLegacyShellCall(extra: unknown): boolean {
   return (headers as Record<string, unknown> | undefined)?.[LEGACY_SHELL_HEADER] === "1";
 }
 
-// A cached-catalog client cannot continue a session, so give its command most
-// of a normal tool-call budget to finish before handing back a continuation.
+// A cached-catalog client continues through a translated @flyto2/job call.
+// Return that continuation quickly instead of holding an MCP request open long
+// enough for ChatGPT or an intermediary proxy to treat it as stalled.
 async function awaitDurableProcess(
   context: ToolRegistrationContext,
   workspaceId: string,

@@ -73,7 +73,7 @@ export interface WorkspaceContext {
   agentsFiles: LoadedAgentsFile[];
   availableAgentsFiles: AvailableAgentsFile[];
   workspaceReused: boolean;
-  includeBootstrapContext: boolean;
+  includeDiscoveryContext: boolean;
 }
 
 export interface WorkspaceReadPath {
@@ -132,7 +132,7 @@ export class WorkspaceRegistry {
       return {
         ...context,
         // A new worktree always has its own workspace-specific context.
-        includeBootstrapContext: true,
+        includeDiscoveryContext: true,
       };
     }
 
@@ -144,7 +144,7 @@ export class WorkspaceRegistry {
       return {
         ...context,
         workspaceReused: true,
-        includeBootstrapContext: false,
+        includeDiscoveryContext: false,
       };
     }
 
@@ -188,7 +188,7 @@ export class WorkspaceRegistry {
         this.store?.touchConversationBinding(conversationScopeId, targetKey);
         return {
           ...context,
-          includeBootstrapContext: false,
+          includeDiscoveryContext: false,
         };
       }
 
@@ -204,7 +204,7 @@ export class WorkspaceRegistry {
     });
     return {
       ...context,
-      includeBootstrapContext: true,
+      includeDiscoveryContext: true,
     };
   }
 
@@ -247,6 +247,9 @@ export class WorkspaceRegistry {
   }
 
   private async reusedWorkspaceContext(workspace: Workspace): Promise<WorkspaceContext> {
+    // Refresh on-disk instruction state so a broken or replaced context path
+    // still fails safely. The transport omits this discovery payload for a
+    // conversation that already received it.
     workspace.agentProfiles = await loadLocalAgentProfiles(this.config, workspace.root);
     const agentsFiles = await this.loadInitialAgentsFiles(workspace.root);
     const availableAgentsFiles = await this.findAvailableAgentsFiles(workspace.root, agentsFiles);
@@ -256,7 +259,7 @@ export class WorkspaceRegistry {
       agentsFiles,
       availableAgentsFiles,
       workspaceReused: true,
-      includeBootstrapContext: true,
+      includeDiscoveryContext: false,
     };
   }
 
@@ -520,7 +523,7 @@ export class WorkspaceRegistry {
       agentsFiles,
       availableAgentsFiles,
       workspaceReused: false,
-      includeBootstrapContext: true,
+      includeDiscoveryContext: true,
     };
   }
 

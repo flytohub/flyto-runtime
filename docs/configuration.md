@@ -126,6 +126,13 @@ or retain large diff payloads in conversation state. The legacy `ui.enabled`
 field is still accepted in v1 configuration files for upgrade compatibility,
 but it has no runtime effect.
 
+In Codex mode, the initial workspace response contains required instruction
+files, nested instruction paths, and the on-demand skill catalog. It omits local
+agent provider/profile availability and diagnostics because the six-tool Codex
+surface cannot call those records directly. Reopening the same checkout in the
+same conversation is only a lightweight workspace handshake and does not resend
+the discovery payload.
+
 ## Skills and subagents
 
 DevSpace discovers standard Agent Skills from `~/.agents/skills`, project

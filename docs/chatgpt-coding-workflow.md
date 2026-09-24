@@ -126,9 +126,10 @@ from the installed DevSpace package and wins over other skills named
 
 When Subagents are enabled, DevSpace discovers agent profiles
 from `~/.devspace/agents/*.md` and project `.devspace/agents/*.md`.
-`open_workspace` exposes a compact catalog with profile names, descriptions,
-providers, and optional models/effort levels so the model can choose a configured agent
-without seeing provider-specific launch details.
+Claude compatibility mode exposes their compact profile catalog through
+`open_workspace`. Codex mode keeps that non-callable catalog out of ChatGPT's
+initial context; its on-demand `subagents` skill uses the existing CLI workflow
+when delegation is actually needed.
 
 Example profiles are packaged under `examples/agents/` for users who want
 starter templates. Copy or adapt them into one of the active profile directories
@@ -177,8 +178,11 @@ DevSpace uses the Codex-style surface by default. It exposes:
 
 In this mode, `write`, `edit`, and `bash` are not registered. `exec_command`
 returns a process session ID when a command is still
-running after its yield window. Use `write_stdin` to poll it, send input, resize
+running after its short yield window. Use `write_stdin` to poll it, send input, resize
 a PTY, or send Ctrl-C. Set `tty: true` only for commands that need a terminal.
+Both the first yield and later non-interactive polls return in about one second,
+so long commands do not hold one MCP request open until a proxy or ChatGPT treats
+the connection as stalled.
 
 Set `tools.mode` to `claude` in `~/.devspace/config.jsonc` to expose `write`,
 `edit`, and `bash` instead of the Codex mutation and command tools. Dedicated

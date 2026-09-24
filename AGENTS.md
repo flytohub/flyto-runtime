@@ -60,7 +60,7 @@ Normal Codex mode should center on:
 
 Runtime does not advertise MCP Apps/result cards. `show_changes` returns a compact review reference/summary; full patches stay in local Git-backed review history and are fetched only when explicitly needed.
 
-Open a project/worktree once, then reuse its `workspace_id`. Avoid duplicating bootstrap context, large command output, diffs, logs, or evidence in model responses.
+Open a project/worktree once, then reuse its `workspace_id`. Avoid duplicating discovery context, large command output, diffs, logs, or evidence in model responses.
 
 ## Cross-cutting changes
 
