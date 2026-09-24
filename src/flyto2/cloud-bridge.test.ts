@@ -35,6 +35,7 @@ test("Cloud bridge pairs once, persists 0600 credentials, and normalizes assignm
         device_secret: "secret-1",
         workspace_id: "workspace-1",
         workspace_name: "Workspace",
+        space_id: "space-a",
       });
     }
     if (url.includes("/api/devices/jobs/poll")) {
@@ -53,6 +54,8 @@ test("Cloud bridge pairs once, persists 0600 credentials, and normalizes assignm
   assert.equal(bridge.paired, false);
   const paired = await bridge.pair("pair-code", manifest, "http://127.0.0.1:9999");
   assert.equal(paired.device_id, "device-1");
+  assert.equal(paired.space_id, "space-a");
+  assert.equal(bridge.spaceId, "space-a");
   assert.equal(bridge.paired, true);
 
   const credentialPath = join(stateDir, "flyto2-cloud.json");
@@ -61,6 +64,7 @@ test("Cloud bridge pairs once, persists 0600 credentials, and normalizes assignm
   }
   const stored = JSON.parse(await readFile(credentialPath, "utf8")) as Record<string, unknown>;
   assert.equal(stored.device_secret, "secret-1");
+  assert.equal(stored.space_id, "space-a");
 
   const restored = new Flyto2CloudBridge({ stateDir }, fakeFetch);
   const assignment = await restored.waitForAssignment();
