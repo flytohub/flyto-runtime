@@ -48,6 +48,12 @@ the Runtime. The generated package contains no Runtime credentials.
     "mode": "codex",
     "exposeRuntimeInternals": false,
   },
+  "handoff": {
+    "enabled": true,
+    "maxToolCalls": 50,
+    "maxContextBytes": 393216,
+    "maxAgeMinutes": 240,
+  },
   "ui": {
     "enabled": true,
   },
@@ -132,6 +138,31 @@ agent provider/profile availability and diagnostics because the six-tool Codex
 surface cannot call those records directly. Reopening the same checkout in the
 same conversation is only a lightweight workspace handshake and does not resend
 the discovery payload.
+
+## ChatGPT conversation handoff
+
+`handoff.enabled` defaults to `true`. It applies only when the MCP host sends
+ChatGPT's `openai/session` metadata; Direct MCP clients and other custom hosts
+without that metadata are unchanged. Runtime stops further tool execution when
+any configured budget is reached:
+
+| Setting | Default | Meaning |
+| --- | ---: | --- |
+| `handoff.maxToolCalls` | `50` | Maximum tool calls in one ChatGPT session. |
+| `handoff.maxContextBytes` | `393216` | Maximum combined MCP tool input and output bytes tracked by Runtime. |
+| `handoff.maxAgeMinutes` | `240` | Maximum session age after at least 20 tool calls. |
+
+When a budget is reached, Runtime finishes the current tool call, writes a
+bounded Markdown handoff under `storage.stateDir/handoffs/`, and rejects later
+tool calls from that ChatGPT session. The response includes a `handoff_id` and a
+prompt beginning with `@DevSpace`. Start a new chat, select the DevSpace plugin,
+and send that prompt. The new chat restores the handoff by calling
+`open_workspace` with `handoff_id`; a path is not required for that call.
+
+For better task recovery, the host should provide a short `task_context` on the
+first `open_workspace` call. Runtime stores no raw ChatGPT session identifier;
+it uses a SHA-256 digest and excludes command bodies, file contents, credentials,
+and full diffs from the automatic handoff.
 
 ## Skills and subagents
 

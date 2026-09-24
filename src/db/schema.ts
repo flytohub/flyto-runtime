@@ -56,6 +56,43 @@ export const workspaceConversationBindings = sqliteTable(
   ],
 );
 
+export const conversationHandoffs = sqliteTable(
+  "conversation_handoffs",
+  {
+    id: text("id").primaryKey(),
+    conversationHash: text("conversation_hash").notNull(),
+    workspaceSessionId: text("workspace_session_id"),
+    workspaceRoot: text("workspace_root").notNull(),
+    taskContext: text("task_context"),
+    markdown: text("markdown").notNull(),
+    markdownPath: text("markdown_path").notNull(),
+    createdAt: text("created_at").notNull(),
+    restoredAt: text("restored_at"),
+  },
+  (table) => [
+    index("conversation_handoffs_conversation_idx").on(table.conversationHash, table.createdAt),
+    index("conversation_handoffs_workspace_idx").on(table.workspaceSessionId, table.createdAt),
+  ],
+);
+
+export const conversationBudgetStates = sqliteTable(
+  "conversation_budget_states",
+  {
+    conversationHash: text("conversation_hash").primaryKey(),
+    startedAt: text("started_at").notNull(),
+    toolCalls: integer("tool_calls").notNull(),
+    contextBytes: integer("context_bytes").notNull(),
+    workspaceSessionId: text("workspace_session_id"),
+    taskContext: text("task_context"),
+    recentActivitiesJson: text("recent_activities_json").notNull(),
+    handoffId: text("handoff_id"),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    index("conversation_budget_states_updated_idx").on(table.updatedAt),
+  ],
+);
+
 export const oauthClients = sqliteTable(
   "oauth_clients",
   {

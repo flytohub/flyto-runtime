@@ -33,6 +33,7 @@ For non-trivial changes:
 - **Subagent** — bounded delegated model invocation.
 - **Artifact** — user-provided/generated file transferred through the supported artifact path.
 - **Review checkpoint** — Git-backed state for coherent change review.
+- **Conversation handoff** — bounded persisted continuation context created when a ChatGPT session reaches its Runtime budget.
 
 Use these terms precisely.
 
@@ -62,6 +63,8 @@ Runtime does not advertise MCP Apps/result cards. `show_changes` returns a compa
 
 Open a project/worktree once, then reuse its `workspace_id`. Avoid duplicating discovery context, large command output, diffs, logs, or evidence in model responses.
 
+ChatGPT conversation budgets are Runtime-owned. When a budget is reached, finish the current tool call, persist a bounded handoff, and stop later tools in that session. Resume through `open_workspace` with `handoff_id` in a new session. Never persist raw host session IDs, command bodies, credentials, full file contents, or full diffs in an automatic handoff.
+
 ## Cross-cutting changes
 
 When changing a concept, trace the surfaces it actually reaches:
@@ -89,6 +92,7 @@ Create or update a PR only when explicitly asked, and read `CONTRIBUTING.md` fir
 - `src/workspaces.ts` — workspace lifecycle, instructions, skills, profiles
 - `src/roots.ts` — allowed roots/path containment
 - `src/process-sessions.ts` — process lifecycle and bounded output
+- `src/conversation-handoff.ts` — ChatGPT session budgets and persisted continuation handoffs
 - `src/git.ts`, `src/git-worktrees.ts` — Git/worktree operations
 - `src/review-checkpoints.ts` — Git-backed review history
 - `src/local-agent-*.ts` — local-agent adapters/execution

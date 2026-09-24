@@ -55,6 +55,7 @@ async function testDatabaseConfiguration(stateDir: string): Promise<void> {
       { version: 9, name: "durable-operations" },
       { version: 10, name: "flyto2-runtime-events" },
       { version: 11, name: "flyto2-workspace-watches" },
+      { version: 12, name: "conversation-handoffs" },
     ]);
   } finally {
     database.close();

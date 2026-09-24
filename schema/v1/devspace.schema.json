@@ -107,6 +107,35 @@
       },
       "additionalProperties": false
     },
+    "handoff": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "maxToolCalls": {
+          "default": 50,
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 9007199254740991
+        },
+        "maxContextBytes": {
+          "default": 393216,
+          "type": "integer",
+          "minimum": 65536,
+          "maximum": 9007199254740991
+        },
+        "maxAgeMinutes": {
+          "default": 240,
+          "type": "integer",
+          "minimum": 30,
+          "maximum": 9007199254740991
+        }
+      },
+      "additionalProperties": false
+    },
     "ui": {
       "default": {},
       "type": "object",

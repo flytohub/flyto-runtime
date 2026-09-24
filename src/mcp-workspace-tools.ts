@@ -22,6 +22,7 @@ import {
   toolNames,
   workspaceIdDescription,
 } from "./tool-surfaces/types.js";
+import type { ConversationHandoffManager } from "./conversation-handoff.js";
 import {
   formatAgentsPath,
   type WorkspaceContext,
@@ -34,12 +35,15 @@ interface WorkspaceToolRegistrationOptions {
   workspaces: WorkspaceRegistry;
   reviewCheckpoints: ReviewCheckpointManager;
   resolveLocalAgentProviders: () => LocalAgentProviderStatus[];
+  conversationHandoffs?: ConversationHandoffManager;
 }
 
 interface OpenWorkspaceInput {
-  path: string;
+  path?: string;
   mode?: "checkout" | "worktree";
   base_ref?: string;
+  handoff_id?: string;
+  task_context?: string;
 }
 
 const workspaceSkillOutputSchema = z.object({
@@ -94,12 +98,13 @@ function registerOpenWorkspaceTool(options: WorkspaceToolRegistrationOptions): v
     {
       title: "Open workspace",
       description:
-        "Start work in a project directory or isolated worktree when no usable workspace_id exists for it. During continued work, reuse the existing workspace_id instead of calling this tool again. By default this uses the actual checkout; set mode=\"worktree\" for isolated or parallel work.",
+        "Start work in a project directory or resume a saved Flyto2 Runtime handoff. Provide path for new work, or handoff_id in a new ChatGPT conversation to restore its saved workspace and continuation context. During continued work, reuse the existing workspace_id.",
       inputSchema: {
         path: z
           .string()
+          .optional()
           .describe(
-            `Absolute path, or a leading-tilde home path such as ~/project, to a project directory inside an allowed root. ${allowedRootsSentence(config.allowedRoots)}`,
+            `Absolute path, or a leading-tilde home path such as ~/project, to a project directory inside an allowed root. Required unless handoff_id is provided. ${allowedRootsSentence(config.allowedRoots)}`,
           ),
         mode: z
           .enum(["checkout", "worktree"])
@@ -111,6 +116,16 @@ function registerOpenWorkspaceTool(options: WorkspaceToolRegistrationOptions): v
           .string()
           .optional()
           .describe("Git ref to base a worktree on. Only used with mode=\"worktree\". Defaults to HEAD."),
+        handoff_id: z
+          .string()
+          .regex(/^handoff_[a-f0-9]{16}$/)
+          .optional()
+          .describe("Saved Flyto2 Runtime handoff to restore in a new ChatGPT conversation."),
+        task_context: z
+          .string()
+          .max(2_000)
+          .optional()
+          .describe("Concise current objective and constraints for automatic handoff recovery if this conversation grows too large."),
       },
       outputSchema: {
         workspace_id: z.string(),
@@ -145,6 +160,15 @@ function registerOpenWorkspaceTool(options: WorkspaceToolRegistrationOptions): v
           }),
         ]),
         instruction: z.string(),
+        handoff: z
+          .object({
+            id: z.string(),
+            created_at: z.string(),
+            markdown_path: z.string(),
+            markdown: z.string(),
+            resume_prompt: z.string(),
+          })
+          .optional(),
       },
       annotations: { readOnlyHint: true },
     },
@@ -162,12 +186,23 @@ async function handleOpenWorkspace(
     workspaces,
     reviewCheckpoints,
     resolveLocalAgentProviders,
+    conversationHandoffs,
   } = options;
+  const savedHandoff = input.handoff_id
+    ? conversationHandoffs?.getHandoff(input.handoff_id)
+    : undefined;
+  if (input.handoff_id && !savedHandoff) {
+    throw new Error(`Unknown or expired handoff: ${input.handoff_id}`);
+  }
+  const workspacePath = savedHandoff?.workspaceRoot ?? input.path;
+  if (!workspacePath) {
+    throw new Error("open_workspace requires path or handoff_id.");
+  }
   const startedAt = performance.now();
   const context = await openWorkspaceContext(
     workspaces,
     config,
-    input,
+    { ...input, path: workspacePath },
     requestMeta,
   );
   const { workspace } = context;
@@ -180,6 +215,12 @@ async function handleOpenWorkspace(
     config,
     resolveLocalAgentProviders,
   );
+  const restoredHandoff = savedHandoff && conversationHandoffs
+    ? conversationHandoffs.markRestored(savedHandoff.id)
+    : undefined;
+  const resultText = restoredHandoff
+    ? `${presentation.resultText}\n\nRestored Flyto2 Runtime handoff ${restoredHandoff.id}:\n\n${restoredHandoff.markdown}`
+    : presentation.resultText;
 
   logToolCall(config, {
     tool: "open_workspace",
@@ -190,7 +231,7 @@ async function handleOpenWorkspace(
   });
 
   return {
-    content: [{ type: "text" as const, text: presentation.resultText }],
+    content: [{ type: "text" as const, text: resultText }],
     structuredContent: {
       workspace_id: workspace.id,
       root: workspace.root,
@@ -222,6 +263,15 @@ async function handleOpenWorkspace(
           }
         : {}),
       instruction: presentation.instruction,
+      handoff: restoredHandoff
+        ? {
+            id: restoredHandoff.id,
+            created_at: restoredHandoff.createdAt,
+            markdown_path: restoredHandoff.markdownPath,
+            markdown: restoredHandoff.markdown,
+            resume_prompt: restoredHandoff.resumePrompt,
+          }
+        : undefined,
     },
   };
 }
@@ -233,6 +283,7 @@ async function openWorkspaceContext(
   requestMeta: unknown,
 ): Promise<WorkspaceContext> {
   try {
+    if (!input.path) throw new Error("open_workspace requires path or handoff_id.");
     return await workspaces.openWorkspace(
       { path: input.path, mode: input.mode, baseRef: input.base_ref },
       { conversationScopeId: conversationScopeIdFromRequestMeta(requestMeta) },

@@ -62,6 +62,11 @@ const migrations: Migration[] = [
     name: "flyto2-workspace-watches",
     up: migrateFlyto2WorkspaceWatches,
   },
+  {
+    version: 12,
+    name: "conversation-handoffs",
+    up: migrateConversationHandoffs,
+  },
 ];
 
 export const FLYTO2_STATE_SCHEMA_VERSION =
@@ -386,6 +391,43 @@ function migrateFlyto2WorkspaceWatches(sqlite: Database.Database): void {
 
     create index if not exists flyto2_workspace_watches_workspace_idx
       on flyto2_workspace_watches(workspace_id, status);
+  `);
+}
+
+function migrateConversationHandoffs(sqlite: Database.Database): void {
+  sqlite.exec(`
+    create table if not exists conversation_handoffs (
+      id text primary key,
+      conversation_hash text not null,
+      workspace_session_id text,
+      workspace_root text not null,
+      task_context text,
+      markdown text not null,
+      markdown_path text not null,
+      created_at text not null,
+      restored_at text
+    );
+
+    create index if not exists conversation_handoffs_conversation_idx
+      on conversation_handoffs(conversation_hash, created_at desc);
+
+    create index if not exists conversation_handoffs_workspace_idx
+      on conversation_handoffs(workspace_session_id, created_at desc);
+
+    create table if not exists conversation_budget_states (
+      conversation_hash text primary key,
+      started_at text not null,
+      tool_calls integer not null,
+      context_bytes integer not null,
+      workspace_session_id text,
+      task_context text,
+      recent_activities_json text not null,
+      handoff_id text,
+      updated_at text not null
+    );
+
+    create index if not exists conversation_budget_states_updated_idx
+      on conversation_budget_states(updated_at desc);
   `);
 }
 

@@ -18,6 +18,12 @@ export interface ServerConfig {
   publicBaseUrl: string;
   toolMode: ToolMode;
   exposeRuntimeInternals: boolean;
+  handoff: {
+    enabled: boolean;
+    maxToolCalls: number;
+    maxContextBytes: number;
+    maxAgeMinutes: number;
+  };
   stateDir: string;
   worktreeRoot: string;
   artifactsEnabled: boolean;
@@ -67,6 +73,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     publicBaseUrl,
     toolMode: stored.tools.mode,
     exposeRuntimeInternals: stored.tools.exposeRuntimeInternals,
+    handoff: stored.handoff,
     stateDir: normalizePath(stored.storage.stateDir),
     worktreeRoot: normalizePath(stored.workspaces.worktreeRoot),
     artifactsEnabled: stored.artifacts.enabled,

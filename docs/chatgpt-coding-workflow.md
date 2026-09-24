@@ -10,7 +10,8 @@ ChatGPT should call `open_workspace` once for a project folder:
 
 ```json
 {
-  "path": "~/work/my-project"
+  "path": "~/work/my-project",
+  "task_context": "Implement the requested scoped change, preserve unrelated work, and run the repository checks."
 }
 ```
 
@@ -47,6 +48,31 @@ Do not call `open_workspace` again for the same checkout folder unless:
 - work moves to a different project folder
 - work switches between checkout and worktree mode
 - the user asks for a new isolated worktree
+
+## Continue in a fresh chat when context grows
+
+For ChatGPT sessions, Runtime tracks a bounded tool-call and transfer budget.
+When the budget is reached, the current tool finishes, Runtime writes a Markdown
+handoff, and later tools in that chat stop. The response contains a prompt such
+as:
+
+```text
+@DevSpace Resume handoff handoff_0123456789abcdef. Open the saved workspace, read the handoff, verify current Git state, and continue from the recorded next step without repeating completed work.
+```
+
+Open a new ChatGPT conversation, select `@DevSpace`, and send the returned
+prompt. ChatGPT resumes through the existing `open_workspace` tool:
+
+```json
+{
+  "handoff_id": "handoff_0123456789abcdef"
+}
+```
+
+The handoff contains the workspace, branch, HEAD, working-tree summary, concise
+task context, and recent Runtime activity. It does not copy the full chat, large
+logs, command bodies, file contents, or credentials into the new conversation.
+Direct MCP clients without ChatGPT session metadata keep operating normally.
 
 ## Checkout Mode
 
