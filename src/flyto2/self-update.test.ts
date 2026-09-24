@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import {
   evaluateCheckRuns,
+  fetchCheckRuns,
   isSelfUpdateInProgress,
   readSelfUpdateStatus,
   runSelfUpdate,
@@ -109,6 +110,21 @@ test("only a commit with the complete cross-platform smoke matrix green may depl
     : run));
   assert.equal(skipped.state, "failed");
   assert.match((skipped as { detail: string }).detail, /Smoke \(macos-15-intel\)=skipped/);
+});
+
+test("GitHub check-run lookup requests an uncompressed JSON response", async () => {
+  let request: { input?: string | URL | Request; init?: RequestInit };
+  const fetchImpl: typeof fetch = async (input, init) => {
+    request = { input, init };
+    return new Response(JSON.stringify({ check_runs: green }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  const runs = await fetchCheckRuns("a".repeat(40), fetchImpl);
+  assert.deepEqual(runs, green);
+  assert.equal(new Headers(request!.init?.headers).get("accept-encoding"), "identity");
 });
 
 test("scheduling refuses a second update while one is running, but not a dead or finished one", (t) => {

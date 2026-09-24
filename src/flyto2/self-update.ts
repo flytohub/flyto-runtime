@@ -179,6 +179,7 @@ export async function fetchCheckRuns(sha: string, fetchImpl: typeof fetch = fetc
   const response = await fetchImpl(`${CHECK_RUNS_API}/${sha}/check-runs?per_page=100`, {
     headers: {
       Accept: "application/vnd.github+json",
+      "Accept-Encoding": "identity",
       "User-Agent": "Flyto2-Runtime",
       "X-GitHub-Api-Version": "2022-11-28",
     },
