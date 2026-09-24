@@ -129,21 +129,49 @@ export function cloudflaredInstallCommand(
   return undefined;
 }
 
-// A new trycloudflare hostname takes a few seconds to appear in DNS. Asking the
-// system resolver before then caches NXDOMAIN, and the next probe (or browser)
-// then reports a working tunnel as unreachable. Query DNS servers directly
-// until the record exists, before anything uses the system resolver.
+// A new trycloudflare hostname takes a few seconds to appear in DNS. Every
+// cache on the way keeps an early NXDOMAIN for the zone's negative TTL, 1800 s
+// for trycloudflare.com: a caching resolver (8.8.8.8, an ISP's, a router's)
+// and Node's own c-ares channel, which caches misses per Resolver. Retrying
+// through either one fails for half an hour against a tunnel that works. So
+// each attempt asks the zone's authoritative nameservers through a Resolver
+// created for that attempt alone. Only once the record exists does anything
+// go through the system resolver.
+export function authoritativeResolve4(): (hostname: string) => Promise<string[]> {
+  let nameserverAddresses: Promise<string[]> | undefined;
+  return async (hostname) => {
+    const dns = (await import("node:dns")).promises;
+    nameserverAddresses ??= (async () => {
+      const zone = hostname.slice(hostname.indexOf(".") + 1);
+      const nameservers = await dns.resolveNs(zone);
+      const addresses = (await Promise.all(nameservers.map((ns) => dns.resolve4(ns).catch(() => [])))).flat();
+      if (addresses.length === 0) throw new Error(`No reachable nameserver for ${zone}.`);
+      return addresses;
+    })().catch((error: unknown) => {
+      nameserverAddresses = undefined;
+      throw error;
+    });
+    const authority = new dns.Resolver({ timeout: 2_000, tries: 1 });
+    authority.setServers(await nameserverAddresses);
+    return authority.resolve4(hostname);
+  };
+}
+
 export async function waitForPublicDns(
   hostname: string,
   {
     timeoutMs = 30_000,
     intervalMs = 1_000,
-    resolve = async (name: string) => (await import("node:dns")).promises.resolve4(name),
+    resolve = authoritativeResolve4(),
+    // Networks that block direct DNS never reach the authority. By the deadline
+    // the record normally exists, so one system lookup is safe to try then.
+    fallbackResolve = async (name: string) => (await import("node:dns")).promises.resolve4(name),
     sleep = defaultSleep,
   }: {
     timeoutMs?: number;
     intervalMs?: number;
     resolve?: (name: string) => Promise<string[]>;
+    fallbackResolve?: (name: string) => Promise<string[]>;
     sleep?: (ms: number) => Promise<void>;
   } = {},
 ): Promise<void> {
@@ -152,13 +180,17 @@ export async function waitForPublicDns(
     try {
       if ((await resolve(hostname)).length > 0) return;
     } catch {
-      // Not published yet.
+      // Not published yet, or the authority is unreachable from here.
     }
-    if (Date.now() >= deadline) {
-      throw new Error(`Quick tunnel hostname ${hostname} did not appear in public DNS within ${timeoutMs} ms.`);
-    }
+    if (Date.now() >= deadline) break;
     await sleep(intervalMs);
   }
+  try {
+    if ((await fallbackResolve(hostname)).length > 0) return;
+  } catch {
+    // Fall through to the error below.
+  }
+  throw new Error(`Quick tunnel hostname ${hostname} did not appear in public DNS within ${timeoutMs} ms.`);
 }
 
 function defaultSleep(ms: number): Promise<void> {

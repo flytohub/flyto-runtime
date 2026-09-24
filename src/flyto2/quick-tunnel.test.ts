@@ -89,12 +89,31 @@ test("setup waits for the new hostname to exist in DNS before anything resolves 
     if (lookups < 3) throw Object.assign(new Error("queryA ENOTFOUND"), { code: "ENOTFOUND" });
     return ["104.16.230.132"];
   };
-  await waitForPublicDns("fresh.trycloudflare.com", { resolve, sleep: async () => {} });
+  let fallbackLookups = 0;
+  const fallbackResolve = async () => {
+    fallbackLookups += 1;
+    return ["104.16.230.132"];
+  };
+  await waitForPublicDns("fresh.trycloudflare.com", { resolve, fallbackResolve, sleep: async () => {} });
   assert.equal(lookups, 3);
+  // The caching system resolver must not be asked while the record is missing.
+  assert.equal(fallbackLookups, 0);
   await assert.rejects(
     waitForPublicDns("never.trycloudflare.com", {
-      resolve: async () => { throw new Error("ENOTFOUND"); }, timeoutMs: 0, sleep: async () => {},
+      resolve: async () => { throw new Error("ENOTFOUND"); },
+      fallbackResolve: async () => { throw new Error("ENOTFOUND"); },
+      timeoutMs: 0,
+      sleep: async () => {},
     }),
     /did not appear in public DNS/,
   );
+});
+
+test("a network that blocks direct DNS still finds the hostname through the system resolver at the deadline", async () => {
+  await waitForPublicDns("blocked.trycloudflare.com", {
+    resolve: async () => { throw Object.assign(new Error("queryA ETIMEOUT"), { code: "ETIMEOUT" }); },
+    fallbackResolve: async () => ["104.16.230.132"],
+    timeoutMs: 0,
+    sleep: async () => {},
+  });
 });
