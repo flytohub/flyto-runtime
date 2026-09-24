@@ -19,19 +19,25 @@ if /I "%MODE%"=="install" (
 if exist "%ROOT%\dist\cli.js" goto :run
 
 :prepare_source
-where pnpm.cmd >nul 2>nul
-if errorlevel 1 (
-  where corepack.cmd >nul 2>nul
-  if not errorlevel 1 corepack enable >nul 2>nul
-)
-where pnpm.cmd >nul 2>nul
-if errorlevel 1 goto :missing_pnpm
+rem pnpm is found, never installed: enabling corepack needs write access next
+rem to node, which most installs lack, and Node 25+ has no corepack. Same order
+rem as src\flyto2\pnpm-command.ts.
+pushd "%ROOT%" >nul
+set "COREPACK_ENABLE_DOWNLOAD_PROMPT=0"
+set "PNPM_VERSION="
+for /f "usebackq delims=" %%v in (`node.exe -p "require('./package.json').packageManager.split('@')[1].split('+')[0]"`) do set "PNPM_VERSION=%%v"
+set "PNPM="
+where pnpm.cmd >nul 2>nul && set "PNPM=pnpm.cmd"
+if not defined PNPM where corepack.cmd >nul 2>nul && set "PNPM=corepack.cmd pnpm"
+if not defined PNPM if defined PNPM_VERSION where npm.cmd >nul 2>nul && set "PNPM=npm.cmd exec --yes --package=pnpm@%PNPM_VERSION% -- pnpm"
+if not defined PNPM goto :missing_pnpm
 
 echo Preparing Flyto2 Runtime...
-call pnpm.cmd install --frozen-lockfile
+call %PNPM% install --frozen-lockfile
 if errorlevel 1 goto :install_failed
-call pnpm.cmd build
+call %PNPM% build
 if errorlevel 1 goto :build_failed
+popd >nul
 
 :run
 if not exist "%ROOT%\dist\cli.js" goto :missing_build
@@ -78,8 +84,8 @@ exit /b 1
 
 :missing_pnpm
 echo.
-echo Flyto2 Runtime needs pnpm to build this source checkout.
-echo Run: corepack enable
+echo Flyto2 Runtime needs pnpm to build this source checkout, and neither
+echo corepack nor npm is available to run it. Reinstall Node.js from https://nodejs.org.
 pause
 exit /b 1
 

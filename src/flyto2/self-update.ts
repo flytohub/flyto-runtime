@@ -205,7 +205,8 @@ export interface SelfUpdateDeps {
   // Points the background service at packageRoot and restarts it behind the
   // /healthz gate; throws after restoring the previous service on failure.
   activate: (packageRoot: string) => void;
-  pnpmCommand?: string;
+  // argv prefix that runs pnpm, from pnpmInvocation.
+  pnpm?: string[];
   now?: () => Date;
   // Tests only. The CLI never sets this: a remote caller must not be able to
   // point the updater at code other than the published repository.
@@ -281,9 +282,9 @@ function buildCommit(paths: SelfUpdatePaths, deps: SelfUpdateDeps, sha: string):
   rmSync(buildDir, { recursive: true, force: true });
   must(deps, "git", ["-C", paths.sourceDir, "worktree", "prune"]);
   must(deps, "git", ["-C", paths.sourceDir, "worktree", "add", "--detach", "--force", buildDir, sha]);
-  const pnpm = deps.pnpmCommand ?? "pnpm";
-  must(deps, pnpm, ["install", "--frozen-lockfile"], { cwd: buildDir });
-  must(deps, pnpm, ["build"], { cwd: buildDir });
+  const [pnpm = "pnpm", ...pnpmArgs] = deps.pnpm ?? [];
+  must(deps, pnpm, [...pnpmArgs, "install", "--frozen-lockfile"], { cwd: buildDir });
+  must(deps, pnpm, [...pnpmArgs, "build"], { cwd: buildDir });
   if (builtSha(buildDir) !== sha) {
     throw new Error(`The build in ${buildDir} does not report commit ${short(sha)}.`);
   }

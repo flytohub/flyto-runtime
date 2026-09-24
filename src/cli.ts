@@ -944,7 +944,7 @@ async function runSelfUpdateCommand(args: string[]): Promise<void> {
           start: true,
         });
       },
-      pnpmCommand: process.platform === "win32" ? "pnpm.cmd" : "pnpm",
+      pnpm: (await import("./flyto2/pnpm-command.js")).resolvePnpm(),
     });
     console.log(JSON.stringify(status, null, 2));
     if (status.phase === "failed" || status.phase === "rolled_back") process.exitCode = 1;

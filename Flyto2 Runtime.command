@@ -22,18 +22,25 @@ if ! node -e 'const [a,b]=process.versions.node.split(".").map(Number);process.e
   fail "Unsupported Node.js version. Required: >=22.19 <27. Current: $(node -v)."
 fi
 
-if ! command -v pnpm >/dev/null 2>&1; then
-  if command -v corepack >/dev/null 2>&1; then
-    corepack enable >/dev/null 2>&1 || true
-  fi
-fi
-if ! command -v pnpm >/dev/null 2>&1; then
-  fail "pnpm was not found. Run: corepack enable"
+# pnpm is found, never installed: enabling corepack needs write access next to
+# node, which most installs lack, and Node 25+ has no corepack. Same order as
+# src/flyto2/pnpm-command.ts.
+PNPM_VERSION="$(node -p 'require("./package.json").packageManager.split("@")[1].split("+")[0]')" \
+  || fail "package.json does not pin a pnpm version."
+export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+if command -v pnpm >/dev/null 2>&1; then
+  PNPM=(pnpm)
+elif command -v corepack >/dev/null 2>&1; then
+  PNPM=(corepack pnpm)
+elif command -v npm >/dev/null 2>&1; then
+  PNPM=(npm exec --yes --package=pnpm@"$PNPM_VERSION" -- pnpm)
+else
+  fail "pnpm was not found, and neither corepack nor npm is available to run it. Reinstall Node.js from https://nodejs.org."
 fi
 
 if [[ ! -d node_modules ]]; then
   echo "First launch: installing Flyto2 Runtime dependencies..."
-  pnpm install --frozen-lockfile || fail "Dependency installation failed."
+  "${PNPM[@]}" install --frozen-lockfile || fail "Dependency installation failed."
 fi
 
 needs_build=0
@@ -44,7 +51,7 @@ elif find src package.json tsconfig.build.json vite.config.ts -type f -newer dis
 fi
 if [[ "$needs_build" == 1 ]]; then
   echo "Updating Flyto2 Runtime build..."
-  pnpm build || fail "Build failed."
+  "${PNPM[@]}" build || fail "Build failed."
 fi
 
 case "$MODE" in

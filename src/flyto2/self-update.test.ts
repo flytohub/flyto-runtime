@@ -51,7 +51,7 @@ function deps(origin: string, overrides: Partial<SelfUpdateDeps> & { current?: s
   const builds: string[] = [];
   const value: SelfUpdateDeps = {
     repository: origin,
-    pnpmCommand: "fake-pnpm",
+    pnpm: ["fake-pnpm"],
     currentGitSha: () => overrides.current ?? null,
     fetchCheckRuns: async () => green,
     activate: (packageRoot) => { activated.push(packageRoot); },

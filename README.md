@@ -68,10 +68,14 @@ Clone and build:
 ```bash
 git clone https://github.com/flytohub/flyto-runtime.git
 cd flyto-runtime
-corepack enable
-pnpm install --frozen-lockfile
-pnpm build
+npx --yes pnpm@11.25.0 install --frozen-lockfile
+npx --yes pnpm@11.25.0 build
 ```
+
+You do not need pnpm installed. `Install.command` / `Install.cmd` do the same
+thing: they use a `pnpm` already on your PATH, else `corepack pnpm`, else npm
+runs the pinned pnpm version. They never run `corepack enable`, which needs
+write access next to node and does not exist on Node 25 and later.
 
 Then run setup:
 
