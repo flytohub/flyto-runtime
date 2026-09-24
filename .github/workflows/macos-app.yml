@@ -1,0 +1,142 @@
+name: macOS App
+
+# Builds "Flyto2 Runtime.app" and its disk image on each Mac architecture,
+# signs and notarizes them when the Apple credentials are configured, and
+# attaches them to a GitHub release when a tag is given.
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing GitHub release tag to attach the disk images to (for example v1.0.9); empty builds only
+        required: false
+        type: string
+  push:
+    branches:
+      - main
+    paths:
+      - packaging/macos/**
+      - scripts/package-macos.sh
+      - src/flyto2/distribution.ts
+      - Flyto2 Runtime.command
+      - .github/workflows/macos-app.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  app:
+    name: App (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # Native modules are compiled for the host, so each architecture builds
+        # on its own hardware.
+        include:
+          - arch: arm64
+            runner: macos-latest
+          - arch: x64
+            runner: macos-15-intel
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # pnpm 11 ships no working standalone binary for Intel macOS, so both
+      # runners use Node plus corepack, which runs pnpm's JavaScript build.
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Enable corepack pnpm
+        run: corepack enable && pnpm --version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Check signing credentials
+        id: signing
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [[ -n "$APPLE_CERTIFICATE" && -n "$APPLE_SIGNING_IDENTITY" ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::APPLE_CERTIFICATE / APPLE_SIGNING_IDENTITY are not set; the app is ad-hoc signed and macOS will refuse it on other Macs."
+          fi
+          if [[ -n "$APPLE_CERTIFICATE" && -n "$APPLE_SIGNING_IDENTITY" && -n "$APPLE_ID" && -n "$APPLE_PASSWORD" && -n "$APPLE_TEAM_ID" ]]; then
+            echo "notarize=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "notarize=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Import Apple certificate
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          CERTIFICATE_PATH="$RUNNER_TEMP/build_certificate.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+          echo -n "$APPLE_CERTIFICATE" | base64 --decode -o "$CERTIFICATE_PATH"
+          security create-keychain -p "" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "" "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          rm -f "$CERTIFICATE_PATH"
+
+      - name: Package
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ steps.signing.outputs.enabled == 'true' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: ./scripts/package-macos.sh .release
+
+      - name: Check the packaged app
+        env:
+          NOTARIZED: ${{ steps.signing.outputs.notarize }}
+        run: |
+          dmg="$(ls .release/*.dmg)"
+          mount="$(hdiutil attach -nobrowse -readonly "$dmg" | tail -n 1 | awk -F'\t' '{print $NF}')"
+          ditto "$mount/Flyto2 Runtime.app" "$RUNNER_TEMP/Flyto2 Runtime.app"
+          hdiutil detach "$mount"
+          runtime="$RUNNER_TEMP/Flyto2 Runtime.app/Contents/Resources/runtime"
+          # A user has no Node: the app must start on its own.
+          printf '\n' | env -i HOME="$HOME" PATH=/usr/bin:/bin bash "$runtime/Flyto2 Runtime.command" version
+          if [[ "$NOTARIZED" == "true" ]]; then
+            # What Gatekeeper decides on a user's Mac.
+            spctl --assess --type execute --verbose=2 "$RUNNER_TEMP/Flyto2 Runtime.app"
+            xcrun stapler validate "$dmg"
+          fi
+
+      - name: Upload disk image
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: flyto2-runtime-macos-${{ matrix.arch }}
+          path: .release/*
+          if-no-files-found: error
+
+      # Only a notarized app opens on someone else's Mac, so nothing else is published.
+      - name: Attach to release
+        if: inputs.release_tag != '' && steps.signing.outputs.notarize == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag }}
+        run: gh release upload "$TAG" .release/*.dmg .release/*.dmg.sha256 --clobber

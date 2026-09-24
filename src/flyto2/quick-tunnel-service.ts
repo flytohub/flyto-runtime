@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { arch, homedir, platform, tmpdir } from "node:os";
 import { basename, dirname, join, posix, win32 } from "node:path";
+import { bundledCloudflaredPath } from "./distribution.js";
 import { flyto2NativeRuntimeHome } from "./native-paths.js";
 import {
   CLOUDFLARED_RELEASES,
@@ -33,6 +34,9 @@ export interface QuickTunnelStatus {
 }
 
 export function findCloudflared(runtimeHome = flyto2NativeRuntimeHome()): string | undefined {
+  // The packaged app ships a signed cloudflared of its own.
+  const bundled = bundledCloudflaredPath();
+  if (existsSync(bundled)) return bundled;
   return locateCloudflared(platform(), () => findCloudflaredBinary(), { runtimeHome, home: homedir(), env: process.env });
 }
 

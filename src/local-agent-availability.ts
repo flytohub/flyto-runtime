@@ -3,6 +3,7 @@ import {
   type LocalAgentProvider,
 } from "./local-agent-profiles.js";
 import { resolveExecutableCommand } from "./local-agent-command.js";
+import { PACKAGED_CLAUDE_COMMAND, packagedDistribution } from "./flyto2/distribution.js";
 import {
   localAgentProviderEnvironment,
   type SubagentsConfig,
@@ -34,9 +35,9 @@ function checkLocalAgentProviderAvailability(
     case "codex":
       return codexAvailability(providerEnv);
     case "claude":
-      return providerEnv.CLAUDE_COMMAND
-        ? commandAvailability(provider, providerEnv.CLAUDE_COMMAND, providerEnv)
-        : packageAvailability(provider, "@anthropic-ai/claude-agent-sdk");
+      if (providerEnv.CLAUDE_COMMAND) return commandAvailability(provider, providerEnv.CLAUDE_COMMAND, providerEnv);
+      if (packagedDistribution()) return commandAvailability(provider, PACKAGED_CLAUDE_COMMAND, providerEnv);
+      return packageAvailability(provider, "@anthropic-ai/claude-agent-sdk");
     case "opencode":
       return packageAvailability(provider, "@opencode-ai/sdk/v2");
     case "pi":

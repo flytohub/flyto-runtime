@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFile, realpath } from "node:fs/promises";
 import { join, relative as relativePath } from "node:path";
 import { flyto2RuntimePackageRoot } from "./flyto2/macos-launcher.js";
+import { FLYTO2_RUNTIME_RELEASES_URL, packagedDistribution } from "./flyto2/distribution.js";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
@@ -143,6 +144,9 @@ function serverInstructions(
 function selfUpdateInstruction(): string {
   if (process.env.FLYTO2_RUNTIME_MANAGED_SERVICE !== "1") return "";
   if (process.platform !== "darwin" && process.platform !== "win32") return "";
+  if (packagedDistribution()) {
+    return ` Only when the user asks to update Flyto2 Runtime itself, tell them to install the new version of the app from ${FLYTO2_RUNTIME_RELEASES_URL}.`;
+  }
   const cli = `${JSON.stringify(process.execPath)} ${JSON.stringify(join(flyto2RuntimePackageRoot(), "dist", "cli.js"))}`;
   return ` Only when the user asks to update Flyto2 Runtime itself, run \`${cli} service self-update\` and later \`${cli} service self-update status\`; the connection drops for a few seconds while it restarts, then retry.`;
 }

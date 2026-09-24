@@ -95,6 +95,7 @@ type Command =
   | "show-changes"
   | "flyto2"
   | "menu"
+  | "app"
   | "launcher"
   | "service"
   | "plugin"
@@ -138,6 +139,9 @@ async function main(argv: string[]): Promise<void> {
     case "menu":
       await runInteractiveMenu();
       return;
+    case "app":
+      await runPackagedApp();
+      return;
     case "launcher":
       await runLauncherCommand(args);
       return;
@@ -167,6 +171,7 @@ function normalizeCommand(command: string | undefined): Command {
     || command === "show-changes"
     || command === "flyto2"
     || command === "menu"
+    || command === "app"
     || command === "launcher"
     || command === "service"
     || command === "plugin"
@@ -893,6 +898,10 @@ async function runSelfUpdateCommand(args: string[]): Promise<void> {
   const paths = selfUpdate.selfUpdatePaths(flyto2NativeRuntimeHome());
   const [action, requestId, ...extra] = args;
   const usage = "Usage: flyto2-runtime service self-update [status]";
+  const { packagedDistribution, FLYTO2_RUNTIME_RELEASES_URL } = await import("./flyto2/distribution.js");
+  if (action !== "status" && packagedDistribution()) {
+    throw new Error(`This Runtime was installed from the Flyto2 Runtime app, which updates by installing the new version from ${FLYTO2_RUNTIME_RELEASES_URL}.`);
+  }
 
   if (action === undefined) {
     const service = await import("./flyto2/native-service.js");
@@ -1005,6 +1014,26 @@ async function runLauncherCommand(args: string[]): Promise<void> {
     default:
       throw new Error("Usage: flyto2-runtime launcher <install|status|remove>");
   }
+}
+
+// The packaged app's entry point. A first launch walks through setup, whose
+// last screen starts (and so installs) the background service from this app;
+// every later launch opens the menu.
+async function runPackagedApp(): Promise<void> {
+  const { flyto2RuntimePackageRoot } = await import("./flyto2/macos-launcher.js");
+  const { packagedLocationProblem } = await import("./flyto2/distribution.js");
+  const problem = packagedLocationProblem(flyto2RuntimePackageRoot());
+  if (problem) {
+    prompts.log.error(problem);
+    process.exitCode = 1;
+    return;
+  }
+  const files = loadDevspaceFiles();
+  if (files.configExists && files.authExists) {
+    await runInteractiveMenu();
+    return;
+  }
+  await runInit({ force: false });
 }
 
 async function runInteractiveMenu(): Promise<void> {

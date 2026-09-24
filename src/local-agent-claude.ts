@@ -6,6 +6,8 @@ import {
   isProgrammerDefect,
 } from "./local-agent-errors.js";
 import type { LocalAgentProvider } from "./local-agent-profiles.js";
+import { resolveExecutableCommand } from "./local-agent-command.js";
+import { PACKAGED_CLAUDE_COMMAND, packagedDistribution } from "./flyto2/distribution.js";
 import type {
   LocalAgentDriver,
   LocalAgentRunCallbacks,
@@ -267,7 +269,8 @@ export function claudeQueryOptions(
   input: LocalAgentRunInput,
   env: NodeJS.ProcessEnv = process.env,
 ): Record<string, unknown> {
-  const executable = env.CLAUDE_COMMAND;
+  const executable = env.CLAUDE_COMMAND
+    ?? (packagedDistribution() ? resolveExecutableCommand(PACKAGED_CLAUDE_COMMAND, env) : undefined);
   const permissionMode = claudePermissionMode(input.writeMode);
   const authority = claudeAuthorityOptions(input.workspaceRoot, input.writeMode);
   return {

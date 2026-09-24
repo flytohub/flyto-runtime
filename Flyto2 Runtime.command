@@ -18,8 +18,15 @@ login_shell_path() {
   sed -n 's/^__FLYTO2_PATH__//p' "$out" | tail -n 1
   rm -f "$out"
 }
-LOGIN_PATH="$(login_shell_path)"
-export PATH="${LOGIN_PATH:+$LOGIN_PATH:}$PATH:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin"
+# The packaged app carries its own Node and is already built.
+PACKAGED=0
+if [[ -f "$ROOT/distribution.json" && -x "$ROOT/node/bin/node" ]]; then
+  PACKAGED=1
+  export PATH="$ROOT/node/bin:$PATH"
+else
+  LOGIN_PATH="$(login_shell_path)"
+  export PATH="${LOGIN_PATH:+$LOGIN_PATH:}$PATH:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin"
+fi
 cd "$ROOT" || exit 1
 
 MODE="${1:-menu}"
@@ -39,36 +46,38 @@ if ! node -e 'const [a,b]=process.versions.node.split(".").map(Number);process.e
   fail "Unsupported Node.js version. Required: >=22.19 <27. Current: $(node -v)."
 fi
 
-# pnpm is found, never installed: enabling corepack needs write access next to
-# node, which most installs lack, and Node 25+ has no corepack. Same order as
-# src/flyto2/pnpm-command.ts.
-PNPM_VERSION="$(node -p 'require("./package.json").packageManager.split("@")[1].split("+")[0]')" \
-  || fail "package.json does not pin a pnpm version."
-export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
-if command -v pnpm >/dev/null 2>&1; then
-  PNPM=(pnpm)
-elif command -v corepack >/dev/null 2>&1; then
-  PNPM=(corepack pnpm)
-elif command -v npm >/dev/null 2>&1; then
-  PNPM=(npm exec --yes --package=pnpm@"$PNPM_VERSION" -- pnpm)
-else
-  fail "pnpm was not found, and neither corepack nor npm is available to run it. Reinstall Node.js from https://nodejs.org."
-fi
+if [[ "$PACKAGED" == 0 ]]; then
+  # pnpm is found, never installed: enabling corepack needs write access next to
+  # node, which most installs lack, and Node 25+ has no corepack. Same order as
+  # src/flyto2/pnpm-command.ts.
+  PNPM_VERSION="$(node -p 'require("./package.json").packageManager.split("@")[1].split("+")[0]')" \
+    || fail "package.json does not pin a pnpm version."
+  export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+  if command -v pnpm >/dev/null 2>&1; then
+    PNPM=(pnpm)
+  elif command -v corepack >/dev/null 2>&1; then
+    PNPM=(corepack pnpm)
+  elif command -v npm >/dev/null 2>&1; then
+    PNPM=(npm exec --yes --package=pnpm@"$PNPM_VERSION" -- pnpm)
+  else
+    fail "pnpm was not found, and neither corepack nor npm is available to run it. Reinstall Node.js from https://nodejs.org."
+  fi
 
-if [[ ! -d node_modules ]]; then
-  echo "First launch: installing Flyto2 Runtime dependencies..."
-  "${PNPM[@]}" install --frozen-lockfile || fail "Dependency installation failed."
-fi
+  if [[ ! -d node_modules ]]; then
+    echo "First launch: installing Flyto2 Runtime dependencies..."
+    "${PNPM[@]}" install --frozen-lockfile || fail "Dependency installation failed."
+  fi
 
-needs_build=0
-if [[ ! -f dist/cli.js ]]; then
-  needs_build=1
-elif find src package.json tsconfig.build.json vite.config.ts -type f -newer dist/cli.js -print -quit 2>/dev/null | grep -q .; then
-  needs_build=1
-fi
-if [[ "$needs_build" == 1 ]]; then
-  echo "Updating Flyto2 Runtime build..."
-  "${PNPM[@]}" build || fail "Build failed."
+  needs_build=0
+  if [[ ! -f dist/cli.js ]]; then
+    needs_build=1
+  elif find src package.json tsconfig.build.json vite.config.ts -type f -newer dist/cli.js -print -quit 2>/dev/null | grep -q .; then
+    needs_build=1
+  fi
+  if [[ "$needs_build" == 1 ]]; then
+    echo "Updating Flyto2 Runtime build..."
+    "${PNPM[@]}" build || fail "Build failed."
+  fi
 fi
 
 case "$MODE" in
@@ -86,6 +95,9 @@ case "$MODE" in
     ;;
   launcher-install)
     node dist/cli.js launcher install
+    ;;
+  app)
+    node dist/cli.js app
     ;;
   install)
     # init is a no-op once configured, so a first run is walked through setup.
