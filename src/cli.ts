@@ -85,6 +85,8 @@ import {
   writePortablePluginPackage,
 } from "./portable-plugin.js";
 
+const MANAGED_WORKTREE_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
+
 type Command =
   | "serve"
   | "init"
@@ -633,11 +635,12 @@ async function serve(): Promise<void> {
       // No healthy Runtime on the configured listener; start it below.
     }
   }
-  await runStartupWorktreeCleanup(config);
+  await runManagedWorktreeCleanup(config);
   const { createServer } = await import("./server.js");
   const { app, close, localAgentProviders } = createServer(config, {
     nativeTunnelWatchdog: true,
   });
+  const stopWorktreeCleanup = startManagedWorktreeCleanupLoop(config);
   const httpServer = app.listen(config.port, config.host, () => {
     console.log(`Flyto2 Runtime listening on http://${config.host}:${config.port}/mcp`);
     console.log(`public base url: ${config.publicBaseUrl}`);
@@ -655,6 +658,7 @@ async function serve(): Promise<void> {
   const shutdown = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
+    stopWorktreeCleanup();
     await shutdownHttpServer(httpServer, close);
     process.exit(0);
   };
@@ -668,7 +672,20 @@ async function serve(): Promise<void> {
   process.once("SIGTERM", handleShutdown);
 }
 
-async function runStartupWorktreeCleanup(config: ServerConfig): Promise<void> {
+function startManagedWorktreeCleanupLoop(config: ServerConfig): () => void {
+  let running = false;
+  const timer = setInterval(() => {
+    if (running) return;
+    running = true;
+    void runManagedWorktreeCleanup(config).finally(() => {
+      running = false;
+    });
+  }, MANAGED_WORKTREE_CLEANUP_INTERVAL_MS);
+  timer.unref();
+  return () => clearInterval(timer);
+}
+
+async function runManagedWorktreeCleanup(config: ServerConfig): Promise<void> {
   try {
     const cleanup = await pruneStaleManagedWorktrees(config);
     if (cleanup.isErr()) {
@@ -1358,7 +1375,7 @@ function printHelp(): void {
       "  devspace config set publicBaseUrl <url|null>",
       "  flyto2-runtime config set tools.mode <codex|claude>",
       "  flyto2-runtime config set tools.exposeRuntimeInternals <true|false>",
-      "  devspace worktrees prune Prune managed worktrees unused for 3 days",
+      "  devspace worktrees prune Prune managed worktrees unused for 12 hours",
       "  devspace show-changes <review-ref> [--json]",
       "  flyto2-runtime flyto2 manifest",
       "  flyto2-runtime flyto2 status",

@@ -28,7 +28,7 @@ const toolsConfigSchema = z.object({
 }).strict().prefault({});
 
 const uiConfigSchema = z.object({
-  enabled: z.boolean().default(true),
+  enabled: z.boolean().default(false).describe("Legacy compatibility field. Runtime no longer emits MCP Apps/result-card metadata."),
 }).strict().prefault({});
 
 const artifactsConfigSchema = z.object({

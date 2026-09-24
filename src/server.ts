@@ -70,10 +70,6 @@ import {
   type ToolSurface,
 } from "./tool-surfaces/types.js";
 import {
-  setWorkspaceAppAssetHeaders,
-  workspaceAppBuildDirectory,
-} from "./workspace-app.js";
-import {
   allowedRootsSentence,
   registerWorkspaceTools,
 } from "./mcp-workspace-tools.js";
@@ -421,8 +417,6 @@ export function createServer(
     res.on("finish", () => {
       const path = requestPath(req);
       if (!config.logging.requests) return;
-      if (!config.logging.assets && path.startsWith("/mcp-app-assets")) return;
-
       logEvent(config.logging, "info", "http_request", {
         requestId,
         method: req.method,
@@ -444,21 +438,6 @@ export function createServer(
       resourceServerUrl,
       scopesSupported: config.oauth.scopes,
       resourceName: "DevSpace",
-    }),
-  );
-
-  app.options("/mcp-app-assets/{*asset}", (_req, res) => {
-    setWorkspaceAppAssetHeaders(res);
-    res.sendStatus(204);
-  });
-
-  app.use(
-    "/mcp-app-assets",
-    express.static(workspaceAppBuildDirectory(), {
-      immutable: true,
-      maxAge: "1y",
-      fallthrough: false,
-      setHeaders: setWorkspaceAppAssetHeaders,
     }),
   );
 
@@ -597,7 +576,6 @@ if (await isMainModule()) {
     console.log("auth: oauth owner-token flow required");
     console.log(`logging: ${config.logging.level} ${config.logging.format}`);
     console.log(`request logging: ${config.logging.requests ? "enabled" : "disabled"}`);
-    console.log(`asset logging: ${config.logging.assets ? "enabled" : "disabled"}`);
     console.log(
       `trust proxy: ${config.logging.trustProxy ? "configured" : shouldTrustLocalPublicProxy(config) ? "loopback-public-proxy" : "disabled"}`,
     );

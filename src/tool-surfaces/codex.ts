@@ -35,7 +35,7 @@ const DEFAULT_CODEX_YIELD_MS = 3_000;
 const DEFAULT_CODEX_INTERACTIVE_YIELD_MS = 250;
 const DEFAULT_CODEX_POLL_YIELD_MS = 5_000;
 const LEGACY_SHELL_WAIT_MS = 45_000;
-const DEFAULT_MAX_OUTPUT_TOKENS = 10_000;
+const DEFAULT_MAX_OUTPUT_TOKENS = 4_000;
 const CODEX_UNCERTAIN_OUTCOME_SIGNAL = "OUTCOME_UNCERTAIN";
 
 const CODEX_INSTRUCTIONS = `Follow instructions returned by ${toolNames.openWorkspace}; read applicable instruction and skill files before working in their scope.`;

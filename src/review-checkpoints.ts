@@ -48,11 +48,13 @@ export interface ReviewCheckpointManager {
     root: string;
     since?: ReviewSince;
     markReviewed?: boolean;
+    includePatch?: boolean;
   }): Promise<ReviewChangesResult>;
   reviewByRef(input: {
     workspaceId: string;
     root: string;
     reviewRef: string;
+    includePatch?: boolean;
   }): Promise<ReviewChangesResult>;
 }
 
@@ -90,7 +92,7 @@ export function createReviewCheckpointManager(): ReviewCheckpointManager {
       return reviewAvailability(states.get(workspaceId));
     },
 
-    async reviewChanges({ workspaceId, root, since = "last_shown", markReviewed = true }) {
+    async reviewChanges({ workspaceId, root, since = "last_shown", markReviewed = true, includePatch = true }) {
       let state = states.get(workspaceId);
       assertWorkspaceRoot(state, workspaceId, root);
       if (!isReadyState(state)) {
@@ -120,7 +122,7 @@ export function createReviewCheckpointManager(): ReviewCheckpointManager {
       const baselineRef = effectiveSince === "workspace_open" ? state.openRef : state.baselineRef;
       const baseline = (await git(state.gitRoot, ["rev-parse", "--verify", `${baselineRef}^{commit}`])).stdout.trim();
       const current = await createWorkingTreeSnapshot(state.gitRoot, baseline);
-      const review = await readReviewBetween(state.gitRoot, baseline, current);
+      const review = await readReviewBetween(state.gitRoot, baseline, current, includePatch);
 
       if (markReviewed) {
         await git(state.gitRoot, ["update-ref", state.baselineRef, current]);
@@ -141,7 +143,7 @@ export function createReviewCheckpointManager(): ReviewCheckpointManager {
       };
     },
 
-    async reviewByRef({ workspaceId, root, reviewRef }) {
+    async reviewByRef({ workspaceId, root, reviewRef, includePatch = true }) {
       let state = states.get(workspaceId);
       assertWorkspaceRoot(state, workspaceId, root);
       if (!isReadyState(state)) {
@@ -176,7 +178,7 @@ export function createReviewCheckpointManager(): ReviewCheckpointManager {
         throw new Error(`Unknown review reference for workspace ${workspaceId}: ${reviewRef}`);
       }
 
-      return readReviewCommit(state.gitRoot, reviewCommit);
+      return readReviewCommit(state.gitRoot, reviewCommit, includePatch);
     },
   };
 }
@@ -233,7 +235,9 @@ async function initializeWorkspaceState(
       const head = eligibility.hasHead
         ? (await git(eligibility.gitRoot, ["rev-parse", "--verify", "HEAD^{commit}"])).stdout.trim()
         : undefined;
-      const initialCommit = await createWorkingTreeSnapshot(eligibility.gitRoot, head);
+      const initialCommit = head && await workingTreeIsClean(eligibility.gitRoot)
+        ? head
+        : await createWorkingTreeSnapshot(eligibility.gitRoot, head);
       await git(eligibility.gitRoot, ["update-ref", state.openRef, initialCommit]);
       await git(eligibility.gitRoot, ["update-ref", state.baselineRef, initialCommit]);
       state.openRefAvailable = true;
@@ -282,6 +286,16 @@ function reviewRefs(
   };
 }
 
+async function workingTreeIsClean(gitRoot: string): Promise<boolean> {
+  const status = await git(gitRoot, [
+    "status",
+    "--porcelain=v1",
+    "--untracked-files=normal",
+    "--ignored=no",
+  ]);
+  return status.stdout.trim().length === 0;
+}
+
 async function createWorkingTreeSnapshot(gitRoot: string, parent?: string): Promise<string> {
   const tempDir = await mkdtemp(join(tmpdir(), "devspace-review-index-"));
   const indexPath = join(tempDir, "index");
@@ -300,9 +314,13 @@ async function createWorkingTreeSnapshot(gitRoot: string, parent?: string): Prom
   }
 }
 
-async function readReviewCommit(gitRoot: string, reviewRef: string): Promise<ReviewChangesResult> {
+async function readReviewCommit(
+  gitRoot: string,
+  reviewRef: string,
+  includePatch = true,
+): Promise<ReviewChangesResult> {
   const parent = (await git(gitRoot, ["rev-parse", "--verify", `${reviewRef}^1`])).stdout.trim();
-  const review = await readReviewBetween(gitRoot, parent, reviewRef);
+  const review = await readReviewBetween(gitRoot, parent, reviewRef, includePatch);
   return {
     reviewRef,
     result: review.summary.files === 0 ? "No changes in this review." : formatChangedFiles(review.summary),
@@ -314,10 +332,13 @@ async function readReviewBetween(
   gitRoot: string,
   before: string,
   after: string,
+  includePatch = true,
 ): Promise<Pick<ReviewChangesResult, "summary" | "files" | "patch">> {
-  const patch = (await git(gitRoot, ["diff", "--binary", "--no-color", before, after], {
-    maxBuffer: 50 * 1024 * 1024,
-  })).stdout;
+  const patch = includePatch
+    ? (await git(gitRoot, ["diff", "--binary", "--no-color", before, after], {
+        maxBuffer: 50 * 1024 * 1024,
+      })).stdout
+    : "";
   const numstat = (await git(gitRoot, ["diff", "--numstat", "-z", before, after], {
     maxBuffer: 50 * 1024 * 1024,
   })).stdout;

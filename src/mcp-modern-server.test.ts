@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { registerAppResource, registerAppTool } from "@modelcontextprotocol/ext-apps/server";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
 import {
@@ -31,8 +30,7 @@ test("modern registration adapter preserves tools and request metadata", async (
       name: "devspace-modern-test",
       version: "1.0.0",
     });
-    registerAppTool(
-      adapter.registrationTarget,
+    adapter.registrationTarget.registerTool(
       "echo_scope",
       {
         description: "Echo the modern request scope.",
@@ -75,8 +73,7 @@ test("modern registration adapter preserves progress notifications", async (t) =
       name: "devspace-modern-test",
       version: "1.0.0",
     });
-    registerAppTool(
-      adapter.registrationTarget,
+    adapter.registrationTarget.registerTool(
       "progress_echo",
       {
         inputSchema: {},
@@ -120,8 +117,7 @@ test("modern registration adapter preserves resources", async (t) => {
       name: "devspace-modern-test",
       version: "1.0.0",
     });
-    registerAppResource(
-      adapter.registrationTarget,
+    adapter.registrationTarget.registerResource(
       "Test resource",
       "ui://devspace/test.html",
       {},
@@ -150,8 +146,7 @@ test("compiled registration surface reuses static tool and resource definitions"
   let registrationBuilds = 0;
   const bindRegistrationSurface = compileMcpRegistrationSurface((target) => {
     registrationBuilds += 1;
-    registerAppTool(
-      target,
+    target.registerTool(
       "cached_echo",
       {
         inputSchema: { value: z.string() },
@@ -161,8 +156,7 @@ test("compiled registration surface reuses static tool and resource definitions"
         content: [{ type: "text", text: value }],
       }),
     );
-    registerAppResource(
-      target,
+    target.registerResource(
       "Cached resource",
       "ui://devspace/cached.html",
       {},

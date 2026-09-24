@@ -178,6 +178,20 @@ if (!buffered.outputTruncated && buffered.sessionId) {
 assert.equal(buffered.outputTruncated, true);
 if (buffered.sessionId) manager.terminate("workspace-a", buffered.sessionId);
 
+const defaultBoundManager = new ProcessSessionManager({
+  maxBufferCharacters: 40_000,
+  completedSessionTtlMs: 1_000,
+});
+const defaultBound = await defaultBoundManager.start({
+  workspaceId: "workspace-bound",
+  cwd: process.cwd(),
+  command: `${node} -e "console.log('z'.repeat(25000))"`,
+  yieldTimeMs: 2_000,
+});
+assert.equal(defaultBound.outputTruncated, true);
+assert.ok(defaultBound.output.length <= 16_100);
+defaultBoundManager.shutdown();
+
 try {
   if (process.platform === "win32") {
     const pty = await manager.start({

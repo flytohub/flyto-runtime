@@ -13,7 +13,7 @@ import { SqliteWorkspaceStore } from "./workspace-store.js";
 const execFileAsync = promisify(execFile);
 const cliPath = fileURLToPath(new URL("./cli.ts", import.meta.url));
 
-test("worktrees prune removes only managed worktrees unused for three days", async (t) => {
+test("worktrees prune removes only managed worktrees unused for twelve hours", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "devspace-cli-worktree-test-"));
   const sourceRoot = join(root, "repo");
   const worktreeRoot = join(root, "worktrees");
@@ -55,7 +55,7 @@ test("worktrees prune removes only managed worktrees unused for three days", asy
   const database = openDatabase(stateDir);
   database.sqlite
     .prepare("update workspace_sessions set last_used_at = ? where id = 'ws_old'")
-    .run(new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString());
+    .run(new Date(Date.now() - 13 * 60 * 60 * 1000).toISOString());
   database.close();
 
   const env = writeTestDevspaceConfig(configDir, {

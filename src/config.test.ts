@@ -19,7 +19,6 @@ try {
   assert.deepEqual(defaults.allowedRoots, [process.cwd()]);
   assert.deepEqual(defaults.allowedHosts, ["localhost", "127.0.0.1", "::1"]);
   assert.equal(defaults.toolMode, "codex");
-  assert.equal(defaults.uiEnabled, true);
   assert.equal(defaults.skillsEnabled, true);
   assert.equal(defaults.artifactsEnabled, false);
   assert.deepEqual(defaults.subagents, {
@@ -94,7 +93,6 @@ try {
     "example.internal",
   ]);
   assert.equal(configured.toolMode, "claude");
-  assert.equal(configured.uiEnabled, false);
   assert.equal(configured.stateDir, resolve(homedir(), "state"));
   assert.equal(configured.worktreeRoot, resolve(homedir(), "trees"));
   assert.equal(configured.artifactsEnabled, true);

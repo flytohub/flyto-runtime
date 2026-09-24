@@ -20,6 +20,21 @@ test("a clean workspace reports no changes from the last-shown checkpoint", asyn
   assert.equal(clean.patch, "");
 });
 
+test("a clean workspace reuses HEAD as its initial review baseline", async (t) => {
+  const root = await committedRepository(t);
+  const manager = createReviewCheckpointManager();
+  const head = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: root })).stdout.trim();
+
+  await manager.initializeWorkspace({ workspaceId: "ws_head_baseline", root });
+  const open = (await execFileAsync(
+    "git",
+    ["rev-parse", "refs/devspace/review/ws_head_baseline/open"],
+    { cwd: root },
+  )).stdout.trim();
+
+  assert.equal(open, head);
+});
+
 test("initialization reports whether aggregate review is available", async (t) => {
   const gitRoot = await committedRepository(t);
   const plainRoot = await mkdtemp(join(tmpdir(), "devspace-review-plain-test-"));

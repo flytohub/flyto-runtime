@@ -37,7 +37,7 @@ withConfigDir((configDir, env) => {
   assert.equal(files.config.artifacts.enabled, true);
   assert.equal(files.config.subagents.enabled, true);
   assert.equal(files.config.tools.mode, "claude");
-  assert.equal(files.config.ui.enabled, true);
+  assert.equal(files.config.ui.enabled, false);
   assert.equal(files.auth.ownerToken, "test-owner-token");
   assert.equal(existsSync(join(configDir, "config.json")), false);
   assert.equal(existsSync(join(configDir, "config.jsonc")), true);

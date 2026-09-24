@@ -2,11 +2,9 @@ import * as z from "zod/v4";
 import { logEvent, commandPreview } from "../logger.js";
 import type { ServerConfig } from "../config.js";
 import {
-  WORKSPACE_APP_URI,
   type DiffStats,
   type ToolContent,
   type ToolLogFields,
-  type ToolWidgetDescriptorMeta,
 } from "./types.js";
 
 export function resultOutputSchema(extra: z.ZodRawShape = {}): z.ZodRawShape {
@@ -17,19 +15,6 @@ export function resultOutputSchema(extra: z.ZodRawShape = {}): z.ZodRawShape {
         "Model-readable result text for follow-up reasoning and plain MCP hosts.",
       ),
     ...extra,
-  };
-}
-
-export function workspaceAppDescriptorMeta(config: ServerConfig): ToolWidgetDescriptorMeta {
-  if (!config.uiEnabled) return { _meta: {} };
-
-  return {
-    _meta: {
-      ui: {
-        resourceUri: WORKSPACE_APP_URI,
-        visibility: ["model"],
-      },
-    },
   };
 }
 

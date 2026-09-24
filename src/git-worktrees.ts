@@ -61,7 +61,7 @@ export class ManagedWorktreeError extends TaggedError("ManagedWorktreeError")<{
 
 export type ManagedWorktreeFeatureError = ManagedWorktreeError | WorkspaceStoreError;
 
-export const DEFAULT_MANAGED_WORKTREE_RETENTION_MS = 3 * 24 * 60 * 60 * 1000;
+export const DEFAULT_MANAGED_WORKTREE_RETENTION_MS = 12 * 60 * 60 * 1000;
 
 export interface ManagedWorktreeCleanupResult {
   removed: Array<{

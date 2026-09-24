@@ -112,7 +112,8 @@
       "type": "object",
       "properties": {
         "enabled": {
-          "default": true,
+          "default": false,
+          "description": "Legacy compatibility field. Runtime no longer emits MCP Apps/result-card metadata.",
           "type": "boolean"
         }
       },

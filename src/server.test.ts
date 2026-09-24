@@ -140,6 +140,25 @@ test("Codex process tools keep model-facing controls minimal", async (t) => {
   }
 });
 
+test("Codex command output is bounded by default", async (t) => {
+  const context = await fixture(t, { toolMode: "codex", uiEnabled: false });
+  const workspaceId = structuredContent(
+    await callOpen(context.client, context.project, "bounded-codex-output"),
+  ).workspace_id;
+  assert.equal(typeof workspaceId, "string");
+
+  const result = structuredContent(await context.client.callTool({
+    name: "exec_command",
+    arguments: {
+      workspace_id: workspaceId,
+      cmd: "node -e \"console.log('z'.repeat(25000))\"",
+    },
+  }));
+  assert.equal(result.running, false);
+  assert.equal(result.output_truncated, true);
+  assert.ok(String(result.result).length <= 16_200);
+});
+
 test("Codex non-interactive commands become durable behind exec_command", async (t) => {
   const context = await fixture(t, { toolMode: "codex", uiEnabled: false });
   const workspaceId = structuredContent(
@@ -672,17 +691,16 @@ test("write rejects a new file through a symlink that leaves the workspace", asy
   await assert.rejects(access(join(outside, "new.txt")));
 });
 
-test("UI metadata is limited to workspace and aggregate review", async (t) => {
+test("legacy UI configuration never advertises result cards", async (t) => {
   for (const uiEnabled of [true, false]) {
-    await t.test(uiEnabled ? "enabled" : "disabled", async (nested) => {
+    await t.test(uiEnabled ? "legacy-enabled" : "legacy-disabled", async (nested) => {
       const context = await fixture(nested, { toolMode: "claude", uiEnabled });
       const tools = await context.client.listTools();
       const toolsWithUi = tools.tools
         .filter((tool) => Boolean((tool._meta as { ui?: unknown } | undefined)?.ui))
-        .map((tool) => tool.name)
-        .sort();
+        .map((tool) => tool.name);
 
-      assert.deepEqual(toolsWithUi, uiEnabled ? ["open_workspace", "show_changes"] : []);
+      assert.deepEqual(toolsWithUi, []);
     });
   }
 });
@@ -698,8 +716,8 @@ test("open_workspace reports aggregate review availability", async (t) => {
   assert.deepEqual(gitReview, { available: true });
 });
 
-test("show_changes reviews an unborn repository through the MCP tool surface", async (t) => {
-  const context = await fixture(t, { uiEnabled: false });
+test("show_changes reviews an unborn repository without emitting card payloads", async (t) => {
+  const context = await fixture(t);
   await git(context.project, ["init"]);
 
   const opened = structuredContent(await callOpen(context.client, context.project, "unborn-review"));
@@ -712,27 +730,19 @@ test("show_changes reviews an unborn repository through the MCP tool surface", a
     name: "show_changes",
     arguments: { workspace_id: workspaceId },
   });
-  const card = responseCard(review);
+  const structured = structuredContent(review);
 
-  assert.deepEqual(card.files, [
-    {
-      path: "created-after-open.txt",
-      type: "new",
-      additions: 1,
-      removals: 0,
-    },
-  ]);
-  assert.match(
-    ((card.payload as { patch?: string } | undefined)?.patch) ?? "",
-    /new file/,
-  );
+  assert.equal(review._meta, undefined);
+  assert.match(structured.review_ref as string, /^[0-9a-f]{40,64}$/);
+  assert.match(String(structured.result), /Changed 1 file \(\+1 -0\)/);
+  assert.doesNotMatch(JSON.stringify(review), /new file/);
   await assert.rejects(() => execFileAsync("git", ["rev-parse", "--verify", "HEAD^{commit}"], {
     cwd: context.project,
   }));
 });
 
-test("show_changes keeps model output compact and preserves the rich review card", async (t) => {
-  const context = await fixture(t, { git: true, uiEnabled: false });
+test("show_changes keeps model output compact and omits rich card payloads", async (t) => {
+  const context = await fixture(t, { git: true });
   const opened = structuredContent(
     await callOpen(context.client, context.project, "review"),
   );
@@ -745,7 +755,7 @@ test("show_changes keeps model output compact and preserves the rich review card
     arguments: { workspace_id: workspaceId },
   });
   const structured = structuredContent(review);
-  assert.equal((review._meta as Record<string, unknown> | undefined)?.tool, undefined);
+  assert.equal(review._meta, undefined);
 
   assert.equal(structured.workspace_id, workspaceId);
   assert.equal("workspaceId" in structured, false);
@@ -754,24 +764,7 @@ test("show_changes keeps model output compact and preserves the rich review card
   assert.equal("files" in structured, false);
   assert.equal("patch" in structured, false);
 
-  const card = responseCard(review);
-  assert.deepEqual(card.summary, {
-    files: 1,
-    additions: 1,
-    removals: 1,
-  });
-  assert.deepEqual(card.files, [
-    {
-      path: "README.md",
-      type: "change",
-      additions: 1,
-      removals: 1,
-    },
-  ]);
-  assert.match(
-    ((card.payload as { patch?: string } | undefined)?.patch) ?? "",
-    /-hello\n\+goodbye/,
-  );
+  assert.doesNotMatch(JSON.stringify(review), /-hello\\n\\+goodbye/);
 
   const tools = await context.client.listTools();
   const outputProperties = tools.tools.find((tool) => tool.name === "show_changes")
@@ -809,30 +802,25 @@ test("show_changes can reopen a historical review without advancing the checkpoi
     _meta: { "devspace/reviewRef": reviewRef },
   } as Parameters<Client["callTool"]>[0]);
   assert.equal(structuredContent(reopened).review_ref, reviewRef);
-  assert.match(
-    (((responseCard(reopened).payload as { patch?: string } | undefined)?.patch) ?? ""),
-    /\+first/,
-  );
+  assert.equal(reopened._meta, undefined);
 
   const current = await context.client.callTool({
     name: "show_changes",
     arguments: { workspace_id: workspaceId },
   });
-  assert.match(
-    (((responseCard(current).payload as { patch?: string } | undefined)?.patch) ?? ""),
-    /-first\n\+second/,
-  );
+  assert.notEqual(structuredContent(current).review_ref, reviewRef);
+  assert.equal(current._meta, undefined);
 });
 
-test("open_workspace keeps lifecycle flags out of model output and preserves complete card metadata", async (t) => {
+test("open_workspace keeps lifecycle flags and duplicate card metadata out of model output", async (t) => {
   const providerNote = "available";
   const context = await fixture(t, {
     localAgentProviders: [{ name: "codex", available: true, note: providerNote }],
   });
   const first = await callOpen(context.client, context.project, "chat-1");
   const repeated = await callOpen(context.client, context.project, "chat-1");
-  assert.equal((first._meta as Record<string, unknown> | undefined)?.tool, undefined);
-  assert.equal((repeated._meta as Record<string, unknown> | undefined)?.tool, undefined);
+  assert.equal(first._meta, undefined);
+  assert.equal(repeated._meta, undefined);
 
   const tools = await context.client.listTools();
   const openTool = tools.tools.find((tool) => tool.name === "open_workspace");
@@ -880,19 +868,6 @@ test("open_workspace keeps lifecycle flags out of model output and preserves com
   assert.equal(repeatedStructured.skill_diagnostics, undefined);
   assert.equal("workspaceReused" in repeatedStructured, false);
   assert.equal("includeBootstrapContext" in repeatedStructured, false);
-
-  const card = responseCard(repeated);
-  assert.equal(card.workspaceReused, true);
-  assert.equal(card.includeBootstrapContext, false);
-  assert.ok(Array.isArray(card.agentsFiles));
-  assert.ok(Array.isArray(card.availableAgentsFiles));
-  assert.ok(Array.isArray(card.skills));
-  assert.ok(Array.isArray(card.agentProviders));
-  assert.equal(
-    (card.agentProviders as Array<Record<string, unknown>>)[0]?.note,
-    providerNote,
-  );
-  assert.ok(Array.isArray(card.agents));
 });
 
 test("open_workspace refreshes provider availability for each catalog", async (t) => {
@@ -1344,6 +1319,7 @@ async function fixture(
       mode: options.toolMode ?? "codex",
       exposeRuntimeInternals: options.exposeRuntimeInternals ?? false,
     },
+    ui: { enabled: options.uiEnabled ?? true },
     skills: { agentDir },
     subagents: {
       enabled: options.localAgentProviders !== undefined,
@@ -1354,7 +1330,6 @@ async function fixture(
   const modeConfig: ServerConfig = {
     ...loadedConfig,
     toolMode: options.toolMode ?? loadedConfig.toolMode,
-    uiEnabled: options.uiEnabled ?? loadedConfig.uiEnabled,
   };
   const config: ServerConfig = options.localAgentProviders
     ? {
@@ -1573,15 +1548,6 @@ function structuredContent(result: Awaited<ReturnType<Client["callTool"]>>): Rec
   );
   return result.structuredContent as Record<string, unknown>;
 }
-
-function responseCard(result: Awaited<ReturnType<Client["callTool"]>>): Record<string, unknown> {
-  const metadata = result._meta;
-  assert.ok(metadata && typeof metadata === "object");
-  const card = (metadata as Record<string, unknown>).card;
-  assert.ok(card && typeof card === "object");
-  return card as Record<string, unknown>;
-}
-
 
 test("existing ChatGPT camelCase tool calls survive the Runtime migration", async (t) => {
   const { root, localBaseUrl, accessToken } = await httpServerFixture(t, "runtime-legacy-input-", "claude");

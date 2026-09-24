@@ -18,7 +18,6 @@ export interface ServerConfig {
   publicBaseUrl: string;
   toolMode: ToolMode;
   exposeRuntimeInternals: boolean;
-  uiEnabled: boolean;
   stateDir: string;
   worktreeRoot: string;
   artifactsEnabled: boolean;
@@ -68,7 +67,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     publicBaseUrl,
     toolMode: stored.tools.mode,
     exposeRuntimeInternals: stored.tools.exposeRuntimeInternals,
-    uiEnabled: stored.ui.enabled,
     stateDir: normalizePath(stored.storage.stateDir),
     worktreeRoot: normalizePath(stored.workspaces.worktreeRoot),
     artifactsEnabled: stored.artifacts.enabled,

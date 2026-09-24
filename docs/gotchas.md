@@ -264,17 +264,15 @@ If a skill appears in `open_workspace`, the model should read that skill's
 `SKILL.md` before following it. DevSpace permits reads within advertised skill
 directories without tracking whether `SKILL.md` was read first.
 
-## Review Card Does Not Appear
+## ChatGPT Shows a Result-Card Placeholder
 
-DevSpace attaches widget UI only to `open_workspace` and `show_changes`.
-Ordinary reads, edits, and commands intentionally render as normal tool results
-to avoid one iframe per call. Plain MCP clients may ignore ChatGPT Apps widget
-metadata and only show text results; `show_changes` remains available there.
+Current Flyto2 Runtime releases do not advertise MCP Apps/result cards for
+workspace or review tools. `open_workspace` and `show_changes` return plain,
+compact MCP results. If ChatGPT still displays an old result-card placeholder,
+restart Runtime and reconnect the MCP client so the host refreshes its cached
+tool catalog.
 
-If both cards are missing in ChatGPT, confirm that `ui.enabled` is not `false`
-in `~/.devspace/config.jsonc` and reconnect the MCP server.
-
-Historical `show_changes` cards use the `review_ref` in their structured result
-to recover the exact Git-backed review when a host reloads the app without its
-original result metadata. `open_workspace` can rebuild its card directly from
-its structured result.
+The legacy `ui.enabled` configuration field is accepted only for upgrade
+compatibility and no longer enables a card. Historical reviews remain available
+through their Git-backed `review_ref` and the local `devspace show-changes`
+command.

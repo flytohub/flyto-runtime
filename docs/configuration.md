@@ -120,10 +120,11 @@ event, evidence, signal, and filesystem-watch tools is required. Normal model
 work should leave these mechanics hidden behind `exec_command` / `write_stdin`
 or the Claude compatibility `bash` tool.
 
-DevSpace attaches Apps UI metadata only to `open_workspace` and `show_changes`.
-This avoids rendering an iframe for every read, edit, search, or command call.
-Setting `ui.enabled` to `false` removes the metadata but does not remove the
-`show_changes` tool.
+Flyto2 Runtime no longer emits MCP Apps/result-card metadata. `open_workspace`
+and `show_changes` are plain MCP tools, so ChatGPT does not create iframe cards
+or retain large diff payloads in conversation state. The legacy `ui.enabled`
+field is still accepted in v1 configuration files for upgrade compatibility,
+but it has no runtime effect.
 
 ## Skills and subagents
 
@@ -235,7 +236,7 @@ values to these JSONC keys:
 | `DEVSPACE_WORKTREE_ROOT` | `workspaces.worktreeRoot` |
 | `DEVSPACE_STATE_DIR` | `storage.stateDir` |
 | `DEVSPACE_TOOL_MODE`, `DEVSPACE_MINIMAL_TOOLS` | `tools.mode` |
-| `DEVSPACE_WIDGETS` | `ui.enabled` |
+| `DEVSPACE_WIDGETS` | legacy `ui.enabled` compatibility field (no runtime effect) |
 | `DEVSPACE_ARTIFACTS` | `artifacts.enabled` |
 | `DEVSPACE_ARTIFACT_MAX_FILE_BYTES` | `artifacts.maxFileBytes` |
 | `DEVSPACE_SKILLS` | `skills.enabled` |
@@ -245,7 +246,7 @@ values to these JSONC keys:
 | `DEVSPACE_LOG_LEVEL` | `logging.level` |
 | `DEVSPACE_LOG_FORMAT` | `logging.format` |
 | `DEVSPACE_LOG_REQUESTS` | `logging.requests` |
-| `DEVSPACE_LOG_ASSETS` | `logging.assets` |
+| `DEVSPACE_LOG_ASSETS` | legacy `logging.assets` compatibility field (no runtime effect) |
 | `DEVSPACE_LOG_TOOL_CALLS` | `logging.toolCalls` |
 | `DEVSPACE_LOG_SHELL_COMMANDS` | `logging.shellCommands` |
 | `DEVSPACE_OAUTH_ACCESS_TOKEN_TTL_SECONDS` | `oauth.accessTokenTtlSeconds` |
@@ -283,6 +284,7 @@ The persisted fields map as follows:
 | `artifactsEnabled`, `artifactMaxFileBytes` | `artifacts.enabled`, `artifacts.maxFileBytes` |
 | `agentDir` | `skills.agentDir` |
 | `subagents` | `subagents` |
-| `tools.mode`, `ui.enabled` | unchanged nested keys |
+| `tools.mode` | unchanged nested key |
+| `ui.enabled` | retained as a compatibility-only no-op |
 
 `auth.json` is unchanged.

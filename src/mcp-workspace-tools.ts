@@ -1,9 +1,4 @@
 import { readFileSync } from "node:fs";
-import {
-  registerAppResource,
-  registerAppTool,
-  RESOURCE_MIME_TYPE,
-} from "@modelcontextprotocol/ext-apps/server";
 import * as z from "zod/v4";
 import type { ServerConfig } from "./config.js";
 import { AccessDeniedError } from "./roots.js";
@@ -22,18 +17,11 @@ import {
   logToolCall,
   resultOutputSchema,
   textBlock,
-  workspaceAppDescriptorMeta,
 } from "./tool-surfaces/shared.js";
 import {
-  WORKSPACE_APP_URI,
   toolNames,
   workspaceIdDescription,
 } from "./tool-surfaces/types.js";
-import {
-  assertWorkspaceAppAssets,
-  workspaceAppCsp,
-  workspaceAppHtml,
-} from "./workspace-app.js";
 import {
   formatAgentsPath,
   type WorkspaceContext,
@@ -91,55 +79,17 @@ export function allowedRootsSentence(allowedRoots: readonly string[]): string {
     : `Allowed roots: ${allowedRoots.join(", ")}. To find a folder the user names, open the allowed root and list it; do not search outside these roots.`;
 }
 
-/** Register the workspace-oriented MCP resource and tools on one registration target. */
+/** Register the workspace-oriented MCP tools on one registration target. */
 export function registerWorkspaceTools(options: WorkspaceToolRegistrationOptions): void {
-  registerWorkspaceAppResource(options.server, options.config);
   registerOpenWorkspaceTool(options);
   registerReadTool(options);
   registerShowChangesTool(options);
 }
 
-function registerWorkspaceAppResource(
-  server: McpRegistrationTarget,
-  config: ServerConfig,
-): void {
-  registerAppResource(
-    server,
-    "DevSpace Diff Card",
-    WORKSPACE_APP_URI,
-    {
-      description: "Interactive card for viewing DevSpace file diffs.",
-      _meta: {
-        ui: {
-          csp: workspaceAppCsp(config),
-        },
-      },
-    },
-    async () => {
-      await assertWorkspaceAppAssets();
-      return {
-        contents: [
-          {
-            uri: WORKSPACE_APP_URI,
-            mimeType: RESOURCE_MIME_TYPE,
-            text: workspaceAppHtml(config),
-            _meta: {
-              ui: {
-                csp: workspaceAppCsp(config),
-              },
-            },
-          },
-        ],
-      };
-    },
-  );
-}
-
 function registerOpenWorkspaceTool(options: WorkspaceToolRegistrationOptions): void {
   const { server, config } = options;
 
-  registerAppTool(
-    server,
+  server.registerTool(
     "open_workspace",
     {
       title: "Open workspace",
@@ -192,7 +142,6 @@ function registerOpenWorkspaceTool(options: WorkspaceToolRegistrationOptions): v
         ]),
         instruction: z.string(),
       },
-      ...workspaceAppDescriptorMeta(config),
       annotations: { readOnlyHint: true },
     },
     async (input, { _meta }) => handleOpenWorkspace(options, input, _meta),
@@ -238,33 +187,6 @@ async function handleOpenWorkspace(
 
   return {
     content: [{ type: "text" as const, text: presentation.resultText }],
-    _meta: {
-      card: {
-        workspaceId: workspace.id,
-        root: workspace.root,
-        path: workspace.root,
-        mode: workspace.mode,
-        workspaceReused: context.workspaceReused,
-        includeBootstrapContext: context.includeBootstrapContext,
-        sourceRoot: workspace.sourceRoot,
-        worktree: workspace.worktree,
-        agentsFiles: presentation.cardAgentsFiles,
-        availableAgentsFiles: presentation.cardAvailableAgentsFiles,
-        skills: presentation.cardSkills,
-        agentProviders: presentation.cardAgentProviders,
-        agents: presentation.cardAgents,
-        review,
-        instruction: presentation.cardInstruction,
-        summary: {
-          mode: workspace.mode,
-          agentsFiles: presentation.cardAgentsFiles.length,
-          availableAgentsFiles: presentation.cardAvailableAgentsFiles.length,
-          skills: presentation.cardSkills.length,
-          agentProviders: presentation.cardAgentProviders.length,
-          agents: presentation.cardAgents.length,
-        },
-      },
-    },
     structuredContent: {
       workspace_id: workspace.id,
       root: workspace.root,
@@ -331,7 +253,7 @@ function buildWorkspacePresentation(
   const preloadedSubagentInstructions = preloadSubagents && subagentsSkill
     ? readFileSync(subagentsSkill.filePath, "utf8")
     : undefined;
-  const cardSkills = workspace.skills
+  const availableSkills = workspace.skills
     .filter((skill) => !skill.disableModelInvocation)
     .filter((skill) => !(preloadSubagents && skill.name === "subagents"))
     .map((skill) => ({
@@ -344,7 +266,7 @@ function buildWorkspacePresentation(
     workspace.agentProfiles,
     resolveLocalAgentProviders(),
   );
-  const cardAgentProviders = agentCatalog.providers
+  const availableAgentProviders = agentCatalog.providers
     .filter((provider) => provider.usable)
     .map((provider) => ({
       id: provider.id,
@@ -352,41 +274,35 @@ function buildWorkspacePresentation(
       effort: provider.effort,
       note: provider.note,
     }));
-  const cardAgents = agentCatalog.profiles;
-  const cardAgentsFiles = agentsFiles.map((file) => ({
+  const availableAgents = agentCatalog.profiles;
+  const allLoadedAgentsFiles = agentsFiles.map((file) => ({
     path: formatAgentsPath(file.path, workspace.root),
     content: file.content,
   }));
-  const cardAvailableAgentsFiles = availableAgentsFiles.map((file) => ({
+  const allAvailableAgentsFiles = availableAgentsFiles.map((file) => ({
     path: formatAgentsPath(file.path, workspace.root),
   }));
-  const visibleSkills = context.includeBootstrapContext ? cardSkills : [];
-  const visibleAgentProviders = context.includeBootstrapContext ? cardAgentProviders : [];
-  const visibleAgents = context.includeBootstrapContext ? cardAgents : [];
-  const loadedAgentsFiles = context.includeBootstrapContext ? cardAgentsFiles : [];
+  const visibleSkills = context.includeBootstrapContext ? availableSkills : [];
+  const visibleAgentProviders = context.includeBootstrapContext ? availableAgentProviders : [];
+  const visibleAgents = context.includeBootstrapContext ? availableAgents : [];
+  const loadedAgentsFiles = context.includeBootstrapContext ? allLoadedAgentsFiles : [];
   const availableAgentsFileOutputs = context.includeBootstrapContext
-    ? cardAvailableAgentsFiles
+    ? allAvailableAgentsFiles
     : [];
-  const cardInstruction = workspaceCardInstruction(config.skillsEnabled);
+  const baseInstruction = workspaceBaseInstruction(config.skillsEnabled);
   const instruction = workspaceInstruction(
     context,
-    cardInstruction,
+    baseInstruction,
     config.toolMode,
     preloadedSubagentInstructions,
   );
 
   return {
-    cardSkills,
-    cardAgentProviders,
-    cardAgents,
-    cardAgentsFiles,
-    cardAvailableAgentsFiles,
     visibleSkills,
     visibleAgentProviders,
     visibleAgents,
     loadedAgentsFiles,
     availableAgentsFileOutputs,
-    cardInstruction,
     instruction,
     resultText: workspaceResultText(context, {
       loadedAgentsFiles,
@@ -399,7 +315,7 @@ function buildWorkspacePresentation(
   };
 }
 
-function workspaceCardInstruction(skillsEnabled: boolean): string {
+function workspaceBaseInstruction(skillsEnabled: boolean): string {
   return skillsEnabled
     ? "Use this workspace_id for subsequent work in this project. Keep reusing it while working in this project. Follow loaded agents_files instructions. Before working under a path listed in available_agents_files, read that instruction file. When a task matches an available skill in skills, read its path before proceeding."
     : "Use this workspace_id for subsequent work in this project. Keep reusing it while working in this project. Follow loaded agents_files instructions. Before working under a path listed in available_agents_files, read that instruction file.";
@@ -407,7 +323,7 @@ function workspaceCardInstruction(skillsEnabled: boolean): string {
 
 function workspaceInstruction(
   context: WorkspaceContext,
-  cardInstruction: string,
+  baseInstruction: string,
   toolMode: ServerConfig["toolMode"],
   preloadedSubagentInstructions: string | undefined,
 ): string {
@@ -420,7 +336,7 @@ function workspaceInstruction(
       ].join("\n\n")
     : workspace.mode === "worktree"
       ? "Use this workspace_id for subsequent work in this isolated worktree. Keep reusing it while working in this worktree. Follow the project instructions, nested instruction files, skills, agent profiles, and diagnostics returned for it."
-      : cardInstruction;
+      : baseInstruction;
   const legacyReactiveInstruction = toolMode === "claude"
     ? "Long bash commands automatically continue as durable Flyto2 Runtime jobs. Follow any returned @flyto2/job <job_id> command later; do not rerun the original side effect while it is still running."
     : undefined;
@@ -591,8 +507,7 @@ function registerReadTool(options: WorkspaceToolRegistrationOptions): void {
 function registerShowChangesTool(options: WorkspaceToolRegistrationOptions): void {
   const { server, config, workspaces, reviewCheckpoints } = options;
 
-  registerAppTool(
-    server,
+  server.registerTool(
     "show_changes",
     {
       title: "Show changes",
@@ -605,7 +520,6 @@ function registerShowChangesTool(options: WorkspaceToolRegistrationOptions): voi
         workspace_id: z.string(),
         review_ref: z.string().regex(/^[0-9a-f]{40,64}$/),
       }),
-      ...workspaceAppDescriptorMeta(config),
       annotations: { readOnlyHint: true },
     },
     async ({ workspace_id }, { _meta }) => {
@@ -620,11 +534,13 @@ function registerShowChangesTool(options: WorkspaceToolRegistrationOptions): voi
             workspaceId,
             root: workspace.root,
             reviewRef,
+            includePatch: false,
           })
         : await reviewCheckpoints.reviewChanges({
             workspaceId,
             root: workspace.root,
             markReviewed: true,
+            includePatch: false,
           });
 
       const content = [textBlock(review.result)];
@@ -637,16 +553,6 @@ function registerShowChangesTool(options: WorkspaceToolRegistrationOptions): voi
 
       return {
         content,
-        _meta: {
-          card: {
-            workspaceId,
-            summary: review.summary,
-            files: review.files,
-            payload: {
-              patch: review.patch,
-            },
-          },
-        },
         structuredContent: {
           workspace_id: workspaceId,
           review_ref: review.reviewRef,

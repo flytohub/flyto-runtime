@@ -188,23 +188,18 @@ the configured shell tool with command-line tools such as `rg`, `find`, and
 
 ## Show Changes
 
-DevSpace exposes `show_changes` in both tool modes and attaches widget UI only
-to `open_workspace` and `show_changes`. Reads, edits, and commands return normal
-MCP results without creating an iframe for each call. Set `ui.enabled` to
-`false` in `~/.devspace/config.jsonc` to disable UI metadata while keeping the
-aggregate review tool available.
+Flyto2 Runtime exposes `show_changes` in both tool modes as a plain MCP result.
+It does not attach widget UI or a full patch to ChatGPT tool responses. This
+keeps conversation state small and avoids host-side result-card rendering.
 
 Call `show_changes` exactly once after the final file modification in any turn
-that changes files. It shows the combined changes for that turn and advances
-the review point automatically. Reusing a workspace does not change this
-workflow.
+that changes files. It records the combined review point and advances the
+checkpoint automatically. Reusing a workspace does not change this workflow.
 
-The model-facing result stays compact: DevSpace returns the workspace ID, a
-Git-backed `review_ref`, and the summary text. MCP Apps hosts receive the full
-file list and patch in result metadata for immediate rendering. If a host later
-restores only the structured result, the review card can reopen that exact
-`review_ref` from DevSpace's Git review history without advancing the current
-review point.
+The model-facing result stays compact: Runtime returns the workspace ID, a
+Git-backed `review_ref`, and summary text. The full patch remains available
+locally through the Git-backed review history instead of being copied into the
+conversation.
 
 For local inspection, run `devspace show-changes <review-ref>`. Add `--json` to
 include the parsed summary, file list, and patch.
