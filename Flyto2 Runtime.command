@@ -2,7 +2,24 @@
 set -u
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin"
+# Double-clicking a .command does not read the user's shell startup files, so
+# Node from nvm/fnm/Volta and pnpm from its own installer are not on PATH yet.
+# Ask the login shell for its PATH, giving up after 5 seconds.
+login_shell_path() {
+  local out pid _
+  out="$(mktemp)" || return 0
+  "${SHELL:-/bin/zsh}" -ilc 'printf "\n__FLYTO2_PATH__%s\n" "$PATH"' </dev/null >"$out" 2>/dev/null &
+  pid=$!
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.5
+  done
+  kill "$pid" 2>/dev/null
+  sed -n 's/^__FLYTO2_PATH__//p' "$out" | tail -n 1
+  rm -f "$out"
+}
+LOGIN_PATH="$(login_shell_path)"
+export PATH="${LOGIN_PATH:+$LOGIN_PATH:}$PATH:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin"
 cd "$ROOT" || exit 1
 
 MODE="${1:-menu}"
@@ -71,7 +88,8 @@ case "$MODE" in
     node dist/cli.js launcher install
     ;;
   install)
-    node dist/cli.js service install && node dist/cli.js launcher install
+    # init is a no-op once configured, so a first run is walked through setup.
+    node dist/cli.js init && node dist/cli.js service install && node dist/cli.js launcher install
     ;;
   *)
     node dist/cli.js "$MODE"

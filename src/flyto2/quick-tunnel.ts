@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, posix, win32 } from "node:path";
 
 // A Cloudflare quick tunnel gives a free public HTTPS URL without an account or
 // a domain, which is what a first-time user has. The price is that the URL is
@@ -95,36 +95,76 @@ export function quickTunnelUrlChange(savedPublicBaseUrl: string, liveHostname: s
   return savedHost === liveHostname ? undefined : `https://${liveHostname}`;
 }
 
-// cloudflared is often installed by Homebrew, whose bin directory is missing
-// from the PATH launchd and double-clicked launchers inherit.
-export function cloudflaredCandidatePaths(platform: NodeJS.Platform): string[] {
+// A first-time user has neither cloudflared nor Homebrew, so Runtime keeps its
+// own copy of the official release in <runtime home>/bin, downloaded from
+// Cloudflare's GitHub releases and accepted only when Cloudflare signed it.
+// An existing install is used first: PATH, then the Homebrew and winget
+// locations that launchd and double-clicked launchers do not have on PATH.
+export const CLOUDFLARED_RELEASES = "https://github.com/cloudflare/cloudflared/releases/latest/download";
+// Cloudflare's Apple Developer ID team; the Windows build is signed by the same company.
+export const CLOUDFLARE_APPLE_TEAM_ID = "68WVV388M8";
+
+export function managedCloudflaredPath(runtimeHome: string, platform: NodeJS.Platform): string {
+  return platform === "win32"
+    ? win32.join(runtimeHome, "bin", "cloudflared.exe")
+    : posix.join(runtimeHome, "bin", "cloudflared");
+}
+
+export function cloudflaredCandidatePaths(
+  platform: NodeJS.Platform,
+  { runtimeHome, home, env = {} }: { runtimeHome: string; home: string; env?: NodeJS.ProcessEnv },
+): string[] {
+  const managed = managedCloudflaredPath(runtimeHome, platform);
   if (platform === "win32") {
+    const localAppData = env.LOCALAPPDATA?.trim() || win32.join(home, "AppData", "Local");
     return [
+      managed,
+      win32.join(localAppData, "Microsoft", "WinGet", "Links", "cloudflared.exe"),
       "C:\\Program Files (x86)\\cloudflared\\cloudflared.exe",
       "C:\\Program Files\\cloudflared\\cloudflared.exe",
     ];
   }
-  return ["/opt/homebrew/bin/cloudflared", "/usr/local/bin/cloudflared"];
+  return [managed, "/opt/homebrew/bin/cloudflared", "/usr/local/bin/cloudflared", posix.join(home, ".local", "bin", "cloudflared")];
 }
 
 export function locateCloudflared(
   platform: NodeJS.Platform,
   onPath: () => string | undefined,
+  locations: { runtimeHome: string; home: string; env?: NodeJS.ProcessEnv },
   exists: (path: string) => boolean = existsSync,
 ): string | undefined {
-  return onPath() ?? cloudflaredCandidatePaths(platform).find(exists);
+  return onPath() ?? cloudflaredCandidatePaths(platform, locations).find(exists);
 }
 
-export function cloudflaredInstallCommand(
-  platform: NodeJS.Platform,
-  has: (command: string) => boolean,
-): { command: string; args: string[] } | undefined {
-  if (platform === "darwin" && has("brew")) return { command: "brew", args: ["install", "cloudflared"] };
-  if (platform === "win32" && has("winget")) {
-    return {
-      command: "winget",
-      args: ["install", "--id", "Cloudflare.cloudflared", "--exact", "--accept-source-agreements", "--accept-package-agreements"],
-    };
+// Someone who followed Cloudflare's own instructions has the release sitting in
+// Downloads, extracted or not. It is copied into Runtime's bin rather than run
+// from there: a background service reading ~/Downloads needs a privacy grant
+// on macOS, and Downloads gets cleaned out.
+export function downloadedCloudflaredCandidates(platform: NodeJS.Platform, home: string): string[] {
+  if (platform === "win32") {
+    const downloads = win32.join(home, "Downloads");
+    return ["cloudflared-windows-amd64.exe", "cloudflared-windows-386.exe", "cloudflared.exe"].map((name) => win32.join(downloads, name));
+  }
+  const downloads = posix.join(home, "Downloads");
+  return [
+    "cloudflared",
+    "cloudflared-darwin-arm64/cloudflared",
+    "cloudflared-darwin-amd64/cloudflared",
+    "cloudflared-darwin-arm64.tgz",
+    "cloudflared-darwin-amd64.tgz",
+  ].map((name) => posix.join(downloads, name));
+}
+
+// Windows on ARM runs the amd64 build; Cloudflare publishes no arm64 one.
+export function cloudflaredReleaseAsset(platform: NodeJS.Platform, arch: string): string | undefined {
+  if (platform === "darwin") {
+    if (arch === "arm64") return "cloudflared-darwin-arm64.tgz";
+    if (arch === "x64") return "cloudflared-darwin-amd64.tgz";
+    return undefined;
+  }
+  if (platform === "win32") {
+    if (arch === "x64" || arch === "arm64") return "cloudflared-windows-amd64.exe";
+    if (arch === "ia32") return "cloudflared-windows-386.exe";
   }
   return undefined;
 }

@@ -55,35 +55,35 @@ The normal model-facing surface stays intentionally small. Runtime handles proce
 
 ## Quick start
 
-Requirements:
+Requirements: Node.js 22.19 or newer, below 27 (the installer from
+[nodejs.org](https://nodejs.org) is fine). Nothing else needs to be installed
+first: not pnpm, not Homebrew, not cloudflared, and no administrator password.
 
-```text
-Node >=22.19 <27
-Git
-Bash / Git Bash / WSL
-```
+1. Download this repository: **Code → Download ZIP** on GitHub, then open the
+   ZIP. (Or `git clone https://github.com/flytohub/flyto-runtime.git`.)
+2. Double-click `Install.command` on macOS or `Install.cmd` on Windows.
 
-Clone and build:
+The first run installs dependencies and builds, which takes a minute or two,
+then walks you through setup and installs the background service and Desktop
+launchers, so you do not need to keep a terminal window open. Running it again
+later skips setup; to change it, double-click **Setup Flyto2 Runtime** on the Desktop.
+
+On macOS, if it says the file cannot be opened because Apple cannot check it,
+open **System Settings → Privacy & Security** and choose **Open Anyway**.
+
+How the launcher gets its tools: pnpm comes from your PATH, else
+`corepack pnpm`, else npm runs the pinned version; it never runs
+`corepack enable`, which needs write access next to node. If you choose the free
+Cloudflare URL, setup uses an existing cloudflared, or the one you downloaded
+into Downloads, or fetches the official release, and runs it only after checking
+Cloudflare signed it. It is kept in Runtime's own folder.
+
+From a terminal the same steps are:
 
 ```bash
-git clone https://github.com/flytohub/flyto-runtime.git
 cd flyto-runtime
-npx --yes pnpm@11.25.0 install --frozen-lockfile
-npx --yes pnpm@11.25.0 build
+./"Flyto2 Runtime.command" install
 ```
-
-You do not need pnpm installed. `Install.command` / `Install.cmd` do the same
-thing: they use a `pnpm` already on your PATH, else `corepack pnpm`, else npm
-runs the pinned pnpm version. They never run `corepack enable`, which needs
-write access next to node and does not exist on Node 25 and later.
-
-Then run setup:
-
-```bash
-flyto2-runtime init
-```
-
-On macOS you can double-click `Install.command`. On Windows, double-click `Install.cmd`. Flyto2 Runtime installs a native background service and Desktop launchers so you do not need to keep a terminal window open.
 
 ## Connect ChatGPT
 

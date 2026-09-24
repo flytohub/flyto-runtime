@@ -53,7 +53,9 @@ if /I "%MODE%"=="menu" (
 ) else if /I "%MODE%"=="launcher-install" (
   node.exe dist\cli.js launcher install
 ) else if /I "%MODE%"=="install" (
-  node.exe dist\cli.js service install
+  rem init is a no-op once configured, so a first run is walked through setup.
+  node.exe dist\cli.js init
+  if not errorlevel 1 node.exe dist\cli.js service install
   if not errorlevel 1 node.exe dist\cli.js launcher install
 ) else (
   node.exe dist\cli.js %*

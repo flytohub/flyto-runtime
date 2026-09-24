@@ -428,29 +428,32 @@ async function createQuickTunnelInSetup(
   quick: typeof import("./flyto2/quick-tunnel-service.js"),
   port: number,
 ): Promise<string | undefined> {
-  let binaryPath = quick.findCloudflared();
-  if (!binaryPath) {
-    const { cloudflaredInstallCommand } = await import("./flyto2/quick-tunnel.js");
-    const install = cloudflaredInstallCommand(process.platform, quick.commandExists);
-    if (!install) {
-      prompts.log.warn(
-        process.platform === "win32"
-          ? "cloudflared is not installed and winget is unavailable. Install cloudflared from https://github.com/cloudflare/cloudflared/releases and run setup again."
-          : "cloudflared is not installed and Homebrew is unavailable. Install cloudflared from https://github.com/cloudflare/cloudflared/releases and run setup again.",
-      );
+  const source = quick.cloudflaredSource();
+  let binaryPath: string;
+  switch (source.kind) {
+    case "installed":
+      binaryPath = source.path;
+      break;
+    case "unsupported":
+      prompts.log.warn("A free Cloudflare URL needs macOS or Windows on a supported processor.");
       return undefined;
-    }
-    const approved = await prompts.confirm({
-      message: `cloudflared is required. Install it now with \`${[install.command, ...install.args.slice(0, 3)].join(" ")}\`?`,
-    });
-    if (prompts.isCancel(approved)) throw new SetupCancelledError();
-    if (!approved) return undefined;
-    const { spawnSync } = await import("node:child_process");
-    const result = spawnSync(install.command, install.args, { stdio: "inherit", windowsHide: true });
-    binaryPath = quick.findCloudflared();
-    if (result.status !== 0 || !binaryPath) {
-      prompts.log.warn("cloudflared could not be installed.");
-      return undefined;
+    default: {
+      const approved = await prompts.confirm({
+        message: source.kind === "downloaded"
+          ? `Use the cloudflared you downloaded (${source.path})? Runtime copies it into its own folder after checking Cloudflare signed it.`
+          : "The free URL needs Cloudflare's cloudflared. Download it from Cloudflare's GitHub releases now? No administrator password is needed.",
+      });
+      if (prompts.isCancel(approved)) throw new SetupCancelledError();
+      if (!approved) return undefined;
+      const fetching = prompts.spinner();
+      fetching.start(source.kind === "downloaded" ? "Checking cloudflared" : "Downloading cloudflared");
+      try {
+        binaryPath = await quick.provideCloudflared(source);
+        fetching.stop(`cloudflared ready: ${binaryPath}`);
+      } catch (error) {
+        fetching.stop(`cloudflared is not available: ${error instanceof Error ? error.message : String(error)}`);
+        return undefined;
+      }
     }
   }
 
@@ -868,14 +871,13 @@ async function runQuickTunnelCommand(args: string[]): Promise<void> {
 async function startQuickTunnelForConfig(
   quick: typeof import("./flyto2/quick-tunnel-service.js"),
 ): Promise<Awaited<ReturnType<typeof quick.startQuickTunnel>>> {
-  const binaryPath = quick.findCloudflared();
-  if (!binaryPath) {
-    throw new Error(
-      process.platform === "win32"
-        ? "cloudflared is not installed. Install it with: winget install --id Cloudflare.cloudflared"
-        : "cloudflared is not installed. Install it with: brew install cloudflared",
-    );
+  // Asking for a quick tunnel is asking for cloudflared, so this fetches the
+  // signed release without a second prompt.
+  const source = quick.cloudflaredSource();
+  if (source.kind === "unsupported") {
+    throw new Error("Automatic quick tunnels need macOS or Windows on a supported processor.");
   }
+  const binaryPath = source.kind === "installed" ? source.path : await quick.provideCloudflared(source);
   const files = loadDevspaceFiles();
   const status = await quick.startQuickTunnel({ binaryPath, originPort: files.config.server.port });
   setDevspaceConfigValues([{ path: ["server", "publicBaseUrl"], value: status.public_base_url }]);

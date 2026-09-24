@@ -4,9 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
-  cloudflaredInstallCommand,
+  cloudflaredReleaseAsset,
+  downloadedCloudflaredCandidates,
   fetchQuickTunnelHostname,
   locateCloudflared,
+  managedCloudflaredPath,
   quickTunnelArguments,
   quickTunnelUrlChange,
   readQuickTunnelProfile,
@@ -50,17 +52,37 @@ test("Runtime switches only when cloudflared reports a different URL", () => {
   assert.equal(quickTunnelUrlChange("not a url", "fresh.trycloudflare.com"), "https://fresh.trycloudflare.com");
 });
 
-test("cloudflared is found off PATH in the Homebrew locations launchd does not see", () => {
-  assert.equal(locateCloudflared("darwin", () => "/custom/cloudflared"), "/custom/cloudflared");
-  assert.equal(locateCloudflared("darwin", () => undefined, (path) => path === "/usr/local/bin/cloudflared"), "/usr/local/bin/cloudflared");
-  assert.equal(locateCloudflared("darwin", () => undefined, () => false), undefined);
+test("cloudflared is found off PATH in Runtime's own bin and the Homebrew locations launchd does not see", () => {
+  const at = { runtimeHome: "/home/u/Library/Application Support/Flyto2 Runtime", home: "/home/u" };
+  assert.equal(locateCloudflared("darwin", () => "/custom/cloudflared", at), "/custom/cloudflared");
+  assert.equal(locateCloudflared("darwin", () => undefined, at, (path) => path === "/usr/local/bin/cloudflared"), "/usr/local/bin/cloudflared");
+  assert.equal(locateCloudflared("darwin", () => undefined, at, (path) => path === "/home/u/.local/bin/cloudflared"), "/home/u/.local/bin/cloudflared");
+  assert.equal(
+    locateCloudflared("darwin", () => undefined, at, () => true),
+    managedCloudflaredPath(at.runtimeHome, "darwin"),
+  );
+  assert.equal(locateCloudflared("darwin", () => undefined, at, () => false), undefined);
+  assert.equal(
+    locateCloudflared("win32", () => undefined, { runtimeHome: "C:\\R", home: "C:\\Users\\u", env: { LOCALAPPDATA: "C:\\L" } },
+      (path) => path === "C:\\L\\Microsoft\\WinGet\\Links\\cloudflared.exe"),
+    "C:\\L\\Microsoft\\WinGet\\Links\\cloudflared.exe",
+  );
 });
 
-test("cloudflared is installed only through the platform package manager", () => {
-  assert.deepEqual(cloudflaredInstallCommand("darwin", (c) => c === "brew"), { command: "brew", args: ["install", "cloudflared"] });
-  assert.equal(cloudflaredInstallCommand("darwin", () => false), undefined);
-  assert.equal(cloudflaredInstallCommand("win32", (c) => c === "winget")?.command, "winget");
-  assert.equal(cloudflaredInstallCommand("linux", () => true), undefined);
+test("a cloudflared the user downloaded themselves is looked for in Downloads, extracted or not", () => {
+  const mac = downloadedCloudflaredCandidates("darwin", "/Users/u");
+  assert.ok(mac.includes("/Users/u/Downloads/cloudflared"));
+  assert.ok(mac.includes("/Users/u/Downloads/cloudflared-darwin-arm64.tgz"));
+  assert.ok(downloadedCloudflaredCandidates("win32", "C:\\Users\\u").includes("C:\\Users\\u\\Downloads\\cloudflared-windows-amd64.exe"));
+});
+
+test("the official release asset matches the platform, with no package manager needed", () => {
+  assert.equal(cloudflaredReleaseAsset("darwin", "arm64"), "cloudflared-darwin-arm64.tgz");
+  assert.equal(cloudflaredReleaseAsset("darwin", "x64"), "cloudflared-darwin-amd64.tgz");
+  assert.equal(cloudflaredReleaseAsset("win32", "x64"), "cloudflared-windows-amd64.exe");
+  assert.equal(cloudflaredReleaseAsset("win32", "arm64"), "cloudflared-windows-amd64.exe");
+  assert.equal(cloudflaredReleaseAsset("win32", "ia32"), "cloudflared-windows-386.exe");
+  assert.equal(cloudflaredReleaseAsset("linux", "x64"), undefined);
 });
 
 test("the quick tunnel profile round-trips and rejects malformed files", (t) => {
