@@ -936,7 +936,12 @@ async function runSelfUpdateCommand(args: string[]): Promise<void> {
       );
     }
     const { nativeSelfUpdateScheduler } = await import("./flyto2/self-update-scheduler.js");
-    const status = selfUpdate.scheduleSelfUpdate(paths, await nativeSelfUpdateScheduler(paths));
+    const configDirectory = service.installedNativeRuntimeConfigDirectory()
+      ?? loadDevspaceFiles().dir;
+    const status = selfUpdate.scheduleSelfUpdate(paths, await nativeSelfUpdateScheduler(paths, {
+      ...(await import("./flyto2/self-update-scheduler.js")).currentSelfUpdateJobSpec(),
+      configDirectory,
+    }));
     console.log(JSON.stringify({
       ...status,
       current_sha: flyto2BuildInfo().git_sha,

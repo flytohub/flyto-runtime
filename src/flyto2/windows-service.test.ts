@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  parseWindowsRuntimeConfigDirectory,
   renderWindowsRuntimeScript,
   renderWindowsRuntimeTask,
   windowsRuntimeServicePaths,
@@ -24,6 +25,16 @@ test("Windows Runtime wrapper preserves config and paths with spaces", () => {
   assert.match(script, /while \(\$true\)/);
   assert.match(script, /Start-Sleep -Seconds \$restartDelaySeconds/);
   assert.match(script, /\[Math\]::Min\(30, \$restartDelaySeconds \* 2\)/);
+});
+
+test("installed config is recovered from the Runtime wrapper", () => {
+  const configDirectory = "C:\\Users\\O'Brien\\Flyto2 Config";
+  const script = renderWindowsRuntimeScript({
+    packageRoot: "C:\\Flyto2 Runtime",
+    configDirectory,
+    nodePath: "C:\\Program Files\\nodejs\\node.exe",
+  });
+  assert.equal(parseWindowsRuntimeConfigDirectory(script), configDirectory);
 });
 
 test("Windows Runtime task launches the wrapper and restarts on failure", () => {

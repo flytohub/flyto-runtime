@@ -8,6 +8,7 @@ import {
   installMacRuntimeService,
   macRuntimeServicePaths,
   macRuntimeServiceStatus,
+  parseMacRuntimeConfigDirectory,
   renderMacRuntimeLaunchAgent,
   restartLaunchAgentWithRecovery,
 } from "./macos-service.js";
@@ -32,6 +33,16 @@ test("native LaunchAgent plist points directly at Flyto2 Runtime", () => {
   assert.doesNotMatch(plist, /local\.devspace\.mac-kit/);
   assert.match(plist, /Library\/Logs\/Flyto2 Runtime\/runtime\.log/);
   assert.match(plist, /<key>ThrottleInterval<\/key>\s*<integer>1<\/integer>/);
+});
+
+test("installed config is recovered from the Runtime LaunchAgent", () => {
+  const configDirectory = "/Users/Chester/Flyto2 & DevSpace/系統";
+  const plist = renderMacRuntimeLaunchAgent({
+    packageRoot: "/opt/flyto2/runtime",
+    configDirectory,
+    nodePath: "/opt/node/bin/node",
+  });
+  assert.equal(parseMacRuntimeConfigDirectory(plist), configDirectory);
 });
 
 test("native service installer can stage a LaunchAgent without loading it", {

@@ -94,6 +94,26 @@ export function macRuntimeServicePaths(
   };
 }
 
+export function installedMacRuntimeConfigDirectory(
+  homeDirectory = homedir(),
+): string | undefined {
+  const { plistPath } = macRuntimeServicePaths(homeDirectory);
+  if (!existsSync(plistPath)) return undefined;
+  return parseMacRuntimeConfigDirectory(readFileSync(plistPath, "utf8"));
+}
+
+export function parseMacRuntimeConfigDirectory(plist: string): string | undefined {
+  const match = plist.match(
+    /<key>FLYTO2_RUNTIME_CONFIG_DIR<\/key>\s*<string>([^<]*)<\/string>/,
+  );
+  return match?.[1]
+    ?.replaceAll("&quot;", '"')
+    .replaceAll("&apos;", "'")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&amp;", "&");
+}
+
 export function renderMacRuntimeLaunchAgent(options: {
   packageRoot: string;
   configDirectory: string;

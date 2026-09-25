@@ -81,6 +81,19 @@ export function windowsRuntimeServicePaths(
   };
 }
 
+export function installedWindowsRuntimeConfigDirectory(
+  serviceRoot = windowsRuntimeServiceRoot(),
+): string | undefined {
+  const { scriptPath } = windowsRuntimeServicePaths(serviceRoot);
+  if (!existsSync(scriptPath)) return undefined;
+  return parseWindowsRuntimeConfigDirectory(readFileSync(scriptPath, "utf8"));
+}
+
+export function parseWindowsRuntimeConfigDirectory(script: string): string | undefined {
+  const match = script.match(/^\$env:FLYTO2_RUNTIME_CONFIG_DIR = '(.*)'\r?$/m);
+  return match?.[1]?.replaceAll("''", "'");
+}
+
 export function renderWindowsRuntimeScript(options: {
   packageRoot: string;
   configDirectory: string;

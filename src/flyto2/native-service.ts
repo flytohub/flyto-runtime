@@ -1,5 +1,6 @@
 import { platform } from "node:os";
 import {
+  installedMacRuntimeConfigDirectory,
   installMacRuntimeService,
   macRuntimeServiceStatus,
   restartMacRuntimeService,
@@ -9,6 +10,7 @@ import {
   uninstallMacRuntimeService,
 } from "./macos-service.js";
 import {
+  installedWindowsRuntimeConfigDirectory,
   installWindowsRuntimeService,
   restartWindowsRuntimeService,
   rollbackWindowsRuntimeService,
@@ -20,6 +22,17 @@ import {
 
 export function nativeServiceSupported(): boolean {
   return platform() === "darwin" || platform() === "win32";
+}
+
+export function installedNativeRuntimeConfigDirectory(): string | undefined {
+  switch (platform()) {
+    case "darwin":
+      return installedMacRuntimeConfigDirectory();
+    case "win32":
+      return installedWindowsRuntimeConfigDirectory();
+    default:
+      return undefined;
+  }
 }
 
 export function installNativeRuntimeService(options: {
