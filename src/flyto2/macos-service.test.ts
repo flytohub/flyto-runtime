@@ -151,6 +151,34 @@ test("failed restart restores the previous LaunchAgent and verifies its health",
   assert.equal(loaded, true);
 });
 
+test("a loaded LaunchAgent gets one bounded kickstart retry before rollback", () => {
+  let loaded = true;
+  let activationAttempts = 0;
+  let rollback = false;
+
+  restartLaunchAgentWithRecovery({
+    bootout: () => {
+      loaded = false;
+    },
+    isLoaded: () => loaded,
+    activate: () => {
+      loaded = true;
+      activationAttempts += 1;
+    },
+    isHealthy: () => activationAttempts >= 2,
+    rollback: () => {
+      rollback = true;
+    },
+    sleep: () => undefined,
+  }, {
+    healthTimeoutMs: 0,
+    healthActivationAttempts: 2,
+  });
+
+  assert.equal(activationAttempts, 2);
+  assert.equal(rollback, false);
+});
+
 test("restart reports both failures when rollback cannot restore service", () => {
   assert.throws(
     () => restartLaunchAgentWithRecovery({

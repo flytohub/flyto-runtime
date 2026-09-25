@@ -73,6 +73,7 @@ export interface LaunchAgentRestartPolicy {
   activationRetryDelayMs?: number;
   healthTimeoutMs?: number;
   healthPollIntervalMs?: number;
+  healthActivationAttempts?: number;
 }
 
 export function macRuntimeServicePaths(
@@ -350,6 +351,7 @@ export function restartLaunchAgentWithRecovery(
   const activationRetryDelayMs = policy.activationRetryDelayMs ?? 250;
   const healthTimeoutMs = policy.healthTimeoutMs ?? 10_000;
   const healthPollIntervalMs = policy.healthPollIntervalMs ?? 100;
+  const healthActivationAttempts = policy.healthActivationAttempts ?? 2;
 
   const waitUntil = (
     predicate: () => boolean,
@@ -387,22 +389,22 @@ export function restartLaunchAgentWithRecovery(
       : new Error(`${name} LaunchAgent activation failed.`);
   };
 
-  const waitForHealth = (): void => {
-    if (!waitUntil(operations.isHealthy, healthTimeoutMs, healthPollIntervalMs)) {
-      throw new Error(`${name} did not pass ${healthDescription} after activation.`);
+  const activateAndWaitForHealth = (): void => {
+    for (let attempt = 1; attempt <= healthActivationAttempts; attempt += 1) {
+      activate();
+      if (waitUntil(operations.isHealthy, healthTimeoutMs, healthPollIntervalMs)) return;
     }
+    throw new Error(`${name} did not pass ${healthDescription} after activation.`);
   };
 
   try {
     unload();
-    activate();
-    waitForHealth();
+    activateAndWaitForHealth();
   } catch (restartError) {
     try {
       unload();
       operations.rollback();
-      activate();
-      waitForHealth();
+      activateAndWaitForHealth();
     } catch (rollbackError) {
       throw new AggregateError(
         [restartError, rollbackError],
