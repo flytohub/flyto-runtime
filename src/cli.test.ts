@@ -162,6 +162,29 @@ try {
     mcp.mcpServers?.["team-runtime-codex-v2"]?.url,
     "https://runtime.team.example/mcp",
   );
+
+  const managedOutput = execFileSync(
+    "node",
+    [
+      "--import",
+      "tsx",
+      "src/cli.ts",
+      "plugin",
+      "build",
+      "--name",
+      "managed-runtime",
+      "--json",
+    ],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: { ...env, FLYTO2_RUNTIME_MANAGED_SERVICE: "1" },
+    },
+  );
+  const managedResult = JSON.parse(managedOutput) as { outputPath?: string };
+  const managedPath = join(configDir, "managed-runtime-chatgpt-plugin.zip");
+  assert.equal(managedResult.outputPath, managedPath);
+  assert.ok(readFileSync(managedPath).length > 0);
 } finally {
   rmSync(pluginRoot, { recursive: true, force: true });
 }

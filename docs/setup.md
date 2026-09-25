@@ -46,7 +46,7 @@ https://your-runtime-host.example.com
 
 Do not include `/mcp` in `server.publicBaseUrl`. Runtime derives the MCP resource as `/mcp`.
 
-When ChatGPT is selected during `flyto2-runtime init`, Runtime asks whether to generate a personalized portable Plugin ZIP. Choose Yes to create it immediately; choose No to keep only the Runtime/MCP settings and build the ZIP later. By default the generated file is written to `~/Downloads/flyto2-runtime-chatgpt-plugin.zip` when `~/Downloads` exists. The ZIP contains no credentials.
+When ChatGPT is selected during interactive `flyto2-runtime init`, Runtime asks whether to generate a personalized portable Plugin ZIP. Choose Yes to create it immediately; choose No to keep only the Runtime/MCP settings and build the ZIP later. Interactive CLI generation defaults to `~/Downloads/flyto2-runtime-chatgpt-plugin.zip` when `~/Downloads` exists. When `plugin build` is invoked from the managed Runtime service (for example through ChatGPT), the default destination is the Runtime config directory instead, avoiding macOS protected-folder/TCC prompts. The ZIP contains no credentials.
 
 Regenerate or customize the package at any time:
 

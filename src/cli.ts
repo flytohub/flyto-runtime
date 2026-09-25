@@ -1016,6 +1016,10 @@ async function runPluginCommand(args: string[]): Promise<void> {
   const version = options.version
     ?? (typeof packageJson.version === "string" ? packageJson.version : "1.0.0");
   const pluginName = options.name?.trim() || DEFAULT_PLUGIN_NAME;
+  const outputPath = options.outputPath
+    ?? (process.env.FLYTO2_RUNTIME_MANAGED_SERVICE === "1"
+      ? resolve(files.dir, `${pluginName}-chatgpt-plugin.zip`)
+      : undefined);
   const result = await writePortablePluginPackage({
     mcpUrl,
     version,
@@ -1024,7 +1028,7 @@ async function runPluginCommand(args: string[]): Promise<void> {
       ?? portablePluginServerName(pluginName, files.config.tools.mode),
     displayName: options.displayName,
     description: options.description,
-    outputPath: options.outputPath,
+    outputPath,
   });
 
   if (options.json) {
@@ -1110,8 +1114,9 @@ function pluginHelpText(): string {
     "Usage:",
     "  flyto2-runtime plugin build [options]",
     "",
-    "By default the package uses server.publicBaseUrl from Runtime config and writes",
-    "a personalized upload-ready ZIP to ~/Downloads when that folder exists.",
+    "By default the package uses server.publicBaseUrl from Runtime config. Interactive",
+    "CLI use writes to ~/Downloads when available; managed Runtime service use writes",
+    "to the Runtime config directory to avoid macOS protected-folder prompts.",
     "",
     "Options:",
     "  --url <https-url>          Full MCP endpoint; for example https://host.example/mcp",
