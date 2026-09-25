@@ -150,13 +150,23 @@ export class CodexAppServerRuntime implements LocalAgentRuntime {
         const completed = await this.rpc.runTurn(threadId, turnParams(input, threadId));
         const parsed = parseCompletedTurn(completed.event.params, completed.items);
         if (parsed.failure) {
+          if (isRetryableCodexCapacityFailure(parsed.failure)) {
+            throw new AgentProviderUnavailableError({
+              code: "PROVIDER_UNAVAILABLE",
+              provider: this.provider,
+              operation: "run",
+              retryable: true,
+              cause: completed.event.params,
+              message: `Codex provider is temporarily unavailable: ${parsed.failure}`,
+            });
+          }
           throw new AgentProviderExecutionError({
             code: "PROVIDER_EXECUTION_ERROR",
             provider: this.provider,
             operation: "run",
             retryable: false,
             cause: completed.event.params,
-            message: "Codex agent turn failed.",
+            message: `Codex agent turn failed: ${parsed.failure}`,
           });
         }
         if (!parsed.finalResponse.trim()) {
@@ -465,9 +475,9 @@ function threadParams(input: LocalAgentRunInput): Record<string, unknown> {
 function turnParams(input: LocalAgentRunInput, threadId: string): Record<string, unknown> {
   return {
     threadId,
-    input: [{ type: "text", text: input.prompt }],
+    input: [{ type: "text", text: input.prompt, text_elements: [] }],
     approvalPolicy: "never",
-    sandboxPolicy: sandboxPolicyFor(input.writeMode),
+    sandboxPolicy: sandboxPolicyFor(input.writeMode, input.workspaceRoot),
     ...(input.model ? { model: input.model } : {}),
     ...(input.effort ? { effort: input.effort } : {}),
   };
@@ -482,12 +492,24 @@ export function sandboxFor(writeMode: LocalAgentWriteMode | undefined): string {
   }
 }
 
-function sandboxPolicyFor(writeMode: LocalAgentWriteMode | undefined): Record<string, string | boolean> {
+function sandboxPolicyFor(
+  writeMode: LocalAgentWriteMode | undefined,
+  workspaceRoot: string,
+): Record<string, unknown> {
   switch (writeMode) {
-    case "allowed": return { type: "workspaceWrite", networkAccess: true };
-    case "full_access": return { type: "dangerFullAccess" };
+    case "allowed":
+      return {
+        type: "workspaceWrite",
+        writableRoots: [workspaceRoot],
+        networkAccess: true,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false,
+      };
+    case "full_access":
+      return { type: "dangerFullAccess" };
     case "read_only":
-    case undefined: return { type: "readOnly" };
+    case undefined:
+      return { type: "readOnly", networkAccess: false };
   }
 }
 
@@ -564,6 +586,10 @@ function readString(value: unknown, key: string): string | undefined {
 
 function directString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function isRetryableCodexCapacityFailure(message: string): boolean {
+  return /(?:usage limit|rate limit|quota|too many requests|temporarily unavailable)/i.test(message);
 }
 
 function protocolErrorText(value: unknown): string {

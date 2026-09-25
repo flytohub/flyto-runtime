@@ -53,8 +53,9 @@ test("background_task starts a detached local task with a durable ownership prom
   assert.equal(startInput?.target, "claude");
   assert.equal(startInput?.workspaceRoot, "/workspace");
   assert.match(String(startInput?.prompt), /Own this task through completion/);
-  assert.match(String(startInput?.prompt), /create one focused local commit after verification/);
-  assert.match(String(startInput?.prompt), /Never push unless the caller explicitly requests it/);
+  assert.match(String(startInput?.prompt), /create a focused commit containing only your task changes/);
+  assert.match(String(startInput?.prompt), /Do not push, publish, deploy, open a pull request/);
+  assert.match(String(startInput?.prompt), /report the outcome, verification performed, and the commit SHA/);
   assert.match(String(startInput?.prompt), /Fix the failing tests/);
   assert.deepEqual(response.structuredContent, {
     result: "Background task agt_12345678 is running independently. It will continue if this conversation disconnects.",

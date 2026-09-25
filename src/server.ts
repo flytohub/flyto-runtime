@@ -129,7 +129,7 @@ function serverInstructions(
     ? ` Diagnostic Runtime internals are explicitly enabled. Use ${toolNames.runtimeEvents}, ${toolNames.runtimeWait}, ${toolNames.runtimeEvidence}, or watch tools only when diagnosing Runtime behavior; normal coding should still use the primary workspace/file/process primitives.`
     : "";
   const backgroundTasks = config.subagents.enabled
-    ? ` For multi-step work that must survive the current turn, page, or MCP connection, start ${toolNames.backgroundTask}; the detached local daemon then owns the task through completion. Use its status or wait action later, and request its response only when needed.`
+    ? ` For non-trivial multi-step coding work that is expected to run autonomously or survive the current turn, page, or MCP connection, start ${toolNames.backgroundTask} before issuing individual mutation/test commands yourself; the detached local daemon then owns analysis, edits, verification, and task completion. Use its status or wait action later, and request its response only when needed.`
     : "";
 
   return `${common} ${toolSurface.instructions({ agents, skills })}${execution}${backgroundTasks}${diagnostics}${artifactInstruction}${showChangesInstruction}${selfUpdateInstruction()}`;

@@ -69,6 +69,10 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
         output({ method: "turn/completed", params: { threadId: message.params.threadId, turn: { id: turnId, status: "failed", error: { message: "fake failure" } } } });
         return;
       }
+      if (message.params.input[0].text === "usage_limit") {
+        output({ method: "turn/completed", params: { threadId: message.params.threadId, turn: { id: turnId, status: "failed", error: { message: "You've hit your usage limit. Try again later." } } } });
+        return;
+      }
       if (message.params.input[0].text === "empty") {
         output({ method: "turn/completed", params: { threadId: message.params.threadId, turn: { id: turnId, status: "completed", items: [] } } });
         return;
@@ -80,7 +84,10 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
         return;
       }
       const item = { type: "agentMessage", text: message.params.input[0].text === "policy"
-        ? JSON.stringify(message.params.sandboxPolicy)
+        ? JSON.stringify({
+            sandboxPolicy: message.params.sandboxPolicy,
+            input: message.params.input,
+          })
         : "fake response " + turn };
       output({ method: "item/completed", params: { threadId: message.params.threadId, turnId, item } });
       output({ method: "turn/completed", params: { threadId: message.params.threadId, turn: { id: turnId, status: "completed", items: [item] } } });
@@ -127,6 +134,18 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
       assert.equal(failed.error.code, "PROVIDER_EXECUTION_ERROR");
       assert.equal(failed.error.provider, "codex");
       assert.equal(failed.error.retryable, false);
+      assert.match(failed.error.message, /fake failure/);
+    }
+    const usageLimited = await runtime.run({
+      prompt: "usage_limit",
+      workspaceRoot: "/tmp/project",
+      providerSessionId: first.providerSessionId ?? undefined,
+    });
+    assert.equal(usageLimited.isErr(), true);
+    if (usageLimited.isErr()) {
+      assert.equal(usageLimited.error.code, "PROVIDER_UNAVAILABLE");
+      assert.equal(usageLimited.error.retryable, true);
+      assert.match(usageLimited.error.message, /usage limit/i);
     }
     const protocolFailure = await runtime.run({
       prompt: "empty",
@@ -157,7 +176,16 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
     });
     assert.equal(policy.isOk(), true);
     if (policy.isErr()) throw policy.error;
-    assert.deepEqual(JSON.parse(policy.value.finalResponse), { type: "workspaceWrite", networkAccess: true });
+    assert.deepEqual(JSON.parse(policy.value.finalResponse), {
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: ["/tmp/project"],
+        networkAccess: true,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false,
+      },
+      input: [{ type: "text", text: "policy", text_elements: [] }],
+    });
     await runtime.releaseSession("thread_new");
   } finally {
     await runtime.close();

@@ -121,9 +121,11 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
 function durableTaskPrompt(prompt: string): string {
   return [
     "Own this task through completion even if the caller disconnects.",
-    "Work autonomously within the requested scope, follow repository instructions, preserve unrelated changes, and run appropriate verification.",
-    "When the task changes a Git repository, inspect the final diff and create one focused local commit after verification unless the caller explicitly says not to commit. Never push unless the caller explicitly requests it.",
+    "Work autonomously within the requested scope, follow repository instructions, and preserve unrelated changes.",
+    "For coding tasks that require file changes: inspect the current Git state, implement the requested change, run appropriate verification, then create a focused commit containing only your task changes unless the caller explicitly requested no commit or repository instructions forbid committing.",
+    "Do not push, publish, deploy, open a pull request, or absorb unrelated pre-existing changes unless the original task explicitly authorizes it.",
     "Do not pause merely because the caller is unavailable. Stop only when the task is complete or genuinely requires credentials, authorization, or a user decision.",
+    "In the final response, report the outcome, verification performed, and the commit SHA when a commit was created; otherwise state why no commit was needed or possible.",
     "",
     prompt,
   ].join("\n");
