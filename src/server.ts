@@ -45,10 +45,6 @@ import { shutdownHttpServer } from "./server-shutdown.js";
 import { DEVSPACE_VERSION } from "./version.js";
 import { createWorkspaceStore } from "./workspace-store.js";
 import { DurableOperationStore, runDurableOperation } from "./flyto2/durable-operations.js";
-import {
-  startNativeTunnelWatchdog,
-  startQuickTunnelFollower,
-} from "./flyto2/tunnel-supervision.js";
 import { withDurableToolHandlers } from "./flyto2/durable-tools.js";
 import { registerRuntimeTools } from "./flyto2/runtime-tools.js";
 import { RuntimeEventStore } from "./flyto2/runtime-events.js";
@@ -300,7 +296,6 @@ function withTrackedToolHandlers(
 
 export interface CreateServerOptions {
   incomingArtifactAdapters?: readonly IncomingArtifactAdapter[];
-  nativeTunnelWatchdog?: boolean;
 }
 
 export function createServer(
@@ -343,14 +338,6 @@ export function createServer(
   const localAgentProviders = buildLocalAgentProviderStatuses(
     config.subagents,
     getLocalAgentProviderAvailabilitySnapshot(process.env, config.subagents),
-  );
-  const stopNativeTunnelWatchdog = startNativeTunnelWatchdog(
-    config,
-    options.nativeTunnelWatchdog === true,
-  );
-  const stopQuickTunnelFollower = startQuickTunnelFollower(
-    config,
-    options.nativeTunnelWatchdog === true,
   );
   const resolveLocalAgentProviders = config.subagents.enabled
     ? () => buildLocalAgentProviderStatuses(
@@ -543,8 +530,6 @@ export function createServer(
           });
         }
         await toolActivities.waitForIdle();
-        stopNativeTunnelWatchdog();
-        stopQuickTunnelFollower();
         processSessions.shutdown();
         workspaceWatches.shutdown();
         reactiveCommands.shutdown();

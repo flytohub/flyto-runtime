@@ -4,40 +4,19 @@ import { stdin as input, stdout as output } from "node:process";
 import { resolve } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
-import type { Result as BetterResult } from "better-result";
 import * as prompts from "@clack/prompts";
 import { getShellConfig } from "@earendil-works/pi-coding-agent";
 import { satisfies } from "semver";
 import { loadConfig } from "./config.js";
-import type { ServerConfig } from "./config.js";
 import { resolveCliWorkspaceContext } from "./cli-workspace.js";
 import {
   getLocalAgentProviderAvailabilitySnapshot,
 } from "./local-agent-availability.js";
 import {
-  buildLocalAgentCatalog,
   buildLocalAgentProviderStatuses,
   formatLocalAgentProviderStatusSummary,
 } from "./local-agent-catalog.js";
-import { loadLocalAgentProfiles } from "./local-agent-profiles.js";
 import type { LocalAgentProvider } from "./local-agent-profiles.js";
-import {
-  parseLocalAgentContinueArgs,
-  parseLocalAgentRunArgs,
-} from "./local-agent-targets.js";
-import { createLocalAgentClient } from "./local-agent-client.js";
-import { toAgentErrorPayload, type LocalAgentError } from "./local-agent-errors.js";
-import {
-  formatAgentCommandError,
-  formatAgentObservation,
-  formatAgentReceipt,
-  formatAgentSummary,
-  formatAgentTargetCatalog,
-  presentAgentObservation,
-  presentAgentReceipt,
-  presentAgentSummary,
-  presentAgentTargetCatalog,
-} from "./local-agent-presentation.js";
 import {
   type OnboardingDestination,
   ONBOARDING_CLIENT_OPTIONS,
@@ -60,8 +39,8 @@ import {
 import { expandHomePath } from "./roots.js";
 import { readReviewRef } from "./review-checkpoints.js";
 import { shutdownHttpServer } from "./server-shutdown.js";
-import { logEvent } from "./logger.js";
 import { pruneStaleManagedWorktrees } from "./worktree-prune.js";
+import { createRuntimeMaintenance } from "./runtime-maintenance.js";
 import { Flyto2CloudBridge } from "./flyto2/cloud-bridge.js";
 import { runtimeManifest } from "./flyto2/manifest.js";
 import {
@@ -84,8 +63,6 @@ import {
   mcpUrlFromPublicBaseUrl,
   writePortablePluginPackage,
 } from "./portable-plugin.js";
-
-const MANAGED_WORKTREE_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 
 type Command =
   | "serve"
@@ -130,7 +107,7 @@ async function main(argv: string[]): Promise<void> {
       await runWorktreesCommand(args);
       return;
     case "agents":
-      await runAgentsCommand(args);
+      await (await import("./agents-cli.js")).runAgentsCommand(args);
       return;
     case "show-changes":
       await runShowChanges(args);
@@ -145,10 +122,10 @@ async function main(argv: string[]): Promise<void> {
       await runPackagedApp();
       return;
     case "launcher":
-      await runLauncherCommand(args);
+      await (await import("./flyto2/operator-cli.js")).runLauncherCommand(args);
       return;
     case "service":
-      await runServiceCommand(args);
+      await (await import("./flyto2/operator-cli.js")).runServiceCommand(args);
       return;
     case "plugin":
       await runPluginCommand(args);
@@ -635,13 +612,11 @@ async function serve(): Promise<void> {
       // No healthy Runtime on the configured listener; start it below.
     }
   }
-  await runManagedWorktreeCleanup(config);
   const { createServer } = await import("./server.js");
-  const { app, close, localAgentProviders } = createServer(config, {
-    nativeTunnelWatchdog: true,
-  });
-  const stopWorktreeCleanup = startManagedWorktreeCleanupLoop(config);
+  const { app, close, localAgentProviders } = createServer(config);
+  const maintenance = createRuntimeMaintenance(config);
   const httpServer = app.listen(config.port, config.host, () => {
+    maintenance.start();
     console.log(`Flyto2 Runtime listening on http://${config.host}:${config.port}/mcp`);
     console.log(`public base url: ${config.publicBaseUrl}`);
     console.log(`allowed roots: ${config.allowedRoots.join(", ")}`);
@@ -658,7 +633,7 @@ async function serve(): Promise<void> {
   const shutdown = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
-    stopWorktreeCleanup();
+    maintenance.stop();
     await shutdownHttpServer(httpServer, close);
     process.exit(0);
   };
@@ -670,54 +645,6 @@ async function serve(): Promise<void> {
   };
   process.once("SIGINT", handleShutdown);
   process.once("SIGTERM", handleShutdown);
-}
-
-function startManagedWorktreeCleanupLoop(config: ServerConfig): () => void {
-  let running = false;
-  const timer = setInterval(() => {
-    if (running) return;
-    running = true;
-    void runManagedWorktreeCleanup(config).finally(() => {
-      running = false;
-    });
-  }, MANAGED_WORKTREE_CLEANUP_INTERVAL_MS);
-  timer.unref();
-  return () => clearInterval(timer);
-}
-
-async function runManagedWorktreeCleanup(config: ServerConfig): Promise<void> {
-  try {
-    const cleanup = await pruneStaleManagedWorktrees(config);
-    if (cleanup.isErr()) {
-      logEvent(config.logging, "warn", "managed_worktree_cleanup_failed", {
-        error: cleanup.error.message,
-        operation: cleanup.error.operation,
-      });
-      return;
-    }
-
-    const result = cleanup.value;
-    const preserved = result.removed.filter((entry) => entry.recoveryRef).length;
-    if (result.removed.length > 0 || result.missing.length > 0 || result.skipped.length > 0) {
-      logEvent(config.logging, "info", "managed_worktree_cleanup", {
-        removed: result.removed.length,
-        recoveryRefs: preserved,
-        missingSessions: result.missing.length,
-        skippedUntracked: result.skipped.length,
-      });
-    }
-    for (const failure of result.failed) {
-      logEvent(config.logging, "warn", "managed_worktree_cleanup_failed", {
-        workspaceId: failure.workspaceId,
-        error: failure.error.message,
-        operation: failure.error.operation,
-      });
-    }
-  } catch (error) {
-    logEvent(config.logging, "warn", "managed_worktree_cleanup_failed", {
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
 }
 
 async function runDoctor(): Promise<void> {
@@ -876,176 +803,6 @@ async function runWorktreesCommand(args: string[]): Promise<void> {
   if (result.failed.length > 0) process.exitCode = 1;
 }
 
-async function runQuickTunnelCommand(args: string[]): Promise<void> {
-  const quick = await import("./flyto2/quick-tunnel-service.js");
-  const [action = "status", ...extra] = args;
-  if (extra.length > 0) throw new Error("Usage: flyto2-runtime service quick-tunnel [start|stop|status]");
-  switch (action) {
-    case "start": {
-      const status = await startQuickTunnelForConfig(quick);
-      console.log(JSON.stringify(status, null, 2));
-      return;
-    }
-    case "stop":
-      console.log(JSON.stringify(await quick.stopQuickTunnel(), null, 2));
-      return;
-    case "status":
-      console.log(JSON.stringify(await quick.quickTunnelStatus(), null, 2));
-      return;
-    default:
-      throw new Error("Usage: flyto2-runtime service quick-tunnel [start|stop|status]");
-  }
-}
-
-// Starts the quick tunnel, saves its URL as the public URL, and returns it.
-async function startQuickTunnelForConfig(
-  quick: typeof import("./flyto2/quick-tunnel-service.js"),
-): Promise<Awaited<ReturnType<typeof quick.startQuickTunnel>>> {
-  // Asking for a quick tunnel is asking for cloudflared, so this fetches the
-  // signed release without a second prompt.
-  const source = quick.cloudflaredSource();
-  if (source.kind === "unsupported") {
-    throw new Error("Automatic quick tunnels need macOS or Windows on a supported processor.");
-  }
-  const binaryPath = source.kind === "installed" ? source.path : await quick.provideCloudflared(source);
-  const files = loadDevspaceFiles();
-  const status = await quick.startQuickTunnel({ binaryPath, originPort: files.config.server.port });
-  setDevspaceConfigValues([{ path: ["server", "publicBaseUrl"], value: status.public_base_url }]);
-  return status;
-}
-
-// `service self-update` is safe to run from the Runtime's own shell (a remote
-// host's exec_command): it only schedules an OS-owned job and returns.
-async function runSelfUpdateCommand(args: string[]): Promise<void> {
-  const selfUpdate = await import("./flyto2/self-update.js");
-  const { flyto2NativeRuntimeHome } = await import("./flyto2/native-paths.js");
-  const { flyto2BuildInfo } = await import("./flyto2/build-info.js");
-  const paths = selfUpdate.selfUpdatePaths(flyto2NativeRuntimeHome());
-  const [action, requestId, ...extra] = args;
-  const usage = "Usage: flyto2-runtime service self-update [status]";
-  const { packagedDistribution, FLYTO2_RUNTIME_DOWNLOADS_URL } = await import("./flyto2/distribution.js");
-  if (action !== "status" && packagedDistribution()) {
-    throw new Error(`This Runtime was installed from the Flyto2 Runtime app, which updates by installing the new version from ${FLYTO2_RUNTIME_DOWNLOADS_URL}.`);
-  }
-
-  if (action === undefined) {
-    const service = await import("./flyto2/native-service.js");
-    if (!service.nativeRuntimeServiceStatus().installed) {
-      throw new Error(
-        "Remote self-update switches the background service, which is not installed. Run `flyto2-runtime service install` first.",
-      );
-    }
-    const { nativeSelfUpdateScheduler } = await import("./flyto2/self-update-scheduler.js");
-    const configDirectory = service.installedNativeRuntimeConfigDirectory()
-      ?? loadDevspaceFiles().dir;
-    const status = selfUpdate.scheduleSelfUpdate(paths, await nativeSelfUpdateScheduler(paths, {
-      ...(await import("./flyto2/self-update-scheduler.js")).currentSelfUpdateJobSpec(),
-      configDirectory,
-    }));
-    console.log(JSON.stringify({
-      ...status,
-      current_sha: flyto2BuildInfo().git_sha,
-      next: "The update runs in the background: fetch main, require green CI, build, restart behind a health check, roll back on failure. "
-        + "The connection drops for a few seconds during the restart. Check progress with `flyto2-runtime service self-update status`.",
-    }, null, 2));
-    return;
-  }
-  if (action === "status" && requestId === undefined) {
-    console.log(JSON.stringify({
-      current_sha: flyto2BuildInfo().git_sha,
-      update: selfUpdate.readSelfUpdateStatus(paths) ?? null,
-    }, null, 2));
-    return;
-  }
-  if (action === "run" && requestId && extra.length === 0) {
-    const { spawnSync } = await import("node:child_process");
-    const service = await import("./flyto2/native-service.js");
-    const status = await selfUpdate.runSelfUpdate(requestId, paths, {
-      run: (command, commandArgs, options) => {
-        const result = spawnSync(command, commandArgs, {
-          cwd: options?.cwd,
-          encoding: "utf8",
-          maxBuffer: 64 * 1024 * 1024,
-          // Only npm-style .cmd shims need a shell; git paths may contain spaces.
-          shell: process.platform === "win32" && command.endsWith(".cmd"),
-          windowsHide: true,
-        });
-        return {
-          status: result.status,
-          stdout: result.stdout ?? "",
-          stderr: result.stderr ?? (result.error ? String(result.error) : ""),
-        };
-      },
-      fetchCheckRuns: (sha) => selfUpdate.fetchCheckRuns(sha),
-      currentGitSha: () => flyto2BuildInfo().git_sha,
-      activate: (packageRoot) => {
-        service.installNativeRuntimeService({
-          packageRoot,
-          configDirectory: loadDevspaceFiles().dir,
-          start: true,
-        });
-      },
-      pnpm: (await import("./flyto2/pnpm-command.js")).resolvePnpm(),
-    });
-    console.log(JSON.stringify(status, null, 2));
-    if (status.phase === "failed" || status.phase === "rolled_back") process.exitCode = 1;
-    return;
-  }
-  throw new Error(usage);
-}
-
-async function runServiceCommand(args: string[]): Promise<void> {
-  const [subcommand = "status", ...rest] = args;
-  if (subcommand === "self-update") {
-    await runSelfUpdateCommand(rest);
-    return;
-  }
-  if (subcommand === "quick-tunnel") {
-    await runQuickTunnelCommand(rest);
-    return;
-  }
-
-  const { runNativeServiceCommand } = await import("./flyto2/service-cli.js");
-  await runNativeServiceCommand(subcommand, rest);
-}
-
-async function runLauncherCommand(args: string[]): Promise<void> {
-  const [subcommand = "status", ...rest] = args;
-  if (rest.length > 0) {
-    throw new Error("Usage: flyto2-runtime launcher <install|status|remove>");
-  }
-
-  const launcher = process.platform === "win32"
-    ? await import("./flyto2/windows-launcher.js")
-    : await import("./flyto2/macos-launcher.js");
-
-  switch (subcommand) {
-    case "install": {
-      const installed = process.platform === "win32"
-        ? (launcher as typeof import("./flyto2/windows-launcher.js")).installWindowsDesktopLaunchers()
-        : (launcher as typeof import("./flyto2/macos-launcher.js")).installMacDesktopLaunchers();
-      console.log(JSON.stringify({ ok: true, ...installed }, null, 2));
-      return;
-    }
-    case "status": {
-      const status = process.platform === "win32"
-        ? (launcher as typeof import("./flyto2/windows-launcher.js")).windowsDesktopLauncherStatus()
-        : (launcher as typeof import("./flyto2/macos-launcher.js")).macDesktopLauncherStatus();
-      console.log(JSON.stringify(status, null, 2));
-      return;
-    }
-    case "remove": {
-      const directory = process.platform === "win32"
-        ? (launcher as typeof import("./flyto2/windows-launcher.js")).removeWindowsDesktopLaunchers()
-        : (launcher as typeof import("./flyto2/macos-launcher.js")).removeMacDesktopLaunchers();
-      console.log(JSON.stringify({ ok: true, removed: directory }, null, 2));
-      return;
-    }
-    default:
-      throw new Error("Usage: flyto2-runtime launcher <install|status|remove>");
-  }
-}
-
 // The packaged app's entry point. A first launch walks through setup, whose
 // last screen starts (and so installs) the background service from this app;
 // every later launch opens the menu.
@@ -1100,7 +857,7 @@ async function runInteractiveMenu(): Promise<void> {
       case "start":
         await ensureConfigured();
         if (process.platform === "darwin" || process.platform === "win32") {
-          await runServiceCommand(["start"]);
+          await (await import("./flyto2/operator-cli.js")).runServiceCommand(["start"]);
           prompts.outro("Flyto2 Runtime background service is running.");
           return;
         }
@@ -1427,212 +1184,6 @@ async function runShowChanges(args: string[]): Promise<void> {
   console.log(review.patch || review.result);
 }
 
-async function runAgentsCommand(args: string[]): Promise<void> {
-  const [subcommand, ...rest] = args;
-  const { args: commandArgs, json } = extractJsonOption(rest);
-  switch (subcommand) {
-    case "ls":
-    case "list":
-      await runAgentWorkflowCommand(json, () => runAgentsList(commandArgs, json));
-      return;
-    case "run":
-      await runAgentWorkflowCommand(json, () => runAgentsRun(commandArgs, json));
-      return;
-    case "continue":
-      await runAgentWorkflowCommand(json, () => runAgentsContinue(commandArgs, json));
-      return;
-    case "show":
-      await runAgentWorkflowCommand(json, () => runAgentsShow(commandArgs, json));
-      return;
-    case "wait":
-      await runAgentWorkflowCommand(json, () => runAgentsWait(commandArgs, json));
-      return;
-    case "targets":
-      await runAgentWorkflowCommand(json, () => runAgentsTargets(commandArgs, json));
-      return;
-    case "daemon":
-      await runAgentsDaemon(commandArgs, json);
-      return;
-    case undefined:
-    case "help":
-    case "--help":
-    case "-h":
-      printAgentsHelp();
-      return;
-    default:
-      writeAgentWorkflowError(`Unknown agents command: ${subcommand}`, json);
-  }
-}
-
-async function runAgentsTargets(args: string[], json: boolean): Promise<void> {
-  if (args.length > 0) throw new Error("Usage: devspace agents targets [--json]");
-  const config = loadConfig();
-  const scope = resolveCliWorkspaceContext(config.allowedRoots);
-  const profiles = await loadLocalAgentProfiles(config, scope.workspaceRoot);
-  const providers = buildLocalAgentProviderStatuses(
-    config.subagents,
-    getLocalAgentProviderAvailabilitySnapshot(process.env, config.subagents),
-  );
-  const catalog = buildLocalAgentCatalog(config.subagents, profiles, providers);
-  const output = presentAgentTargetCatalog(catalog);
-  if (json) printJson(output);
-  else printAgentXml(formatAgentTargetCatalog(output));
-}
-
-async function runAgentsList(args: string[], json: boolean): Promise<void> {
-  if (args.length > 0) throw new Error("Usage: devspace agents ls [--json]");
-  const config = loadConfig();
-  const client = createLocalAgentClient(config);
-  const result = await client.list(resolveCliWorkspaceContext(config.allowedRoots));
-  const agents = presentAgentWorkflowResult(result, json);
-  if (!agents) return;
-
-  const summaries = agents.map(presentAgentSummary);
-  if (json) {
-    printJson(summaries);
-    return;
-  }
-
-  printAgentXml(summaries.map(formatAgentSummary).join("\n"));
-}
-
-async function runAgentsRun(args: string[], json: boolean): Promise<void> {
-  const parsed = parseLocalAgentRunArgs(args);
-  const config = loadConfig();
-  const scope = resolveCliWorkspaceContext(config.allowedRoots);
-  const client = createLocalAgentClient(config);
-  const result = await client.start({
-    target: parsed.target,
-    prompt: parsed.prompt,
-    workspaceRoot: scope.workspaceRoot,
-    workspaceId: scope.workspaceId,
-    model: parsed.model,
-    effort: parsed.effort,
-  });
-  const record = presentAgentWorkflowResult(result, json);
-  if (!record) return;
-  const receipt = presentAgentReceipt(record);
-  if (json) {
-    printJson(receipt);
-    return;
-  }
-  printAgentXml(formatAgentReceipt(receipt));
-}
-
-async function runAgentsContinue(args: string[], json: boolean): Promise<void> {
-  const parsed = parseLocalAgentContinueArgs(args);
-  const config = loadConfig();
-  const client = createLocalAgentClient(config);
-  const scope = resolveCliWorkspaceContext(config.allowedRoots);
-  const result = await client.continue(parsed.agentId, parsed.prompt, {
-    model: parsed.model,
-    effort: parsed.effort,
-  }, scope);
-  const record = presentAgentWorkflowResult(result, json);
-  if (!record) return;
-  const receipt = presentAgentReceipt(record);
-  if (json) {
-    printJson(receipt);
-    return;
-  }
-  printAgentXml(formatAgentReceipt(receipt));
-}
-
-async function runAgentsShow(args: string[], json: boolean): Promise<void> {
-  const [id, ...extra] = args;
-  if (!id || extra.length > 0) throw new Error("Usage: devspace agents show <id> [--json]");
-
-  const config = loadConfig();
-  const client = createLocalAgentClient(config);
-  const scope = resolveCliWorkspaceContext(config.allowedRoots);
-  const initial = await client.get(id, scope);
-  const record = presentAgentWorkflowResult(initial, json);
-  if (!record) return;
-
-  const observation = presentAgentObservation(record);
-  if (json) printJson(observation);
-  else printAgentXml(formatAgentObservation(observation));
-}
-
-async function runAgentsWait(args: string[], json: boolean): Promise<void> {
-  const { ids, timeoutMs } = parseAgentsWaitArgs(args);
-  const config = loadConfig();
-  const client = createLocalAgentClient(config);
-  const scope = resolveCliWorkspaceContext(config.allowedRoots);
-  const results = presentAgentWorkflowResult(await client.wait(ids, scope, timeoutMs), json);
-  if (!results) return;
-  if (json) {
-    printJson(results);
-    return;
-  }
-  printAgentXml(results.map(formatAgentObservation).join("\n"));
-}
-
-function parseAgentsWaitArgs(args: string[]): { ids: string[]; timeoutMs?: number } {
-  const ids: string[] = [];
-  let timeoutMs: number | undefined;
-  for (let index = 0; index < args.length; index += 1) {
-    const argument = args[index]!;
-    if (argument === "--timeout") {
-      timeoutMs = parseAgentWaitTimeout(args[index + 1]);
-      index += 1;
-      continue;
-    }
-    if (argument.startsWith("--timeout=")) {
-      timeoutMs = parseAgentWaitTimeout(argument.slice("--timeout=".length));
-      continue;
-    }
-    if (argument.startsWith("-")) throw new Error(`Unknown option: ${argument}.`);
-    ids.push(argument);
-  }
-  if (ids.length === 0) {
-    throw new Error("Usage: devspace agents wait <id>... [--timeout <seconds>] [--json]");
-  }
-  return { ids, ...(timeoutMs === undefined ? {} : { timeoutMs }) };
-}
-
-function parseAgentWaitTimeout(value: string | undefined): number {
-  if (!value || !/^\d+$/.test(value)) {
-    throw new Error("Agent wait timeout must be a non-negative integer number of seconds.");
-  }
-  const timeoutMs = Number(value) * 1_000;
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs > 2_147_483_647) {
-    throw new Error("Agent wait timeout is too large.");
-  }
-  return timeoutMs;
-}
-
-async function runAgentsDaemon(args: string[], json: boolean): Promise<void> {
-  const [subcommand, ...extra] = args;
-  if (extra.length > 0) throw new Error("Usage: devspace agents daemon <status|stop|logs> [--json]");
-  const config = loadConfig();
-  const client = createLocalAgentClient(config);
-  switch (subcommand) {
-    case "status": {
-      const status = presentAgentResult(await client.status(), json);
-      if (!status) return;
-      printJson(status);
-      return;
-    }
-    case "stop": {
-      const status = presentAgentResult(await client.stop(), json);
-      if (!status) return;
-      if (json) printJson(status);
-      else console.log("Local agent daemon stop requested.");
-      return;
-    }
-    case "logs": {
-      const logs = presentAgentResult(await client.logs(), json);
-      if (logs === undefined) return;
-      if (json) printJson({ logs });
-      else console.log(logs || "No local agent daemon logs found.");
-      return;
-    }
-    default:
-      throw new Error("Usage: devspace agents daemon <status|stop|logs>");
-  }
-}
-
 function extractJsonOption(args: string[]): { args: string[]; json: boolean } {
   const commandArgs: string[] = [];
   let json = false;
@@ -1652,69 +1203,8 @@ function extractJsonOption(args: string[]): { args: string[]; json: boolean } {
   return { args: commandArgs, json };
 }
 
-function presentAgentResult<T, E extends LocalAgentError>(
-  result: BetterResult<T, E>,
-  json: boolean,
-): T | undefined {
-  if (result.isOk()) return result.value;
-  if (json) {
-    printJson({ error: toAgentErrorPayload(result.error) });
-    process.exitCode = 1;
-    return undefined;
-  }
-  throw new Error(result.error.message);
-}
-
-function presentAgentWorkflowResult<T, E extends LocalAgentError>(
-  result: BetterResult<T, E>,
-  json: boolean,
-): T | undefined {
-  if (result.isOk()) return result.value;
-  const error = toAgentErrorPayload(result.error);
-  if (json) printJson({ error });
-  else console.error(formatAgentCommandError(error));
-  process.exitCode = 1;
-  return undefined;
-}
-
-async function runAgentWorkflowCommand(json: boolean, command: () => Promise<void>): Promise<void> {
-  try {
-    await command();
-  } catch (error) {
-    writeAgentWorkflowError(error instanceof Error ? error.message : String(error), json);
-  }
-}
-
-function writeAgentWorkflowError(message: string, json: boolean): void {
-  const error = { code: "AGENT_COMMAND_ERROR", message, retryable: false };
-  if (json) printJson({ error });
-  else console.error(formatAgentCommandError(error));
-  process.exitCode = 1;
-}
-
-function printAgentXml(fragment: string): void {
-  if (fragment) console.log(fragment);
-}
-
 function printJson(value: unknown): void {
   console.log(JSON.stringify(value));
-}
-
-function printAgentsHelp(): void {
-  console.log(
-    [
-      "DevSpace agents",
-      "",
-      "Usage:",
-      "  devspace agents ls [--json]",
-      "  devspace agents run <profile-or-provider> [--model <model>] [--effort <level>] [--json] <prompt>",
-      "  devspace agents continue <id> [--model <model>] [--effort <level>] [--json] <prompt>",
-      "  devspace agents show <id> [--json]",
-      "  devspace agents wait <id>... [--timeout <seconds>] [--json]",
-      "  devspace agents targets [--json]",
-      "  devspace agents daemon <status|stop|logs> [--json]",
-    ].join("\n"),
-  );
 }
 
 function printVersion(): void {

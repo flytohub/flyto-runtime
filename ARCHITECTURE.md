@@ -40,6 +40,9 @@ The wire contract is provider-neutral. Runtime adapters decide how an assignment
 ## Standalone surfaces
 
 - MCP server: `src/server.ts`
+- Runtime host lifecycle: `src/cli.ts` + `src/runtime-maintenance.ts`
+- Native service, updater, tunnel, and launcher commands: `src/flyto2/operator-cli.ts`
+- Optional local-agent CLI: `src/agents-cli.ts`
 - portable host plugin packaging: `src/portable-plugin.ts`
 - workspace lifecycle: `src/workspaces.ts`
 - process sessions: `src/process-sessions.ts`
@@ -48,6 +51,20 @@ The wire contract is provider-neutral. Runtime adapters decide how an assignment
 - capability manifest: `src/flyto2/manifest.ts`
 
 All of these work with the Cloud bridge absent.
+
+## Process boundaries
+
+`src/server.ts` owns the MCP/HTTP request lifecycle. It does not install services,
+restart tunnels, schedule updates, or prune Git worktrees.
+
+`src/cli.ts` binds the listener first. Only after the listener is ready does
+`src/runtime-maintenance.ts` start bounded background maintenance: tunnel health
+supervision and single-flight stale-worktree cleanup. A slow Git repository or
+tunnel check therefore cannot delay `/healthz` or block service recovery.
+
+Administrative commands and local-agent commands are loaded only when invoked.
+Normal `serve` startup does not load the updater, desktop launcher, native service
+manager, or local-agent command client.
 
 ## Optional Flyto2 Cloud composition
 
@@ -90,3 +107,4 @@ External filesystem changes use persistent native watches rather than polling. W
 5. Credentials are runtime-only and never committed.
 6. Side-effect retries are idempotent through `operation_id`.
 7. Cloud orchestration never turns Runtime into a hidden remote shell.
+8. Background maintenance never gates listener readiness and never overlaps itself.
