@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -104,6 +104,29 @@ test("portable plugin writes an upload-ready zip without credentials", async () 
     assert.doesNotMatch(
       combined,
       /ownerToken|"authorization"\s*:|Authorization:|Bearer\s+[A-Za-z0-9]/i,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("portable plugin replaces an existing package through a sibling temp file", async () => {
+  const root = mkdtempSync(join(tmpdir(), "flyto2-plugin-replace-"));
+  try {
+    const outputPath = join(root, "existing.zip");
+    writeFileSync(outputPath, "stale package");
+
+    await writePortablePluginPackage({
+      mcpUrl: "https://runtime.example/mcp",
+      version: "1.2.3",
+      outputPath,
+    });
+
+    const archive = unzipSync(readFileSync(outputPath));
+    assert.ok(archive["plugin.json"]);
+    assert.equal(
+      readdirSync(root).some((name) => name.includes(".tmp")),
+      false,
     );
   } finally {
     rmSync(root, { recursive: true, force: true });

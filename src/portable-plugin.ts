@@ -1,5 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { valid as validSemver } from "semver";
@@ -143,7 +144,7 @@ export async function writePortablePluginPackage(
   const archive = zipSync(buildPortablePluginFiles({ ...options, outputPath }), {
     level: 9,
   });
-  await writeFile(outputPath, archive, { mode: 0o600 });
+  await replacePortablePluginPackage(outputPath, archive);
 
   return {
     outputPath,
@@ -153,6 +154,32 @@ export async function writePortablePluginPackage(
     displayName: resolved.displayName,
     version: resolved.version,
   };
+}
+
+async function replacePortablePluginPackage(
+  outputPath: string,
+  archive: Uint8Array,
+): Promise<void> {
+  const temporaryPath = join(
+    dirname(outputPath),
+    `.${basename(outputPath)}.${process.pid}.${randomUUID()}.tmp`,
+  );
+  try {
+    await writeFile(temporaryPath, archive, { mode: 0o600, flag: "wx" });
+    try {
+      await rename(temporaryPath, outputPath);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (process.platform !== "win32" || (code !== "EEXIST" && code !== "EPERM")) {
+        throw error;
+      }
+      await rm(outputPath, { force: true });
+      await rename(temporaryPath, outputPath);
+    }
+  } catch (error) {
+    await rm(temporaryPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
 }
 
 function resolvePackageOptions(options: PortablePluginPackageOptions): {
