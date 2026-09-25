@@ -23,6 +23,7 @@ import {
   registerArtifactTools,
 } from "./artifact-tools.js";
 import { loadConfig, type ServerConfig } from "./config.js";
+import { ConversationContinuityManager } from "./conversation-continuity.js";
 import {
   createOpenAIIncomingArtifactAdapter,
   type IncomingArtifactAdapter,
@@ -120,9 +121,9 @@ function serverInstructions(
     ? `When ${toolNames.openWorkspace} returns available skills and a task matches one, use ${toolNames.read} with the returned skill path before proceeding. `
     : "";
   const agents = `Follow instructions returned by ${toolNames.openWorkspace}. Before working under a path listed in available_agents_files, use ${toolNames.read} to inspect that instruction file and follow it. `;
-  const common = `Call ${toolNames.openWorkspace} when starting work in a project folder or isolated worktree without a usable workspace_id, then reuse the returned workspace_id for subsequent operations in that workspace.`;
+  const common = `Call ${toolNames.openWorkspace} when starting work in a project folder or isolated worktree without a usable workspace_id, then reuse the returned workspace_id for subsequent operations in that workspace. When opening a new workspace for a user task, include a short task_context with the goal and critical constraints but never secrets; Runtime uses it only for bounded local continuity across ChatGPT conversations.`;
   const execution = config.toolMode === "codex"
-    ? " For a command that returns running=true, continue its session_id with write_stdin. Do not rerun the original command while that process session is available."
+    ? " For a command that returns running=true, continue its session_id with write_stdin only after its retry_after_ms hint. Do not rerun the original command, do not busy-poll, and do not wrap external status checks in shell sleep loops while that process session is available."
     : ` Long bash commands automatically continue as durable Flyto2 Runtime jobs. Follow any returned @flyto2/job <job_id> command later; never rerun the original side effect just because it is still running or a response was lost.`;
   const diagnostics = config.exposeRuntimeInternals
     ? ` Diagnostic Runtime internals are explicitly enabled. Use ${toolNames.runtimeEvents}, ${toolNames.runtimeWait}, ${toolNames.runtimeEvidence}, or watch tools only when diagnosing Runtime behavior; normal coding should still use the primary workspace/file/process primitives.`
@@ -187,6 +188,7 @@ export function createMcpServer(
   reactiveCommands: ReactiveCommandRunner,
   workspaceWatches: WorkspaceWatchRegistry,
   trackToolActivity?: TrackToolActivity,
+  conversationContinuity?: ConversationContinuityManager,
 ): McpServer {
   const toolSurface = getToolSurface(config.toolMode);
   const server = new McpServer(
@@ -209,6 +211,7 @@ export function createMcpServer(
     reactiveCommands,
     workspaceWatches,
     trackToolActivity,
+    conversationContinuity,
   );
   return server;
 }
@@ -226,12 +229,16 @@ function registerMcpSurface(
   reactiveCommands: ReactiveCommandRunner,
   workspaceWatches: WorkspaceWatchRegistry,
   trackToolActivity?: TrackToolActivity,
+  conversationContinuity?: ConversationContinuityManager,
 ): void {
   const trackedTarget = trackToolActivity
     ? withTrackedToolHandlers(server, trackToolActivity)
     : server;
+  const continuityTarget = conversationContinuity
+    ? withConversationContinuityHandlers(trackedTarget, conversationContinuity)
+    : trackedTarget;
   const registrationTarget = withDurableToolHandlers(
-    trackedTarget,
+    continuityTarget,
     durableOperations,
     {
       onCompleted: (completion) => emitDurableToolEvent(runtimeEvents, completion),
@@ -245,6 +252,7 @@ function registerMcpSurface(
     workspaces,
     reviewCheckpoints,
     resolveLocalAgentProviders,
+    conversationContinuity,
   });
 
   if (config.exposeRuntimeInternals) {
@@ -274,6 +282,28 @@ function registerMcpSurface(
       incomingArtifactAdapters,
     });
   }
+}
+
+function withConversationContinuityHandlers(
+  server: McpRegistrationTarget,
+  continuity: ConversationContinuityManager,
+): McpRegistrationTarget {
+  return {
+    registerTool: ((...args: unknown[]) => {
+      const name = String(args[0]);
+      const handler = args.at(-1) as (...handlerArgs: unknown[]) => unknown;
+      return (server.registerTool as (...callArgs: unknown[]) => unknown)(
+        ...args.slice(0, -1),
+        (...handlerArgs: unknown[]) => continuity.runTool(
+          name,
+          handlerArgs[0],
+          handlerArgs[1] as { _meta?: unknown } | undefined,
+          () => Promise.resolve(handler(...handlerArgs)),
+        ),
+      );
+    }) as McpRegistrationTarget["registerTool"],
+    registerResource: server.registerResource.bind(server),
+  };
 }
 
 function withTrackedToolHandlers(
@@ -332,6 +362,7 @@ export function createServer(
   const reactiveCommands = new ReactiveCommandRunner(config.stateDir, runtimeEvents);
   const workspaceWatches = new WorkspaceWatchRegistry(config.stateDir, runtimeEvents);
   const workspaces = new WorkspaceRegistry(config, workspaceStore);
+  const conversationContinuity = new ConversationContinuityManager(config, workspaces);
   const reviewCheckpoints = createReviewCheckpointManager();
   const processSessions = new ProcessSessionManager();
   const toolActivities = new ToolActivityTracker();
@@ -360,6 +391,7 @@ export function createServer(
       reactiveCommands,
       workspaceWatches,
       toolActivities.track,
+      conversationContinuity,
     );
   });
   const logMcpHandlerError = (error: Error) => logEvent(
@@ -536,6 +568,7 @@ export function createServer(
         oauthProvider.close();
         durableOperations.close();
         runtimeEvents.close();
+        conversationContinuity.close();
         workspaceStore.close?.();
       })();
       return closePromise;

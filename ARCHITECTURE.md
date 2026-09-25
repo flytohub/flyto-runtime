@@ -41,6 +41,7 @@ The wire contract is provider-neutral. Runtime adapters decide how an assignment
 
 - MCP server: `src/server.ts`
 - Runtime host lifecycle: `src/cli.ts` + `src/runtime-maintenance.ts`
+- bounded cross-chat continuity: `src/conversation-continuity.ts`
 - Native service, updater, tunnel, and launcher commands: `src/flyto2/operator-cli.ts`
 - Optional local-agent CLI: `src/agents-cli.ts`
 - portable host plugin packaging: `src/portable-plugin.ts`
@@ -65,6 +66,13 @@ tunnel check therefore cannot delay `/healthz` or block service recovery.
 Administrative commands and local-agent commands are loaded only when invoked.
 Normal `serve` startup does not load the updater, desktop launcher, native service
 manager, or local-agent command client.
+
+Conversation continuity is deliberately softer than orchestration. Runtime may
+record a bounded local checkpoint for an active ChatGPT conversation and surface
+a recent checkpoint when another conversation opens the same workspace. It never
+forces a chat to stop, never treats checkpoint text as an instruction source, and
+never stores command bodies or full tool evidence in the checkpoint. The host
+still decides what work to do.
 
 ## Optional Flyto2 Cloud composition
 
@@ -96,6 +104,12 @@ Flyto2 Runtime owns one durable local event stream for standalone MCP use and op
 
 Evidence is lazy by design: shallow events contain status, digests and evidence references, never full process output. Runtime reads bounded evidence internally when a durable process completes. Runtime restart marks unresolved reactive jobs `orphaned` and explicitly reports the outcome as uncertain rather than replaying the command. Direct manifest/event/evidence/watch MCP tools remain available only when `tools.exposeRuntimeInternals` is explicitly enabled for diagnostics or development.
 
+Codex-facing command calls use bounded event waits rather than one-second busy
+polling: the initial modern yield is about three seconds and later continuation
+waits can use about five seconds. Older cached ChatGPT `bash` catalogs keep a
+short first yield but use the longer continuation wait. A `retry_after_ms` hint
+keeps the host from immediately hammering `write_stdin`.
+
 External filesystem changes use persistent native watches rather than polling. Watch specifications are stored in SQLite, targets are canonicalized before persistence, and every restore revalidates the logical workspace root against its original canonical identity. A retargeted symlink/root fails closed with `watch.error` instead of silently observing a different tree. Event batching uses a fixed window so sustained filesystem churn cannot indefinitely postpone wake-up.
 
 ## Invariants
@@ -108,3 +122,4 @@ External filesystem changes use persistent native watches rather than polling. W
 6. Side-effect retries are idempotent through `operation_id`.
 7. Cloud orchestration never turns Runtime into a hidden remote shell.
 8. Background maintenance never gates listener readiness and never overlaps itself.
+9. Conversation continuity is bounded, local, non-authoritative, and never stops the active host session.

@@ -27,14 +27,16 @@ type CodexSessionId = string;
 
 interface CodexProcessSnapshot extends Omit<ProcessSnapshot, "sessionId"> {
   sessionId?: CodexSessionId;
+  retryAfterMs?: number;
 }
 
 const CODEX_DURABLE_EVENT_TYPE = "codex.exec.exited";
 const CODEX_DURABLE_SESSION_PREFIX = "proc_";
-const DEFAULT_CODEX_YIELD_MS = 1_000;
+const DEFAULT_CODEX_YIELD_MS = 3_000;
 const DEFAULT_CODEX_INTERACTIVE_YIELD_MS = 250;
-const DEFAULT_CODEX_POLL_YIELD_MS = 1_000;
+const DEFAULT_CODEX_POLL_YIELD_MS = 5_000;
 const LEGACY_SHELL_WAIT_MS = 1_000;
+const LEGACY_SHELL_POLL_WAIT_MS = 5_000;
 // Tool output is copied into the host conversation. Keep the default small;
 // full command evidence remains available in the durable Runtime job and a
 // truncated result still preserves both the head and tail for diagnosis.
@@ -59,10 +61,13 @@ const CODEX_REGISTRATIONS: readonly CodexRegistration[] = [
 ];
 
 function processResult(snapshot: CodexProcessSnapshot, legacyShell = false): string {
+  const retryHint = snapshot.retryAfterMs
+    ? ` Wait about ${Math.max(1, Math.round(snapshot.retryAfterMs / 1_000))}s before checking again; do not poll faster.`
+    : "";
   const status = snapshot.running
     ? legacyShell
-      ? `Still running (session ${snapshot.sessionId}). Get more output with this same bash tool using command exactly: ${LEGACY_JOB_COMMAND} ${snapshot.sessionId} (append --cancel to stop it). Do not rerun the original command.`
-      : `Process is still running with session_id=${snapshot.sessionId}. Continue it with write_stdin.`
+      ? `Still running (session ${snapshot.sessionId}). Get more output with this same bash tool using command exactly: ${LEGACY_JOB_COMMAND} ${snapshot.sessionId} (append --cancel to stop it). Do not rerun the original command.${retryHint}`
+      : `Process is still running with session_id=${snapshot.sessionId}. Continue it with write_stdin.${retryHint}`
     : snapshot.signal === CODEX_UNCERTAIN_OUTCOME_SIGNAL
       ? "Process outcome is uncertain. Do not rerun the command blindly."
       : snapshot.signal
@@ -81,6 +86,7 @@ function processOutputSchema(): z.ZodRawShape {
     signal: z.string().optional(),
     wall_time_ms: z.number().nonnegative(),
     output_truncated: z.boolean(),
+    retry_after_ms: z.number().int().nonnegative().optional(),
   });
 }
 
@@ -97,6 +103,7 @@ function processToolResponse(snapshot: CodexProcessSnapshot, legacyShell = false
       signal: snapshot.signal,
       wall_time_ms: snapshot.wallTimeMs,
       output_truncated: snapshot.outputTruncated,
+      retry_after_ms: snapshot.retryAfterMs,
     },
   };
 }
@@ -225,7 +232,7 @@ function registerExecCommandTool(
     {
       title: "Execute command",
       description:
-        "Run a command in a workspace with the user's local permissions. If the result is still running, continue its session_id with write_stdin instead of running the command again. Set tty=true only for input-driven interactive commands.",
+        "Run a command in a workspace with the user's local permissions. If the result is still running, continue its session_id with write_stdin instead of running the command again. Do not wrap status checks in shell sleep/polling loops; query once, let Runtime own long processes, and continue other useful work. Set tty=true only for input-driven interactive commands.",
       inputSchema: {
         workspace_id: z.string().describe(workspaceIdDescription),
         cmd: z.string().min(1).describe("Shell command to execute."),
@@ -354,7 +361,7 @@ function registerWriteStdinTool(
     {
       title: "Continue process",
       description:
-        "Continue a session returned by exec_command. Omit chars to wait for completion. Interactive sessions accept input; \\u0003 interrupts or cancels the process. Do not rerun the original command while its session is still available.",
+        "Continue a session returned by exec_command. Omit chars to wait for completion. Interactive sessions accept input; \\u0003 interrupts or cancels the process. Do not rerun the original command while its session is still available, and do not call write_stdin again sooner than retry_after_ms when the process remains running.",
       inputSchema: {
         workspace_id: z
           .string()
@@ -429,7 +436,7 @@ async function continueCodexProcess(
     reactiveCommands.signal(jobId, input.workspace_id, "SIGINT");
   }
   return legacyShell
-    ? awaitDurableProcess(context, input.workspace_id, jobId)
+    ? awaitDurableProcess(context, input.workspace_id, jobId, LEGACY_SHELL_POLL_WAIT_MS)
     : durableProcessSnapshot(
         context,
         input.workspace_id,
@@ -503,6 +510,7 @@ async function durableProcessSnapshot(
       outputTruncated: false,
       running: true,
       wallTimeMs,
+      retryAfterMs: DEFAULT_CODEX_POLL_YIELD_MS,
     };
   }
 

@@ -89,6 +89,7 @@ Create or update a PR only when explicitly asked, and read `CONTRIBUTING.md` fir
 - `src/workspaces.ts` — workspace lifecycle, instructions, skills, profiles
 - `src/roots.ts` — allowed roots/path containment
 - `src/process-sessions.ts` — process lifecycle and bounded output
+- `src/conversation-continuity.ts` — soft bounded cross-chat checkpoints; never a task scheduler or hard session stop
 - `src/git.ts`, `src/git-worktrees.ts` — Git/worktree operations
 - `src/review-checkpoints.ts` — Git-backed review history
 - `src/local-agent-*.ts` — local-agent adapters/execution

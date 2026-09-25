@@ -197,7 +197,9 @@ test("Codex non-interactive commands become durable behind exec_command", async 
     },
   }));
   assert.equal(started.running, true);
+  assert.equal(started.retry_after_ms, 5_000);
   assert.match(started.session_id as string, /^proc_[a-f0-9]{32}$/);
+  assert.match(started.result as string, /Wait about 5s before checking again/);
   assert.match(started.result as string, new RegExp(String(started.session_id)));
   assert.doesNotMatch(started.result as string, /job_/);
 
@@ -981,6 +983,66 @@ test("open_workspace scopes checkout reuse to OpenAI session metadata", async (t
   assert.notEqual(structuredContent(unscoped).workspace_id, structuredContent(first).workspace_id);
   assert.ok(Array.isArray(structuredContent(otherSession).agents_files));
   assert.ok(Array.isArray(structuredContent(unscoped).agents_files));
+});
+
+test("open_workspace carries bounded prior-chat continuity without stopping the old chat", async (t) => {
+  const { root, localBaseUrl, accessToken } = await httpServerFixture(
+    t,
+    "runtime-conversation-continuity-",
+    "codex",
+  );
+  await writeFile(join(root, "continuity.txt"), "ok\n");
+
+  const first = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
+    name: "open_workspace",
+    arguments: {
+      path: root,
+      task_context: "Continue the same release task without repeating completed work.",
+    },
+    _meta: { "openai/session": "continuity-chat-a" },
+  });
+  assert.equal(first.status, 200, await first.clone().text());
+  const firstBody = await first.json() as { result: { structuredContent: { workspace_id: string } } };
+  const workspaceId = firstBody.result.structuredContent.workspace_id;
+
+  for (let index = 0; index < 7; index += 1) {
+    const read = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
+      name: "read",
+      arguments: { workspace_id: workspaceId, path: "continuity.txt" },
+      _meta: { "openai/session": "continuity-chat-a" },
+    });
+    assert.equal(read.status, 200, await read.clone().text());
+  }
+
+  const stillRunning = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
+    name: "read",
+    arguments: { workspace_id: workspaceId, path: "continuity.txt" },
+    _meta: { "openai/session": "continuity-chat-a" },
+  });
+  assert.equal(stillRunning.status, 200, await stillRunning.clone().text());
+  assert.match(await stillRunning.text(), /ok/);
+
+  const resumed = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
+    name: "open_workspace",
+    arguments: { path: root, task_context: "Pick up the prior work if it matches this request." },
+    _meta: { "openai/session": "continuity-chat-b" },
+  });
+  assert.equal(resumed.status, 200, await resumed.clone().text());
+  const resumedBody = await resumed.json() as {
+    result?: {
+      structuredContent?: {
+        continuity?: {
+          checkpoint_id?: string;
+          task_context?: string;
+        };
+      };
+    };
+  };
+  assert.match(resumedBody.result?.structuredContent?.continuity?.checkpoint_id ?? "", /^checkpoint_/);
+  assert.equal(
+    resumedBody.result?.structuredContent?.continuity?.task_context,
+    "Continue the same release task without repeating completed work.",
+  );
 });
 
 test("HTTP endpoint serves modern MCP and stateless legacy clients", async (t) => {
@@ -1780,7 +1842,7 @@ test("a cached ChatGPT bash call yields quickly and polls via @flyto2/job", asyn
   assert.match(resumedText, /legacy-waited/);
 
   const started = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
-    name: "exec_command", arguments: { workspace_id: workspaceId, cmd: "sleep 2 && echo polled-later" },
+    name: "exec_command", arguments: { workspace_id: workspaceId, cmd: "sleep 4 && echo polled-later" },
   });
   const startedBody = await started.json() as { result: { structuredContent: { session_id: string; running: boolean } } };
   assert.equal(startedBody.result.structuredContent.running, true);
