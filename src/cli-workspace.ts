@@ -8,11 +8,17 @@ export interface CliWorkspaceContext {
   workspaceRoot: string;
 }
 
+export interface TrustedCliWorkspaceContext {
+  workspaceId: string;
+  workspaceRoot: string;
+}
+
 /** Resolve the project context used by local agent commands. */
 export function resolveCliWorkspaceContext(
   allowedRoots: readonly string[],
   env: NodeJS.ProcessEnv = process.env,
   cwd = process.cwd(),
+  trustedWorkspace?: TrustedCliWorkspaceContext,
 ): CliWorkspaceContext {
   const workspaceId = env.DEVSPACE_WORKSPACE_ID?.trim() || undefined;
   const injectedRoot = workspaceId ? env.DEVSPACE_WORKSPACE_ROOT?.trim() : undefined;
@@ -21,6 +27,14 @@ export function resolveCliWorkspaceContext(
   );
 
   if (!workspaceId) return { workspaceId, workspaceRoot: candidate };
+
+  const trustedRoot = trustedWorkspace
+    && trustedWorkspace.workspaceId === workspaceId
+    ? canonicalizePath(trustedWorkspace.workspaceRoot)
+    : undefined;
+  if (trustedRoot && trustedRoot === candidate) {
+    return { workspaceId, workspaceRoot: candidate };
+  }
 
   return {
     workspaceId,

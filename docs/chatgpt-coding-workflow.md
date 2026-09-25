@@ -184,7 +184,12 @@ yield window. Modern calls wait up to about three seconds initially, and a
 A running result includes `retry_after_ms`; do not poll faster than that hint or
 wrap status checks in shell sleep loops. Cached legacy ChatGPT `bash` calls keep
 their short first yield so an older host catalog does not hold a request open.
-Set `tty: true` only for commands that need a terminal.
+If that cached five-tool catalog does not expose `background_task`, Runtime also
+accepts `@flyto2/task start <complete task>` through the cached `bash` tool and
+translates it to the same detached background-task path. Use
+`@flyto2/task status <task_id>` later to retrieve the result rather than keeping
+the ChatGPT page alive by polling. Set `tty: true` only for commands that need a
+terminal.
 
 To keep long conversations usable, `read` returns at most 400 lines by default
 and provides the next offset when a file is longer. Command output is also

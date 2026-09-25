@@ -6,6 +6,7 @@ import { readFileTool } from "./pi-tools.js";
 import type { McpRegistrationTarget } from "./mcp-modern-server.js";
 import type { ReviewCheckpointManager } from "./review-checkpoints.js";
 import { conversationScopeIdFromRequestMeta } from "./request-meta.js";
+import { LEGACY_TASK_COMMAND } from "./mcp-legacy-input.js";
 import { formatPathForPrompt } from "./skills.js";
 import {
   buildLocalAgentCatalog,
@@ -310,6 +311,7 @@ function buildWorkspacePresentation(
     context,
     baseInstruction,
     config.toolMode,
+    config.subagents.enabled,
     preloadedSubagentInstructions,
   );
 
@@ -341,6 +343,7 @@ function workspaceInstruction(
   context: WorkspaceContext,
   baseInstruction: string,
   toolMode: ServerConfig["toolMode"],
+  subagentsEnabled: boolean,
   preloadedSubagentInstructions: string | undefined,
 ): string {
   const { workspace } = context;
@@ -356,9 +359,13 @@ function workspaceInstruction(
   const legacyReactiveInstruction = toolMode === "claude"
     ? "Long bash commands automatically continue as durable Flyto2 Runtime jobs. Follow any returned @flyto2/job <job_id> command later; do not rerun the original side effect while it is still running."
     : undefined;
+  const legacyTaskInstruction = toolMode === "codex" && subagentsEnabled
+    ? `If this host still exposes the cached legacy five-tool catalog and background_task is unavailable, hand multi-step work that must survive the ChatGPT turn or page to Runtime by calling bash once with command \`${LEGACY_TASK_COMMAND} start <complete task>\`. Later retrieve the result with \`${LEGACY_TASK_COMMAND} status <task_id>\`; do not keep the task alive by polling.`
+    : undefined;
   const instructionParts = [
     workspaceInstruction,
     legacyReactiveInstruction,
+    legacyTaskInstruction,
     ...(preloadedSubagentInstructions && context.includeDiscoveryContext
       ? ["Subagent workflow instructions:", preloadedSubagentInstructions]
       : []),

@@ -70,6 +70,43 @@ test("cached ChatGPT bash calls route to exec_command in Codex tool mode", () =>
   assert.equal((normalizeLegacyMcpInput(body, "claude") as typeof body).params.name, "bash");
 });
 
+test("cached ChatGPT can hand durable work to background_task through legacy bash", () => {
+  const call = (command: string) => normalizeLegacyMcpInput({ method: "tools/call", params: { name: "bash", arguments: {
+    workspaceId: "ws_a", command,
+  } } }, "codex") as { params: { name: string; arguments: Record<string, unknown> } };
+
+  assert.deepEqual(call("@flyto2/task start Fix this fully and test it.").params, {
+    name: "background_task",
+    arguments: {
+      action: "start",
+      workspace_id: "ws_a",
+      prompt: "Fix this fully and test it.",
+    },
+  });
+  assert.deepEqual(call("@flyto2/task status agt_12345678").params, {
+    name: "background_task",
+    arguments: {
+      action: "status",
+      workspace_id: "ws_a",
+      task_id: "agt_12345678",
+      include_response: true,
+    },
+  });
+  assert.deepEqual(call("@flyto2/task wait agt_12345678").params.arguments, {
+    action: "wait",
+    workspace_id: "ws_a",
+    task_id: "agt_12345678",
+    include_response: true,
+  });
+  assert.deepEqual(call("@flyto2/task continue agt_12345678 Finish the remaining tests.").params.arguments, {
+    action: "continue",
+    workspace_id: "ws_a",
+    task_id: "agt_12345678",
+    prompt: "Finish the remaining tests.",
+  });
+  assert.equal(call("echo @flyto2/task start nope").params.name, "exec_command");
+});
+
 test("cached ChatGPT @flyto2/job commands continue a Codex process session", () => {
   const session = `proc_${"a".repeat(32)}`;
   const poll = (command: string) => normalizeLegacyMcpInput({ method: "tools/call", params: { name: "bash", arguments: {

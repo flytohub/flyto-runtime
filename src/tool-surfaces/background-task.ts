@@ -122,6 +122,7 @@ function durableTaskPrompt(prompt: string): string {
   return [
     "Own this task through completion even if the caller disconnects.",
     "Work autonomously within the requested scope, follow repository instructions, preserve unrelated changes, and run appropriate verification.",
+    "When the task changes a Git repository, inspect the final diff and create one focused local commit after verification unless the caller explicitly says not to commit. Never push unless the caller explicitly requests it.",
     "Do not pause merely because the caller is unavailable. Stop only when the task is complete or genuinely requires credentials, authorization, or a user decision.",
     "",
     prompt,

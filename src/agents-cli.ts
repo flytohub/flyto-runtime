@@ -1,5 +1,6 @@
 import type { Result as BetterResult } from "better-result";
-import { loadConfig } from "./config.js";
+import { resolve } from "node:path";
+import { loadConfig, type ServerConfig } from "./config.js";
 import { resolveCliWorkspaceContext } from "./cli-workspace.js";
 import {
   getLocalAgentProviderAvailabilitySnapshot,
@@ -15,6 +16,8 @@ import {
 } from "./local-agent-targets.js";
 import { createLocalAgentClient } from "./local-agent-client.js";
 import { toAgentErrorPayload, type LocalAgentError } from "./local-agent-errors.js";
+import { assertAllowedPath } from "./roots.js";
+import { createWorkspaceStore } from "./workspace-store.js";
 import {
   formatAgentCommandError,
   formatAgentObservation,
@@ -64,10 +67,44 @@ export async function runAgentsCommand(args: string[]): Promise<void> {
   }
 }
 
+function resolveAgentCliWorkspaceContext(config: ServerConfig) {
+  const workspaceId = process.env.DEVSPACE_WORKSPACE_ID?.trim();
+  if (!workspaceId) return resolveCliWorkspaceContext(config.allowedRoots);
+
+  const store = createWorkspaceStore(config.stateDir);
+  try {
+    const lookup = store.getSessionResult(workspaceId);
+    if (lookup.isErr()) throw lookup.error;
+    const session = lookup.value;
+    if (
+      session?.status === "active"
+      && session.mode === "worktree"
+      && session.managed
+      && session.sourceRoot
+    ) {
+      assertAllowedPath(resolve(session.sourceRoot), config.allowedRoots);
+      assertAllowedPath(resolve(session.root), [config.worktreeRoot]);
+      return resolveCliWorkspaceContext(
+        config.allowedRoots,
+        process.env,
+        process.cwd(),
+        {
+          workspaceId: session.id,
+          workspaceRoot: session.root,
+        },
+      );
+    }
+
+    return resolveCliWorkspaceContext(config.allowedRoots);
+  } finally {
+    store.close?.();
+  }
+}
+
 async function runAgentsTargets(args: string[], json: boolean): Promise<void> {
   if (args.length > 0) throw new Error("Usage: devspace agents targets [--json]");
   const config = loadConfig();
-  const scope = resolveCliWorkspaceContext(config.allowedRoots);
+  const scope = resolveAgentCliWorkspaceContext(config);
   const profiles = await loadLocalAgentProfiles(config, scope.workspaceRoot);
   const providers = buildLocalAgentProviderStatuses(
     config.subagents,
@@ -83,7 +120,7 @@ async function runAgentsList(args: string[], json: boolean): Promise<void> {
   if (args.length > 0) throw new Error("Usage: devspace agents ls [--json]");
   const config = loadConfig();
   const client = createLocalAgentClient(config);
-  const result = await client.list(resolveCliWorkspaceContext(config.allowedRoots));
+  const result = await client.list(resolveAgentCliWorkspaceContext(config));
   const agents = presentAgentWorkflowResult(result, json);
   if (!agents) return;
 
@@ -99,7 +136,7 @@ async function runAgentsList(args: string[], json: boolean): Promise<void> {
 async function runAgentsRun(args: string[], json: boolean): Promise<void> {
   const parsed = parseLocalAgentRunArgs(args);
   const config = loadConfig();
-  const scope = resolveCliWorkspaceContext(config.allowedRoots);
+  const scope = resolveAgentCliWorkspaceContext(config);
   const client = createLocalAgentClient(config);
   const result = await client.start({
     target: parsed.target,
@@ -123,7 +160,7 @@ async function runAgentsContinue(args: string[], json: boolean): Promise<void> {
   const parsed = parseLocalAgentContinueArgs(args);
   const config = loadConfig();
   const client = createLocalAgentClient(config);
-  const scope = resolveCliWorkspaceContext(config.allowedRoots);
+  const scope = resolveAgentCliWorkspaceContext(config);
   const result = await client.continue(parsed.agentId, parsed.prompt, {
     model: parsed.model,
     effort: parsed.effort,
@@ -144,7 +181,7 @@ async function runAgentsShow(args: string[], json: boolean): Promise<void> {
 
   const config = loadConfig();
   const client = createLocalAgentClient(config);
-  const scope = resolveCliWorkspaceContext(config.allowedRoots);
+  const scope = resolveAgentCliWorkspaceContext(config);
   const initial = await client.get(id, scope);
   const record = presentAgentWorkflowResult(initial, json);
   if (!record) return;
@@ -158,7 +195,7 @@ async function runAgentsWait(args: string[], json: boolean): Promise<void> {
   const { ids, timeoutMs } = parseAgentsWaitArgs(args);
   const config = loadConfig();
   const client = createLocalAgentClient(config);
-  const scope = resolveCliWorkspaceContext(config.allowedRoots);
+  const scope = resolveAgentCliWorkspaceContext(config);
   const results = presentAgentWorkflowResult(await client.wait(ids, scope, timeoutMs), json);
   if (!results) return;
   if (json) {

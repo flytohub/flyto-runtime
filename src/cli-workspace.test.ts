@@ -10,8 +10,10 @@ try {
   const repository = join(root, "repository");
   const nested = join(repository, "packages", "app");
   const plainDirectory = join(root, "plain");
+  const managedWorktree = join(root, "managed-worktree");
   mkdirSync(nested, { recursive: true });
   mkdirSync(plainDirectory);
+  mkdirSync(managedWorktree);
   execFileSync("git", ["init", "--quiet", repository]);
   // Git returns canonical paths, while macOS and Windows temp directories may
   // be reported through aliases such as /var or an 8.3 short path.
@@ -19,6 +21,7 @@ try {
   const repositoryRoot = realpathSync.native(repository);
   const nestedRoot = realpathSync.native(nested);
   const plainRoot = realpathSync.native(plainDirectory);
+  const managedWorktreeRoot = realpathSync.native(managedWorktree);
 
   assert.deepEqual(resolveCliWorkspaceContext([plainRoot], {}, nestedRoot), {
     workspaceId: undefined,
@@ -62,6 +65,27 @@ try {
       DEVSPACE_WORKSPACE_ID: "ws_injected",
       DEVSPACE_WORKSPACE_ROOT: plainRoot,
     }, nestedRoot),
+    /outside allowed roots/,
+  );
+
+  assert.deepEqual(resolveCliWorkspaceContext([repositoryRoot], {
+    DEVSPACE_WORKSPACE_ID: "ws_managed",
+    DEVSPACE_WORKSPACE_ROOT: managedWorktreeRoot,
+  }, nestedRoot, {
+    workspaceId: "ws_managed",
+    workspaceRoot: managedWorktreeRoot,
+  }), {
+    workspaceId: "ws_managed",
+    workspaceRoot: managedWorktreeRoot,
+  });
+  assert.throws(
+    () => resolveCliWorkspaceContext([repositoryRoot], {
+      DEVSPACE_WORKSPACE_ID: "ws_wrong",
+      DEVSPACE_WORKSPACE_ROOT: managedWorktreeRoot,
+    }, nestedRoot, {
+      workspaceId: "ws_managed",
+      workspaceRoot: managedWorktreeRoot,
+    }),
     /outside allowed roots/,
   );
 } finally {

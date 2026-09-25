@@ -43,7 +43,9 @@ class FakeManager implements LocalAgentDaemonManager {
   lastInput?: StartLocalAgentInput;
   blockWaitUntilAbort = false;
   blockStartUntilRelease = false;
+  completeStartInBackground = false;
   startStarted = false;
+  detachedStartCompleted = false;
   waitStarted = false;
   waitAborted = false;
   private releaseStart?: () => void;
@@ -54,6 +56,13 @@ class FakeManager implements LocalAgentDaemonManager {
     if (this.blockStartUntilRelease) {
       await new Promise<void>((resolveStart) => { this.releaseStart = resolveStart; });
       this.activeTurnCount = 1;
+    }
+    if (this.completeStartInBackground) {
+      this.activeTurnCount = 1;
+      setTimeout(() => {
+        this.detachedStartCompleted = true;
+        this.activeTurnCount = 0;
+      }, 25);
     }
     return Result.ok(record);
   }
@@ -694,6 +703,36 @@ try {
   waitSocket.destroy();
   await waitFor(() => socketManager.waitAborted);
   socketManager.blockWaitUntilAbort = false;
+
+  socketManager.blockStartUntilRelease = true;
+  socketManager.completeStartInBackground = true;
+  socketManager.startStarted = false;
+  socketManager.detachedStartCompleted = false;
+  const startSocket = createConnection(socketDaemon.paths.endpoint);
+  await onceSocket(startSocket, "connect");
+  startSocket.write(JSON.stringify({
+    requestId: "disconnect-start",
+    protocolVersion: LOCAL_AGENT_DAEMON_PROTOCOL_VERSION,
+    authToken: ensureLocalAgentDaemonSecret(socketDaemon.paths),
+    method: "agent.start",
+    params: {
+      target: "reviewer",
+      prompt: "finish after caller disconnect",
+      workspaceId: record.workspaceId,
+      workspaceRoot: record.workspaceRoot,
+    },
+  }) + "\n");
+  await waitFor(() => socketManager.startStarted);
+  startSocket.destroy();
+  socketManager.releaseBlockedStart();
+  await waitFor(() => socketManager.detachedStartCompleted);
+  assert.equal(
+    socketManager.detachedStartCompleted,
+    true,
+    "agent.start work must continue after its caller socket disconnects",
+  );
+  socketManager.blockStartUntilRelease = false;
+  socketManager.completeStartInBackground = false;
 
   const timedOutRequest = await sendRawRequest(socketDaemon.paths.endpoint);
   assert.equal(timedOutRequest.ok, false);
