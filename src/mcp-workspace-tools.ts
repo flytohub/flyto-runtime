@@ -42,6 +42,8 @@ interface OpenWorkspaceInput {
   base_ref?: string;
 }
 
+const DEFAULT_READ_LIMIT_LINES = 400;
+
 const workspaceSkillOutputSchema = z.object({
   name: z.string(),
   description: z.string(),
@@ -448,7 +450,7 @@ function registerReadTool(options: WorkspaceToolRegistrationOptions): void {
       title: "Read file",
       description:
         [
-          "Read all or part of a file in a workspace.",
+          `Read all or part of a file in a workspace. Reads default to ${DEFAULT_READ_LIMIT_LINES} lines; continue with offset when more is needed.`,
           "Use this tool to inspect relevant AGENTS.md or CLAUDE.md files listed by open_workspace before working in nested directories.",
           config.skillsEnabled
             ? "If available skills were returned and a task matches one, read the returned skill path before proceeding."
@@ -476,7 +478,7 @@ function registerReadTool(options: WorkspaceToolRegistrationOptions): void {
           .int()
           .positive()
           .optional()
-          .describe("Maximum number of lines to read."),
+          .describe(`Maximum number of lines to read. Defaults to ${DEFAULT_READ_LIMIT_LINES}.`),
       },
       outputSchema: resultOutputSchema(),
       annotations: { readOnlyHint: true },
@@ -487,7 +489,11 @@ function registerReadTool(options: WorkspaceToolRegistrationOptions): void {
       const workspace = await workspaces.getWorkspace(workspaceId);
       const readPath = await workspaces.resolveReadPath(workspace, input.path);
       const response = await readFileTool(
-        { ...input, path: readPath.absolutePath },
+        {
+          ...input,
+          path: readPath.absolutePath,
+          limit: input.limit ?? DEFAULT_READ_LIMIT_LINES,
+        },
         { cwd: workspace.root },
       );
 

@@ -35,7 +35,10 @@ const DEFAULT_CODEX_YIELD_MS = 1_000;
 const DEFAULT_CODEX_INTERACTIVE_YIELD_MS = 250;
 const DEFAULT_CODEX_POLL_YIELD_MS = 1_000;
 const LEGACY_SHELL_WAIT_MS = 1_000;
-const DEFAULT_MAX_OUTPUT_TOKENS = 4_000;
+// Tool output is copied into the host conversation. Keep the default small;
+// full command evidence remains available in the durable Runtime job and a
+// truncated result still preserves both the head and tail for diagnosis.
+const DEFAULT_MAX_OUTPUT_TOKENS = 1_000;
 const CODEX_UNCERTAIN_OUTCOME_SIGNAL = "OUTCOME_UNCERTAIN";
 
 const CODEX_INSTRUCTIONS = `Follow instructions returned by ${toolNames.openWorkspace}; read applicable instruction and skill files before working in their scope.`;
@@ -309,6 +312,7 @@ async function executeCodexCommand(
       workspaceRoot: workspace.root,
       tty: true,
       yieldTimeMs: DEFAULT_CODEX_INTERACTIVE_YIELD_MS,
+      maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
     });
     if (!process.running || process.sessionId === undefined) {
       return codexInteractiveSnapshot(process);
@@ -409,6 +413,7 @@ async function continueCodexProcess(
       workspaceId: input.workspace_id,
       sessionId: interactiveSessionId,
       chars: input.chars,
+      maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
     });
     if (!process.running) interactiveSessions.delete(input.session_id);
     return codexInteractiveSnapshot(process, input.session_id);

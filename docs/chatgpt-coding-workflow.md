@@ -184,6 +184,12 @@ Both the first yield and later non-interactive polls return in about one second,
 so long commands do not hold one MCP request open until a proxy or ChatGPT treats
 the connection as stalled.
 
+To keep long conversations usable, `read` returns at most 400 lines by default
+and provides the next offset when a file is longer. Command output is also
+bounded to a compact head-and-tail result by default. For non-interactive
+commands, Runtime retains the full durable evidence locally. These bounds never
+stop the conversation or reject later tool calls.
+
 Set `tools.mode` to `claude` in `~/.devspace/config.jsonc` to expose `write`,
 `edit`, and `bash` instead of the Codex mutation and command tools. Dedicated
 MCP tools for `grep`, `glob`, and `ls` are not registered in either mode; use

@@ -156,7 +156,30 @@ test("Codex command output is bounded by default", async (t) => {
   }));
   assert.equal(result.running, false);
   assert.equal(result.output_truncated, true);
-  assert.ok(String(result.result).length <= 16_200);
+  assert.ok(String(result.result).length <= 4_200);
+});
+
+test("read defaults to a compact resumable window", async (t) => {
+  const context = await fixture(t, { toolMode: "codex", uiEnabled: false });
+  const workspaceId = structuredContent(
+    await callOpen(context.client, context.project, "bounded-read-output"),
+  ).workspace_id;
+  assert.equal(typeof workspaceId, "string");
+  await writeFile(
+    join(context.project, "large.txt"),
+    Array.from({ length: 450 }, (_, index) => `line-${index + 1}`).join("\n"),
+  );
+
+  const result = structuredContent(await context.client.callTool({
+    name: "read",
+    arguments: {
+      workspace_id: workspaceId,
+      path: "large.txt",
+    },
+  }));
+  assert.match(String(result.result), /line-400/);
+  assert.doesNotMatch(String(result.result), /line-401/);
+  assert.match(String(result.result), /Use offset=401 to continue/);
 });
 
 test("Codex non-interactive commands become durable behind exec_command", async (t) => {
