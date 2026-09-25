@@ -52,7 +52,7 @@ import { ReactiveCommandRunner } from "./flyto2/reactive-command.js";
 import { emitDurableToolEvent } from "./flyto2/tool-events.js";
 import { WorkspaceWatchRegistry } from "./flyto2/workspace-watch.js";
 import { WorkspaceRegistry } from "./workspaces.js";
-import { createLocalAgentClient } from "./local-agent-client.js";
+import { HostTaskStore } from "./flyto2/host-tasks.js";
 import {
   getLocalAgentProviderAvailabilitySnapshot,
 } from "./local-agent-availability.js";
@@ -128,9 +128,8 @@ function serverInstructions(
   const diagnostics = config.exposeRuntimeInternals
     ? ` Diagnostic Runtime internals are explicitly enabled. Use ${toolNames.runtimeEvents}, ${toolNames.runtimeWait}, ${toolNames.runtimeEvidence}, or watch tools only when diagnosing Runtime behavior; normal coding should still use the primary workspace/file/process primitives.`
     : "";
-  const backgroundTasks = config.subagents.enabled
-    ? ` For non-trivial multi-step coding work that is expected to run autonomously or survive the current turn, page, or MCP connection, start ${toolNames.backgroundTask} before issuing individual mutation/test commands yourself; the detached local daemon then owns analysis, edits, verification, and task completion. Use its status or wait action later, and request its response only when needed.`
-    : "";
+  const backgroundTasks =
+    ` For non-trivial multi-step work that should be recoverable across a ChatGPT page or MCP reconnect, start ${toolNames.backgroundTask} as a durable host-owned task record, then continue the work yourself with the normal workspace tools. Runtime never delegates that task to another model or local agent. Save a checkpoint before an expected disconnect and mark the task complete when the work is finished.`;
 
   return `${common} ${toolSurface.instructions({ agents, skills })}${execution}${backgroundTasks}${diagnostics}${artifactInstruction}${showChangesInstruction}${selfUpdateInstruction()}`;
 }
@@ -190,6 +189,7 @@ export function createMcpServer(
   runtimeEvents: RuntimeEventStore,
   reactiveCommands: ReactiveCommandRunner,
   workspaceWatches: WorkspaceWatchRegistry,
+  hostTasks: HostTaskStore,
   trackToolActivity?: TrackToolActivity,
 ): McpServer {
   const toolSurface = getToolSurface(config.toolMode);
@@ -212,6 +212,7 @@ export function createMcpServer(
     runtimeEvents,
     reactiveCommands,
     workspaceWatches,
+    hostTasks,
     trackToolActivity,
   );
   return server;
@@ -229,6 +230,7 @@ function registerMcpSurface(
   runtimeEvents: RuntimeEventStore,
   reactiveCommands: ReactiveCommandRunner,
   workspaceWatches: WorkspaceWatchRegistry,
+  hostTasks: HostTaskStore,
   trackToolActivity?: TrackToolActivity,
 ): void {
   const trackedTarget = trackToolActivity
@@ -242,7 +244,6 @@ function registerMcpSurface(
     },
   );
   const toolSurface = getToolSurface(config.toolMode);
-  const localAgents = createLocalAgentClient(config);
 
   registerWorkspaceTools({
     server: registrationTarget,
@@ -270,8 +271,7 @@ function registerMcpSurface(
     processSessions,
     runtimeEvents,
     reactiveCommands,
-    localAgents,
-    resolveLocalAgentProviders,
+    hostTasks,
   });
 
   if (config.artifactsEnabled && isArtifactDownloadSupportedPlatform()) {
@@ -338,6 +338,7 @@ export function createServer(
   const runtimeEvents = new RuntimeEventStore(config.stateDir);
   const reactiveCommands = new ReactiveCommandRunner(config.stateDir, runtimeEvents);
   const workspaceWatches = new WorkspaceWatchRegistry(config.stateDir, runtimeEvents);
+  const hostTasks = new HostTaskStore(config.stateDir);
   const workspaces = new WorkspaceRegistry(config, workspaceStore);
   const reviewCheckpoints = createReviewCheckpointManager();
   const processSessions = new ProcessSessionManager();
@@ -366,6 +367,7 @@ export function createServer(
       runtimeEvents,
       reactiveCommands,
       workspaceWatches,
+      hostTasks,
       toolActivities.track,
     );
   });
@@ -543,6 +545,7 @@ export function createServer(
         oauthProvider.close();
         durableOperations.close();
         runtimeEvents.close();
+        hostTasks.close();
         workspaceStore.close?.();
       })();
       return closePromise;

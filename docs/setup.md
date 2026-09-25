@@ -66,11 +66,11 @@ Runtime serves its MCP and OAuth discovery routes from the same origin. A revers
 
 Flyto2 Runtime keeps scheduling, durable jobs, events, evidence, watches, recovery, service state, and tunnel supervision behind the execution boundary. A model should normally see only the primitives it needs to do work.
 
-Codex mode exposes `open_workspace`, `read`, `apply_patch`, `exec_command`, `write_stdin`, and `show_changes`, plus `background_task` when subagents are enabled. Claude compatibility mode exposes `open_workspace`, `read`, `write`, `edit`, `bash`, and `show_changes`, plus `background_task` when subagents are enabled.
+Codex mode exposes `open_workspace`, `read`, `apply_patch`, `exec_command`, `write_stdin`, `show_changes`, and `background_task`. Claude compatibility mode exposes `open_workspace`, `read`, `write`, `edit`, `bash`, `show_changes`, and `background_task`. The compatibility-named `background_task` stores ChatGPT-owned recovery state only; it never starts Codex, Claude, or another model.
 
 Long non-interactive Codex commands automatically continue behind `exec_command`; the returned opaque process session is continued with `write_stdin`. Interactive PTY sessions use the same model-facing session shape, so the model never needs to choose between process implementations. Claude compatibility `bash` uses the same internal execution machinery. Models do not need separate event, wait, or evidence tools for normal work.
 
-To switch an existing installation to the Codex-first surface, run `flyto2-runtime config set tools.mode codex` and then `flyto2-runtime service restart`. If ChatGPT still shows the cached legacy five-tool list, reconnect the connector or start a fresh conversation when practical. Until the host refreshes its schema, a cached `bash` call using `@flyto2/task start <complete task>` is translated to `background_task`, so durable multi-step work does not depend on the stale catalog being refreshed first.
+To switch an existing installation to the Codex-first surface, run `flyto2-runtime config set tools.mode codex` and then `flyto2-runtime service restart`. If ChatGPT still shows the cached legacy five-tool list, reconnect the connector or start a fresh conversation when practical. Until the host refreshes its schema, a cached `bash` call using `@flyto2/task start <complete task>` is translated to the durable ChatGPT-owned task store. ChatGPT continues the work itself with the normal workspace tools; Runtime only preserves recovery state.
 
 ## Claude, Codex, and custom MCP clients
 

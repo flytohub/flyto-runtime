@@ -1,6 +1,5 @@
 import * as z from "zod/v4";
-import type { LocalAgentWaitResult } from "../local-agent-manager.js";
-import type { LocalAgentRecord } from "../local-agent-store.js";
+import type { HostTaskRecord } from "../flyto2/host-tasks.js";
 import {
   toolNames,
   workspaceIdDescription,
@@ -8,187 +7,161 @@ import {
 } from "./types.js";
 import { resultOutputSchema, textBlock } from "./shared.js";
 
-const DEFAULT_WAIT_MS = 25_000;
-const MAX_WAIT_SECONDS = 50;
 const RESPONSE_PREVIEW_CHARS = 8_000;
 
 const BACKGROUND_TASK_ANNOTATIONS = {
   readOnlyHint: false,
-  destructiveHint: true,
+  destructiveHint: false,
   idempotentHint: false,
-  openWorldHint: true,
+  openWorldHint: false,
 };
 
 type BackgroundTaskStatus = "running" | "completed" | "failed" | "stopped";
 
 export function registerBackgroundTaskTool(context: ToolRegistrationContext): void {
-  if (!context.config.subagents.enabled) return;
-
   context.server.registerTool(
     toolNames.backgroundTask,
     {
-      title: "Run durable background task",
+      title: "Persist durable ChatGPT task",
       description:
-        "Start or resume a complete multi-step coding task owned by Flyto2 Runtime's detached local-agent daemon. Use this when work must continue after the current ChatGPT turn, page, or MCP connection ends. The background task may inspect files, edit, test, and finish autonomously inside the workspace. Use status or wait later with its task_id. Responses stay compact unless include_response=true. Do not use this for one simple read or shell command.",
+        "Persist and recover a multi-step task owned by the current MCP host. Runtime stores the task, workspace binding, checkpoints, and final result so ChatGPT can resume after a page or MCP reconnect. Runtime does not delegate the task to Codex, Claude, a local agent, or any other model. Use normal read/edit/process tools to perform the work yourself. Use continue to save a recovery checkpoint, complete when finished, or stop when abandoned.",
       inputSchema: {
-        action: z.enum(["start", "status", "wait", "continue"]),
+        action: z.enum(["start", "status", "wait", "continue", "complete", "stop"]),
         workspace_id: z.string().describe(workspaceIdDescription),
         task_id: z
           .string()
           .optional()
-          .describe("Task id returned by start. Required for status, wait, and continue."),
+          .describe("Task id returned by start. Required for every action except start."),
         prompt: z
           .string()
           .min(1)
           .optional()
-          .describe("Complete task for start, or follow-up instructions for continue."),
-        timeout_seconds: z
-          .number()
-          .int()
-          .positive()
-          .max(MAX_WAIT_SECONDS)
-          .optional()
-          .describe("Maximum wait time for action=wait. Defaults to 25 seconds."),
+          .describe(
+            "Original task for start; recovery checkpoint/follow-up note for continue; final summary for complete; stop reason for stop.",
+          ),
         include_response: z
           .boolean()
           .optional()
-          .describe("Include the final agent response when completed. Defaults to false to keep the conversation small."),
+          .describe("Include the stored original prompt/checkpoint/final result. Defaults to false."),
       },
       outputSchema: resultOutputSchema({
         task_id: z.string().optional(),
         status: z.enum(["running", "completed", "failed", "stopped"]),
-        provider: z.string().optional(),
+        original_prompt: z.string().optional(),
+        checkpoint: z.string().optional(),
         response: z.string().optional(),
-        error: z.string().optional(),
-        retry_after_ms: z.number().int().nonnegative().optional(),
       }),
       annotations: BACKGROUND_TASK_ANNOTATIONS,
     },
-    async ({ action, workspace_id, task_id, prompt, timeout_seconds, include_response }) => {
+    async ({ action, workspace_id, task_id, prompt, include_response }) => {
       const workspace = await context.workspaces.getWorkspace(workspace_id);
-      const scope = { workspaceId: workspace_id, workspaceRoot: workspace.root };
 
       if (action === "start") {
         if (!prompt) return invalidInput("prompt is required for action=start.");
-        const provider = context.resolveLocalAgentProviders().find((entry) => entry.usable);
-        if (!provider) {
-          return failedResult(
-            "No enabled local-agent provider is available. Run Flyto2 Runtime setup and enable Claude, Codex, or another supported provider.",
-          );
-        }
-        const started = await context.localAgents.start({
-          target: provider.id,
-          prompt: durableTaskPrompt(prompt),
+        const record = context.hostTasks.create({
           workspaceId: workspace_id,
           workspaceRoot: workspace.root,
-          writeMode: "allowed",
+          prompt,
         });
-        if (started.isErr()) return clientError(started.error);
-        return recordResult(started.value, false);
+        return recordResult(
+          record,
+          include_response === true,
+          `Durable task ${record.id} is recorded for ChatGPT. Continue the work with the normal workspace tools. Runtime will preserve this task state across reconnects and will not start another model or local-agent provider.`,
+        );
       }
 
       if (!task_id) return invalidInput(`task_id is required for action=${action}.`);
+      const current = scopedTask(context, task_id, workspace_id, workspace.root);
+      if ("error" in current) return failedResult(current.error, task_id);
+
+      if (action === "status" || action === "wait") {
+        const message = current.status === "active"
+          ? action === "wait"
+            ? `Durable task ${current.id} is still active. There is no background model to wait for; ChatGPT should resume it with normal workspace tools.`
+            : `Durable task ${current.id} is active and ready for ChatGPT to resume.`
+          : undefined;
+        return recordResult(current, include_response === true, message);
+      }
 
       if (action === "continue") {
         if (!prompt) return invalidInput("prompt is required for action=continue.");
-        const continued = await context.localAgents.continue(
-          task_id,
-          durableTaskPrompt(prompt),
-          { writeMode: "allowed" },
-          scope,
+        if (current.status !== "active") {
+          return failedResult(`Durable task ${current.id} is already ${current.status}.`, current.id);
+        }
+        const updated = context.hostTasks.checkpoint(current.id, prompt);
+        if (!updated) return failedResult(`Durable task ${current.id} no longer exists.`, current.id);
+        return recordResult(
+          updated,
+          include_response === true,
+          `Checkpoint saved for durable task ${updated.id}. ChatGPT remains the only task owner; continue with normal workspace tools.`,
         );
-        if (continued.isErr()) return clientError(continued.error, task_id);
-        return recordResult(continued.value, false);
       }
 
-      if (action === "wait") {
-        const waited = await context.localAgents.wait(
-          [task_id],
-          scope,
-          (timeout_seconds ?? DEFAULT_WAIT_MS / 1_000) * 1_000,
+      if (action === "complete") {
+        if (current.status !== "active") {
+          return failedResult(`Durable task ${current.id} is already ${current.status}.`, current.id);
+        }
+        const completed = context.hostTasks.complete(current.id, prompt);
+        if (!completed) return failedResult(`Durable task ${current.id} no longer exists.`, current.id);
+        return recordResult(
+          completed,
+          include_response === true,
+          `Durable task ${completed.id} completed by ChatGPT.`,
         );
-        if (waited.isErr()) return clientError(waited.error, task_id);
-        return waitResult(waited.value[0], task_id, include_response === true);
       }
 
-      const current = await context.localAgents.get(task_id, scope);
-      if (current.isErr()) return clientError(current.error, task_id);
-      return recordResult(current.value, include_response === true);
+      if (current.status !== "active") {
+        return failedResult(`Durable task ${current.id} is already ${current.status}.`, current.id);
+      }
+      const stopped = context.hostTasks.stop(current.id, prompt);
+      if (!stopped) return failedResult(`Durable task ${current.id} no longer exists.`, current.id);
+      return recordResult(stopped, include_response === true, `Durable task ${stopped.id} stopped.`);
     },
   );
 }
 
-function durableTaskPrompt(prompt: string): string {
-  return [
-    "Own this task through completion even if the caller disconnects.",
-    "Work autonomously within the requested scope, follow repository instructions, and preserve unrelated changes.",
-    "For coding tasks that require file changes: inspect the current Git state, implement the requested change, run appropriate verification, then create a focused commit containing only your task changes unless the caller explicitly requested no commit or repository instructions forbid committing.",
-    "Do not push, publish, deploy, open a pull request, or absorb unrelated pre-existing changes unless the original task explicitly authorizes it.",
-    "Do not pause merely because the caller is unavailable. Stop only when the task is complete or genuinely requires credentials, authorization, or a user decision.",
-    "In the final response, report the outcome, verification performed, and the commit SHA when a commit was created; otherwise state why no commit was needed or possible.",
-    "",
-    prompt,
-  ].join("\n");
+function scopedTask(
+  context: ToolRegistrationContext,
+  taskId: string,
+  workspaceId: string,
+  workspaceRoot: string,
+): HostTaskRecord | { error: string } {
+  const record = context.hostTasks.get(taskId);
+  if (!record) return { error: `Durable task ${taskId} was not found.` };
+  if (record.workspaceId !== workspaceId || record.workspaceRoot !== workspaceRoot) {
+    return { error: `Durable task ${taskId} does not belong to this workspace.` };
+  }
+  return record;
 }
 
-function recordResult(record: LocalAgentRecord, includeResponse: boolean) {
+function recordResult(
+  record: HostTaskRecord,
+  includeResponse: boolean,
+  message?: string,
+) {
   const status = recordStatus(record);
-  const response = includeResponse ? responsePreview(record.latestResponse) : undefined;
-  const result = status === "running"
-    ? `Background task ${record.id} is running independently. It will continue if this conversation disconnects.`
-    : status === "completed"
-      ? `Background task ${record.id} completed.${includeResponse ? "" : " Request status with include_response=true only if its final response is needed."}`
-      : status === "failed"
-        ? `Background task ${record.id} failed: ${record.error ?? "unknown error"}`
-        : `Background task ${record.id} stopped.`;
+  const originalPrompt = includeResponse ? responsePreview(record.prompt) : undefined;
+  const checkpoint = includeResponse ? responsePreview(record.checkpoint) : undefined;
+  const response = includeResponse ? responsePreview(record.result) : undefined;
+  const result = message
+    ?? (status === "completed"
+      ? `Durable task ${record.id} completed.`
+      : status === "stopped"
+        ? `Durable task ${record.id} stopped.`
+        : `Durable task ${record.id} is active and ready for ChatGPT to resume.`);
+
   return toolResult({
     result,
     task_id: record.id,
     status,
-    provider: record.provider,
+    original_prompt: originalPrompt,
+    checkpoint,
     response,
-    error: record.error,
-    retry_after_ms: status === "running" ? 5_000 : undefined,
-  }, status === "failed");
+  });
 }
 
-function waitResult(
-  waited: LocalAgentWaitResult | undefined,
-  taskId: string,
-  includeResponse: boolean,
-) {
-  if (!waited) return failedResult("Background task returned no wait result.", taskId);
-  if (waited.status === "running") {
-    return toolResult({
-      result: `Background task ${taskId} is still running independently.`,
-      task_id: taskId,
-      status: "running" as const,
-      retry_after_ms: 5_000,
-    });
-  }
-  if (waited.status === "completed") {
-    const response = includeResponse ? responsePreview(waited.response) : undefined;
-    return toolResult({
-      result: `Background task ${taskId} completed.${includeResponse ? "" : " Request status with include_response=true only if its final response is needed."}`,
-      task_id: taskId,
-      status: "completed" as const,
-      response,
-    });
-  }
-  const error = waited.error?.message;
-  return toolResult({
-    result: waited.status === "failed"
-      ? `Background task ${taskId} failed: ${error ?? "unknown error"}`
-      : `Background task ${taskId} stopped${error ? `: ${error}` : "."}`,
-    task_id: taskId,
-    status: waited.status,
-    error,
-  }, waited.status === "failed");
-}
-
-function recordStatus(record: LocalAgentRecord): BackgroundTaskStatus {
-  if (record.status === "idle") return "completed";
-  if (record.status === "error") return "failed";
+function recordStatus(record: HostTaskRecord): BackgroundTaskStatus {
+  if (record.status === "completed") return "completed";
   if (record.status === "stopped") return "stopped";
   return "running";
 }
@@ -196,16 +169,11 @@ function recordStatus(record: LocalAgentRecord): BackgroundTaskStatus {
 function responsePreview(response: string | undefined): string | undefined {
   if (!response) return undefined;
   if (response.length <= RESPONSE_PREVIEW_CHARS) return response;
-  return `${response.slice(0, RESPONSE_PREVIEW_CHARS)}\n[Response truncated; full response remains in Runtime state.]`;
+  return `${response.slice(0, RESPONSE_PREVIEW_CHARS)}\n[Response truncated; full value remains in Runtime state.]`;
 }
 
 function invalidInput(message: string) {
   return failedResult(message);
-}
-
-function clientError(error: unknown, taskId?: string) {
-  const value = error as { message?: string };
-  return failedResult(value.message ?? String(error), taskId);
 }
 
 function failedResult(error: string, taskId?: string) {
@@ -213,7 +181,6 @@ function failedResult(error: string, taskId?: string) {
     result: error,
     task_id: taskId,
     status: "failed" as const,
-    error,
   }, true);
 }
 
@@ -222,10 +189,9 @@ function toolResult(
     result: string;
     task_id?: string;
     status: BackgroundTaskStatus;
-    provider?: string;
+    original_prompt?: string;
+    checkpoint?: string;
     response?: string;
-    error?: string;
-    retry_after_ms?: number;
   },
   isError = false,
 ) {

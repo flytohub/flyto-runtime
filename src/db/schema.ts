@@ -91,6 +91,25 @@ export const oauthRefreshTokens = sqliteTable(
   },
 );
 
+export const hostTasks = sqliteTable(
+  "host_tasks",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id").notNull(),
+    workspaceRoot: text("workspace_root").notNull(),
+    prompt: text("prompt").notNull(),
+    status: text("status").notNull(),
+    checkpoint: text("checkpoint"),
+    result: text("result"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    completedAt: text("completed_at"),
+  },
+  (table) => [
+    index("host_tasks_workspace_idx").on(table.workspaceId, table.status, table.updatedAt),
+  ],
+);
+
 export const durableOperations = sqliteTable(
   "durable_operations",
   {
@@ -201,6 +220,8 @@ export type Flyto2ReactiveJobRow = typeof flyto2ReactiveJobs.$inferSelect;
 export type NewFlyto2ReactiveJobRow = typeof flyto2ReactiveJobs.$inferInsert;
 export type Flyto2WorkspaceWatchRow = typeof flyto2WorkspaceWatches.$inferSelect;
 export type NewFlyto2WorkspaceWatchRow = typeof flyto2WorkspaceWatches.$inferInsert;
+export type HostTaskRow = typeof hostTasks.$inferSelect;
+export type NewHostTaskRow = typeof hostTasks.$inferInsert;
 export type DurableOperationRow = typeof durableOperations.$inferSelect;
 export type NewDurableOperationRow = typeof durableOperations.$inferInsert;
 export type WorkspaceSessionRow = typeof workspaceSessions.$inferSelect;

@@ -3,8 +3,7 @@ import type { ProcessSessionManager } from "../process-sessions.js";
 import type { ServerConfig } from "../config.js";
 import type { RuntimeEventStore } from "../flyto2/runtime-events.js";
 import type { ReactiveCommandRunner } from "../flyto2/reactive-command.js";
-import type { LocalAgentClient } from "../local-agent-client.js";
-import type { LocalAgentProviderStatus } from "../local-agent-catalog.js";
+import type { HostTaskStore } from "../flyto2/host-tasks.js";
 import type { WorkspaceRegistry } from "../workspaces.js";
 
 export const toolNames = {
@@ -81,8 +80,7 @@ export interface ToolRegistrationContext {
   processSessions: ProcessSessionManager;
   runtimeEvents: RuntimeEventStore;
   reactiveCommands: ReactiveCommandRunner;
-  localAgents: Pick<LocalAgentClient, "start" | "continue" | "get" | "wait">;
-  resolveLocalAgentProviders: () => LocalAgentProviderStatus[];
+  hostTasks: Pick<HostTaskStore, "create" | "get" | "checkpoint" | "complete" | "stop">;
 }
 
 export interface ToolInstructionContext {

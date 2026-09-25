@@ -70,7 +70,7 @@ test("cached ChatGPT bash calls route to exec_command in Codex tool mode", () =>
   assert.equal((normalizeLegacyMcpInput(body, "claude") as typeof body).params.name, "bash");
 });
 
-test("cached ChatGPT can hand durable work to background_task through legacy bash", () => {
+test("cached ChatGPT can persist and recover host-owned durable tasks through legacy bash", () => {
   const call = (command: string) => normalizeLegacyMcpInput({ method: "tools/call", params: { name: "bash", arguments: {
     workspaceId: "ws_a", command,
   } } }, "codex") as { params: { name: string; arguments: Record<string, unknown> } };
@@ -83,26 +83,38 @@ test("cached ChatGPT can hand durable work to background_task through legacy bas
       prompt: "Fix this fully and test it.",
     },
   });
-  assert.deepEqual(call("@flyto2/task status agt_12345678").params, {
+  assert.deepEqual(call("@flyto2/task status task_12345678").params, {
     name: "background_task",
     arguments: {
       action: "status",
       workspace_id: "ws_a",
-      task_id: "agt_12345678",
+      task_id: "task_12345678",
       include_response: true,
     },
   });
-  assert.deepEqual(call("@flyto2/task wait agt_12345678").params.arguments, {
+  assert.deepEqual(call("@flyto2/task wait task_12345678").params.arguments, {
     action: "wait",
     workspace_id: "ws_a",
-    task_id: "agt_12345678",
+    task_id: "task_12345678",
     include_response: true,
   });
-  assert.deepEqual(call("@flyto2/task continue agt_12345678 Finish the remaining tests.").params.arguments, {
+  assert.deepEqual(call("@flyto2/task continue task_12345678 Tests are still pending.").params.arguments, {
     action: "continue",
     workspace_id: "ws_a",
-    task_id: "agt_12345678",
-    prompt: "Finish the remaining tests.",
+    task_id: "task_12345678",
+    prompt: "Tests are still pending.",
+  });
+  assert.deepEqual(call("@flyto2/task complete task_12345678 Tests pass.").params.arguments, {
+    action: "complete",
+    workspace_id: "ws_a",
+    task_id: "task_12345678",
+    prompt: "Tests pass.",
+  });
+  assert.deepEqual(call("@flyto2/task stop task_12345678 User cancelled.").params.arguments, {
+    action: "stop",
+    workspace_id: "ws_a",
+    task_id: "task_12345678",
+    prompt: "User cancelled.",
   });
   assert.equal(call("echo @flyto2/task start nope").params.name, "exec_command");
 });

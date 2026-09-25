@@ -67,6 +67,11 @@ const migrations: Migration[] = [
     name: "conversation-handoffs",
     up: migrateConversationHandoffs,
   },
+  {
+    version: 13,
+    name: "host-tasks",
+    up: migrateHostTasks,
+  },
 ];
 
 export const FLYTO2_STATE_SCHEMA_VERSION =
@@ -398,6 +403,26 @@ function migrateConversationHandoffs(_sqlite: Database.Database): void {
   // Version 12 was shipped before automatic conversation handoffs were removed.
   // Keep the migration identity so existing state remains readable, but do not
   // add unused checkpoint tables to new installations.
+}
+
+function migrateHostTasks(sqlite: Database.Database): void {
+  sqlite.exec(`
+    create table if not exists host_tasks (
+      id text primary key,
+      workspace_id text not null,
+      workspace_root text not null,
+      prompt text not null,
+      status text not null,
+      checkpoint text,
+      result text,
+      created_at text not null,
+      updated_at text not null,
+      completed_at text
+    );
+
+    create index if not exists host_tasks_workspace_idx
+      on host_tasks(workspace_id, status, updated_at desc);
+  `);
 }
 
 function addColumnIfMissing(

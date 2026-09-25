@@ -113,6 +113,26 @@ function parseLegacyTaskCommand(
     };
   }
 
+  const completion = /^complete\s+(\S+)(?:\s+([\s\S]+))?$/.exec(rest);
+  if (completion) {
+    return {
+      action: "complete",
+      workspace_id: workspaceId,
+      task_id: completion[1],
+      ...(completion[2] ? { prompt: completion[2].trim() } : {}),
+    };
+  }
+
+  const stop = /^stop\s+(\S+)(?:\s+([\s\S]+))?$/.exec(rest);
+  if (stop) {
+    return {
+      action: "stop",
+      workspace_id: workspaceId,
+      task_id: stop[1],
+      ...(stop[2] ? { prompt: stop[2].trim() } : {}),
+    };
+  }
+
   return undefined;
 }
 

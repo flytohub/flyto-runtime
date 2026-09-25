@@ -127,9 +127,14 @@ from the installed DevSpace package and wins over other skills named
 When Subagents are enabled, DevSpace discovers agent profiles
 from `~/.devspace/agents/*.md` and project `.devspace/agents/*.md`.
 Claude compatibility mode exposes their compact profile catalog through
-`open_workspace`. Both tool modes expose `background_task`, which delegates a
-complete task to the detached local-agent daemon so it survives the ChatGPT
-turn, page, and MCP connection that started it.
+`open_workspace`. Subagents are an explicit optional feature and are never
+used automatically for ChatGPT coding work.
+
+Both tool modes expose `background_task` as a durable ChatGPT-owned task
+record. Despite the compatibility name, it does not start Codex, Claude, or any
+other model. ChatGPT keeps doing the analysis, edits, verification, and commits
+through the normal workspace tools; Runtime only persists the task prompt,
+recovery checkpoint, workspace binding, and final result across reconnects.
 
 Example profiles are packaged under `examples/agents/` for users who want
 starter templates. Copy or adapt them into one of the active profile directories
@@ -171,7 +176,7 @@ DevSpace uses the Codex-style surface by default. It exposes:
 
 - `open_workspace`
 - `read`
-- `background_task` (when subagents are enabled)
+- `background_task` (durable ChatGPT-owned task state)
 - `apply_patch`
 - `exec_command`
 - `write_stdin`
@@ -186,10 +191,13 @@ wrap status checks in shell sleep loops. Cached legacy ChatGPT `bash` calls keep
 their short first yield so an older host catalog does not hold a request open.
 If that cached five-tool catalog does not expose `background_task`, Runtime also
 accepts `@flyto2/task start <complete task>` through the cached `bash` tool and
-translates it to the same detached background-task path. Use
-`@flyto2/task status <task_id>` later to retrieve the result rather than keeping
-the ChatGPT page alive by polling. Set `tty: true` only for commands that need a
-terminal.
+translates it to the same durable host-task state. ChatGPT must continue the work
+itself with the normal workspace tools. Use
+`@flyto2/task continue <task_id> <checkpoint>` before an expected reconnect,
+`@flyto2/task status <task_id>` after reconnecting, and
+`@flyto2/task complete <task_id> <summary>` when finished. Runtime never starts
+a secondary model for these commands. Set `tty: true` only for commands that
+need a terminal.
 
 To keep long conversations usable, `read` returns at most 400 lines by default
 and provides the next offset when a file is longer. Command output is also
@@ -197,9 +205,9 @@ bounded to a compact head-and-tail result by default. For non-interactive
 commands, Runtime retains the full durable evidence locally. These bounds never
 stop the conversation or reject later tool calls.
 
-`background_task` also keeps its final response out of the conversation by
-default. Ask for `include_response=true` only after completion when that result
-is needed; the full response remains in Runtime's durable local state.
+`background_task` keeps the stored prompt, checkpoint, and final result out of
+the conversation by default. Ask for `include_response=true` only when recovery
+details are needed; the full values remain in Runtime's durable local state.
 
 Set `tools.mode` to `claude` in `~/.devspace/config.jsonc` to expose `write`,
 `edit`, and `bash` instead of the Codex mutation and command tools. Dedicated

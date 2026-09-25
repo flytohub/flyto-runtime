@@ -18,6 +18,7 @@ import { DurableOperationStore } from "./flyto2/durable-operations.js";
 import { RuntimeEventStore } from "./flyto2/runtime-events.js";
 import { ReactiveCommandRunner } from "./flyto2/reactive-command.js";
 import { WorkspaceWatchRegistry } from "./flyto2/workspace-watch.js";
+import { HostTaskStore } from "./flyto2/host-tasks.js";
 import { createMcpServer, createServer } from "./server.js";
 import { SqliteWorkspaceStore } from "./workspace-store.js";
 import { WorkspaceRegistry } from "./workspaces.js";
@@ -32,11 +33,11 @@ test("tool modes expose the expected host-facing tool surface", async (t) => {
   }> = [
     {
       mode: "claude",
-      expected: ["open_workspace", "read", "write", "edit", "bash", "show_changes"],
+      expected: ["open_workspace", "read", "write", "edit", "bash", "show_changes", "background_task"],
     },
     {
       mode: "codex",
-      expected: ["open_workspace", "read", "apply_patch", "exec_command", "write_stdin", "show_changes"],
+      expected: ["open_workspace", "read", "apply_patch", "exec_command", "write_stdin", "show_changes", "background_task"],
     },
   ];
 
@@ -53,11 +54,10 @@ test("tool modes expose the expected host-facing tool surface", async (t) => {
   }
 });
 
-test("enabled local agents add one compact durable background task tool", async (t) => {
+test("ChatGPT durable task state is exposed without enabling local agents", async (t) => {
   const context = await fixture(t, {
     toolMode: "codex",
     uiEnabled: false,
-    localAgentProviders: [{ name: "claude", available: true }],
   });
   const tools = await context.client.listTools();
   const names = tools.tools.map((tool) => tool.name);
@@ -65,7 +65,8 @@ test("enabled local agents add one compact durable background task tool", async 
   assert.equal(names.filter((name) => name === "background_task").length, 1);
   assert.equal(names.length, 7);
   const backgroundTask = tools.tools.find((tool) => tool.name === "background_task");
-  assert.match(backgroundTask?.description ?? "", /continue after the current ChatGPT turn/);
+  assert.match(backgroundTask?.description ?? "", /current MCP host/);
+  assert.match(backgroundTask?.description ?? "", /does not delegate the task to Codex, Claude/);
 });
 
 test("healthz exposes only minimal public liveness", async (t) => {
@@ -1401,6 +1402,7 @@ async function fixture(
   const runtimeEvents = new RuntimeEventStore(stateDir);
   const reactiveCommands = new ReactiveCommandRunner(stateDir, runtimeEvents);
   const workspaceWatches = new WorkspaceWatchRegistry(stateDir, runtimeEvents);
+  const hostTasks = new HostTaskStore(stateDir);
   const server = createMcpServer(
     config,
     workspaces,
@@ -1412,6 +1414,7 @@ async function fixture(
     runtimeEvents,
     reactiveCommands,
     workspaceWatches,
+    hostTasks,
   );
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "devspace-test-client", version: "1.0.0" });
@@ -1430,6 +1433,7 @@ async function fixture(
     reactiveCommands.shutdown();
     durableOperations.close();
     runtimeEvents.close();
+    hostTasks.close();
     store.close();
   };
 

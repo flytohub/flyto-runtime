@@ -1,19 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Result } from "better-result";
 import { registerBackgroundTaskTool } from "./background-task.js";
 import type { ToolRegistrationContext } from "./types.js";
+import type { HostTaskRecord } from "../flyto2/host-tasks.js";
 
 type Handler = (input: Record<string, unknown>) => Promise<{
   isError?: boolean;
   structuredContent: Record<string, unknown>;
 }>;
 
-test("background_task starts a detached local task with a durable ownership prompt", async () => {
+function fixture() {
   let handler: Handler | undefined;
-  let startInput: Record<string, unknown> | undefined;
+  const records = new Map<string, HostTaskRecord>();
+  let sequence = 0;
   const context = {
-    config: { subagents: { enabled: true } },
     server: {
       registerTool: (_name: string, _definition: unknown, registered: Handler) => {
         handler = registered;
@@ -22,106 +22,159 @@ test("background_task starts a detached local task with a durable ownership prom
     workspaces: {
       getWorkspace: async () => ({ root: "/workspace" }),
     },
-    resolveLocalAgentProviders: () => [
-      { id: "claude", enabled: true, available: true, usable: true },
-    ],
-    localAgents: {
-      start: async (input: Record<string, unknown>) => {
-        startInput = input;
-        return Result.ok({
-          id: "agt_12345678",
-          workspaceId: "ws_1",
-          workspaceRoot: "/workspace",
-          profileName: "claude",
-          provider: "claude",
-          status: "running" as const,
-          createdAt: "2026-01-01T00:00:00.000Z",
-          updatedAt: "2026-01-01T00:00:00.000Z",
-        });
+    hostTasks: {
+      create: (input: { workspaceId: string; workspaceRoot: string; prompt: string }) => {
+        sequence += 1;
+        const now = "2026-01-01T00:00:00.000Z";
+        const record: HostTaskRecord = {
+          id: `task_${String(sequence).padStart(32, "0")}`,
+          workspaceId: input.workspaceId,
+          workspaceRoot: input.workspaceRoot,
+          prompt: input.prompt,
+          status: "active",
+          createdAt: now,
+          updatedAt: now,
+        };
+        records.set(record.id, record);
+        return record;
+      },
+      get: (id: string) => records.get(id),
+      checkpoint: (id: string, checkpoint: string) => {
+        const current = records.get(id);
+        if (!current) return undefined;
+        const updated = { ...current, checkpoint, updatedAt: "2026-01-01T00:01:00.000Z" };
+        records.set(id, updated);
+        return updated;
+      },
+      complete: (id: string, result?: string) => {
+        const current = records.get(id);
+        if (!current) return undefined;
+        const updated: HostTaskRecord = {
+          ...current,
+          status: "completed",
+          result,
+          updatedAt: "2026-01-01T00:02:00.000Z",
+          completedAt: "2026-01-01T00:02:00.000Z",
+        };
+        records.set(id, updated);
+        return updated;
+      },
+      stop: (id: string, result?: string) => {
+        const current = records.get(id);
+        if (!current) return undefined;
+        const updated: HostTaskRecord = {
+          ...current,
+          status: "stopped",
+          result,
+          updatedAt: "2026-01-01T00:02:00.000Z",
+          completedAt: "2026-01-01T00:02:00.000Z",
+        };
+        records.set(id, updated);
+        return updated;
       },
     },
   } as unknown as ToolRegistrationContext;
 
   registerBackgroundTaskTool(context);
   assert.ok(handler);
+  return { handler, records };
+}
+
+test("background_task records a ChatGPT-owned durable task without delegating", async () => {
+  const { handler } = fixture();
   const response = await handler({
     action: "start",
     workspace_id: "ws_1",
     prompt: "Fix the failing tests.",
   });
 
-  assert.equal(startInput?.target, "claude");
-  assert.equal(startInput?.workspaceRoot, "/workspace");
-  assert.match(String(startInput?.prompt), /Own this task through completion/);
-  assert.match(String(startInput?.prompt), /create a focused commit containing only your task changes/);
-  assert.match(String(startInput?.prompt), /Do not push, publish, deploy, open a pull request/);
-  assert.match(String(startInput?.prompt), /report the outcome, verification performed, and the commit SHA/);
-  assert.match(String(startInput?.prompt), /Fix the failing tests/);
-  assert.deepEqual(response.structuredContent, {
-    result: "Background task agt_12345678 is running independently. It will continue if this conversation disconnects.",
-    task_id: "agt_12345678",
-    status: "running",
-    provider: "claude",
-    response: undefined,
-    error: undefined,
-    retry_after_ms: 5_000,
-  });
+  assert.equal(response.structuredContent.status, "running");
+  assert.match(String(response.structuredContent.task_id), /^task_/);
+  assert.match(String(response.structuredContent.result), /recorded for ChatGPT/);
+  assert.match(String(response.structuredContent.result), /will not start another model or local-agent provider/);
+  assert.equal("provider" in response.structuredContent, false);
 });
 
-test("background_task keeps completed responses lazy", async () => {
-  let handler: Handler | undefined;
-  const context = {
-    config: { subagents: { enabled: true } },
-    server: {
-      registerTool: (_name: string, _definition: unknown, registered: Handler) => {
-        handler = registered;
-      },
-    },
-    workspaces: {
-      getWorkspace: async () => ({ root: "/workspace" }),
-    },
-    resolveLocalAgentProviders: () => [],
-    localAgents: {
-      get: async () => Result.ok({
-        id: "agt_12345678",
-        workspaceId: "ws_1",
-        workspaceRoot: "/workspace",
-        profileName: "claude",
-        provider: "claude",
-        status: "idle" as const,
-        latestResponse: "Finished and verified.",
-        createdAt: "2026-01-01T00:00:00.000Z",
-        updatedAt: "2026-01-01T00:00:00.000Z",
-      }),
-    },
-  } as unknown as ToolRegistrationContext;
-
-  registerBackgroundTaskTool(context);
-  assert.ok(handler);
-  const compact = await handler({
-    action: "status",
+test("background_task persists checkpoints and returns them after reconnect", async () => {
+  const { handler } = fixture();
+  const started = await handler({
+    action: "start",
     workspace_id: "ws_1",
-    task_id: "agt_12345678",
+    prompt: "Implement durable host recovery.",
   });
-  assert.equal(compact.structuredContent.status, "completed");
-  assert.equal(compact.structuredContent.response, undefined);
+  const taskId = String(started.structuredContent.task_id);
 
-  const withResponse = await handler({
+  const checkpointed = await handler({
+    action: "continue",
+    workspace_id: "ws_1",
+    task_id: taskId,
+    prompt: "Source edit complete; tests still need to run.",
+  });
+  assert.equal(checkpointed.structuredContent.status, "running");
+
+  const status = await handler({
     action: "status",
     workspace_id: "ws_1",
-    task_id: "agt_12345678",
+    task_id: taskId,
     include_response: true,
   });
-  assert.equal(withResponse.structuredContent.response, "Finished and verified.");
+  assert.equal(status.structuredContent.original_prompt, "Implement durable host recovery.");
+  assert.equal(status.structuredContent.checkpoint, "Source edit complete; tests still need to run.");
+  assert.equal(status.structuredContent.response, undefined);
 });
 
-test("background_task is absent when local agents are disabled", () => {
-  let registered = false;
-  const context = {
-    config: { subagents: { enabled: false } },
-    server: { registerTool: () => { registered = true; } },
-  } as unknown as ToolRegistrationContext;
+test("background_task wait never implies another model is running", async () => {
+  const { handler } = fixture();
+  const started = await handler({
+    action: "start",
+    workspace_id: "ws_1",
+    prompt: "Run the task.",
+  });
+  const taskId = String(started.structuredContent.task_id);
 
-  registerBackgroundTaskTool(context);
-  assert.equal(registered, false);
+  const waited = await handler({
+    action: "wait",
+    workspace_id: "ws_1",
+    task_id: taskId,
+  });
+  assert.equal(waited.structuredContent.status, "running");
+  assert.match(String(waited.structuredContent.result), /There is no background model to wait for/);
+});
+
+test("background_task stores completion result for a later ChatGPT session", async () => {
+  const { handler } = fixture();
+  const started = await handler({
+    action: "start",
+    workspace_id: "ws_1",
+    prompt: "Finish the change.",
+  });
+  const taskId = String(started.structuredContent.task_id);
+
+  const completed = await handler({
+    action: "complete",
+    workspace_id: "ws_1",
+    task_id: taskId,
+    prompt: "Tests pass; committed as abc1234.",
+    include_response: true,
+  });
+  assert.equal(completed.structuredContent.status, "completed");
+  assert.equal(completed.structuredContent.response, "Tests pass; committed as abc1234.");
+});
+
+test("background_task rejects cross-workspace task access", async () => {
+  const { handler } = fixture();
+  const started = await handler({
+    action: "start",
+    workspace_id: "ws_1",
+    prompt: "Keep task scoped.",
+  });
+  const taskId = String(started.structuredContent.task_id);
+
+  const response = await handler({
+    action: "status",
+    workspace_id: "ws_2",
+    task_id: taskId,
+  });
+  assert.equal(response.isError, true);
+  assert.match(String(response.structuredContent.result), /does not belong to this workspace/);
 });

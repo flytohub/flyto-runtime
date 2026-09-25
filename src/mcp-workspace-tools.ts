@@ -311,7 +311,6 @@ function buildWorkspacePresentation(
     context,
     baseInstruction,
     config.toolMode,
-    config.subagents.enabled,
     preloadedSubagentInstructions,
   );
 
@@ -343,7 +342,6 @@ function workspaceInstruction(
   context: WorkspaceContext,
   baseInstruction: string,
   toolMode: ServerConfig["toolMode"],
-  subagentsEnabled: boolean,
   preloadedSubagentInstructions: string | undefined,
 ): string {
   const { workspace } = context;
@@ -359,8 +357,8 @@ function workspaceInstruction(
   const legacyReactiveInstruction = toolMode === "claude"
     ? "Long bash commands automatically continue as durable Flyto2 Runtime jobs. Follow any returned @flyto2/job <job_id> command later; do not rerun the original side effect while it is still running."
     : undefined;
-  const legacyTaskInstruction = toolMode === "codex" && subagentsEnabled
-    ? `If this host still exposes the cached legacy five-tool catalog and background_task is unavailable, hand multi-step work that must survive the ChatGPT turn or page to Runtime by calling bash once with command \`${LEGACY_TASK_COMMAND} start <complete task>\`. Later retrieve the result with \`${LEGACY_TASK_COMMAND} status <task_id>\`; do not keep the task alive by polling.`
+  const legacyTaskInstruction = toolMode === "codex"
+    ? `If this host still exposes the cached legacy five-tool catalog and background_task is unavailable, create a durable ChatGPT-owned task record with bash command \`${LEGACY_TASK_COMMAND} start <complete task>\`, then continue the work yourself with the normal workspace tools. Runtime stores recovery state only and never delegates the task to Codex, Claude, or another local agent. Use \`${LEGACY_TASK_COMMAND} continue <task_id> <checkpoint>\` to save recovery context and \`${LEGACY_TASK_COMMAND} status <task_id>\` after reconnecting.`
     : undefined;
   const instructionParts = [
     workspaceInstruction,
