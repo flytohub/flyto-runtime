@@ -1236,9 +1236,6 @@ async function httpServerFixture(
   t: TestContext,
   prefix: string,
   toolMode: ToolMode = "codex",
-  overrides: {
-    handoff?: Partial<ServerConfig["handoff"]>;
-  } = {},
 ): Promise<HttpServerFixture> {
   const root = await mkdtemp(join(tmpdir(), prefix));
   const ownerToken = "test-owner-token-that-is-long-enough";
@@ -1253,7 +1250,6 @@ async function httpServerFixture(
     },
     storage: { stateDir: join(root, ".state") },
     tools: { mode: toolMode },
-    handoff: overrides.handoff,
   }));
   const running = createServer(config, { incomingArtifactAdapters: [] });
   const httpServer = running.app.listen(0, "127.0.0.1");
@@ -1774,88 +1770,6 @@ test("a cached ChatGPT bash call yields quickly and polls via @flyto2/job", asyn
     polledText = await polled.text();
   }
   assert.match(polledText, /polled-later/);
-});
-
-test("an oversized ChatGPT conversation stops, writes a handoff, and resumes in a new session", async (t) => {
-  const { root, localBaseUrl, accessToken } = await httpServerFixture(
-    t,
-    "runtime-conversation-handoff-",
-    "codex",
-    {
-      handoff: {
-        enabled: true,
-        maxToolCalls: 10,
-        maxContextBytes: 10 * 1024 * 1024,
-        maxAgeMinutes: 240,
-      },
-    },
-  );
-  await writeFile(join(root, "handoff-source.txt"), "handoff source\n");
-  const oldMeta = { "openai/session": "chat-that-became-too-large" };
-  const opened = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
-    name: "open_workspace",
-    arguments: {
-      path: root,
-      task_context: "Finish the current Runtime repair without repeating completed work.",
-    },
-    _meta: oldMeta,
-  });
-  const openedBody = await opened.json() as { result: { structuredContent: { workspace_id: string } } };
-  const workspaceId = openedBody.result.structuredContent.workspace_id;
-
-  let thresholdText = "";
-  for (let attempt = 0; attempt < 9; attempt += 1) {
-    const read = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
-      name: "read",
-      arguments: { workspace_id: workspaceId, path: "handoff-source.txt" },
-      _meta: oldMeta,
-    });
-    assert.equal(read.status, 200, await read.clone().text());
-    thresholdText = await read.text();
-  }
-  const handoffId = /handoff_[a-f0-9]{16}/.exec(thresholdText)?.[0];
-  assert.ok(handoffId, thresholdText);
-  assert.match(thresholdText, /stopped this conversation/i);
-
-  const blockedPath = join(root, "must-not-run.txt");
-  const blocked = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
-    name: "exec_command",
-    arguments: { workspace_id: workspaceId, cmd: "touch must-not-run.txt" },
-    _meta: oldMeta,
-  });
-  assert.equal(blocked.status, 200, await blocked.clone().text());
-  assert.match(await blocked.text(), /stopped further tool execution/i);
-  await assert.rejects(access(blockedPath));
-
-  const markdownPath = join(root, ".state", "handoffs", `${handoffId}.md`);
-  const markdown = await readFile(markdownPath, "utf8");
-  assert.match(markdown, /Finish the current Runtime repair/);
-  assert.match(markdown, /@DevSpace Resume handoff/);
-  assert.doesNotMatch(markdown, /chat-that-became-too-large/);
-
-  const resumed = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
-    name: "open_workspace",
-    arguments: { handoff_id: handoffId },
-    _meta: { "openai/session": "fresh-chat" },
-  });
-  assert.equal(resumed.status, 200, await resumed.clone().text());
-  const resumedBody = await resumed.json() as {
-    result: { structuredContent: { workspace_id: string; root: string; handoff: { id: string; markdown: string } } };
-  };
-  assert.equal(resumedBody.result.structuredContent.root, root);
-  assert.equal(resumedBody.result.structuredContent.handoff.id, handoffId);
-  assert.match(resumedBody.result.structuredContent.handoff.markdown, /Continuation rule/);
-
-  // Direct MCP/custom clients do not send ChatGPT's openai/session metadata and
-  // therefore remain outside this automatic stop policy.
-  for (let attempt = 0; attempt < 11; attempt += 1) {
-    const direct = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
-      name: "read",
-      arguments: { workspace_id: workspaceId, path: "handoff-source.txt" },
-    });
-    assert.equal(direct.status, 200, await direct.clone().text());
-    assert.doesNotMatch(await direct.text(), /context budget/i);
-  }
 });
 
 test("a client cannot opt a modern exec_command into legacy wording by sending the header", async (t) => {

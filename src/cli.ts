@@ -766,11 +766,6 @@ async function runDoctor(): Promise<void> {
     console.log(
       `Runtime internals: ${config.exposeRuntimeInternals ? "exposed for diagnostics" : "hidden"}`,
     );
-    console.log(
-      `ChatGPT handoff: ${config.handoff.enabled
-        ? `enabled (${config.handoff.maxToolCalls} calls / ${config.handoff.maxContextBytes} bytes / ${config.handoff.maxAgeMinutes} minutes)`
-        : "disabled"}`,
-    );
     const providers = buildLocalAgentProviderStatuses(
       config.subagents,
       getLocalAgentProviderAvailabilitySnapshot(process.env, config.subagents),

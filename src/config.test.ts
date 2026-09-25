@@ -19,12 +19,6 @@ try {
   assert.deepEqual(defaults.allowedRoots, [process.cwd()]);
   assert.deepEqual(defaults.allowedHosts, ["localhost", "127.0.0.1", "::1"]);
   assert.equal(defaults.toolMode, "codex");
-  assert.deepEqual(defaults.handoff, {
-    enabled: true,
-    maxToolCalls: 50,
-    maxContextBytes: 384 * 1024,
-    maxAgeMinutes: 240,
-  });
   assert.equal(defaults.skillsEnabled, true);
   assert.equal(defaults.artifactsEnabled, false);
   assert.deepEqual(defaults.subagents, {
@@ -58,12 +52,6 @@ try {
     },
     storage: { stateDir: "~/state" },
     tools: { mode: "claude" },
-    handoff: {
-      enabled: true,
-      maxToolCalls: 80,
-      maxContextBytes: 512 * 1024,
-      maxAgeMinutes: 180,
-    },
     ui: { enabled: false },
     artifacts: { enabled: true, maxFileBytes: 321 },
     skills: { enabled: false, paths: ["~/skills"], agentDir: "~/agent" },
@@ -105,12 +93,6 @@ try {
     "example.internal",
   ]);
   assert.equal(configured.toolMode, "claude");
-  assert.deepEqual(configured.handoff, {
-    enabled: true,
-    maxToolCalls: 80,
-    maxContextBytes: 512 * 1024,
-    maxAgeMinutes: 180,
-  });
   assert.equal(configured.stateDir, resolve(homedir(), "state"));
   assert.equal(configured.worktreeRoot, resolve(homedir(), "trees"));
   assert.equal(configured.artifactsEnabled, true);

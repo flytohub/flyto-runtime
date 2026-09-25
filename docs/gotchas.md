@@ -278,15 +278,3 @@ The legacy `ui.enabled` configuration field is accepted only for upgrade
 compatibility and no longer enables a card. Historical reviews remain available
 through their Git-backed `review_ref` and the local `devspace show-changes`
 command.
-
-## ChatGPT Conversation Reached Its Runtime Budget
-
-Runtime intentionally stops tools in a ChatGPT session after its configured
-handoff budget is reached. This is not a server or tunnel failure. Copy the
-returned resume prompt, open a new chat, select `@DevSpace`, and send it. The
-saved `handoff_id` restores the workspace and bounded continuation document.
-
-Handoffs are stored under the configured state directory in `handoffs/`. Change
-the `handoff` limits in `config.jsonc` and restart Runtime only when the defaults
-do not fit the local workflow. Disabling handoffs removes this guard and can let
-large tool histories accumulate again.

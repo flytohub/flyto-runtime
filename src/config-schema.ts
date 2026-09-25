@@ -27,13 +27,6 @@ const toolsConfigSchema = z.object({
   exposeRuntimeInternals: z.boolean().default(false),
 }).strict().prefault({});
 
-const handoffConfigSchema = z.object({
-  enabled: z.boolean().default(true),
-  maxToolCalls: z.number().int().min(10).default(50),
-  maxContextBytes: z.number().int().min(64 * 1024).default(384 * 1024),
-  maxAgeMinutes: z.number().int().min(30).default(240),
-}).strict().prefault({});
-
 const uiConfigSchema = z.object({
   enabled: z.boolean().default(false).describe("Legacy compatibility field. Runtime no longer emits MCP Apps/result-card metadata."),
 }).strict().prefault({});
@@ -83,7 +76,6 @@ export const devspaceConfigSchema = z.object({
   workspaces: workspacesConfigSchema,
   storage: storageConfigSchema,
   tools: toolsConfigSchema,
-  handoff: handoffConfigSchema,
   ui: uiConfigSchema,
   artifacts: artifactsConfigSchema,
   skills: skillsConfigSchema,

@@ -9,7 +9,6 @@ type SectionOverrides = {
   workspaces?: Partial<DevspaceConfig["workspaces"]>;
   storage?: Partial<DevspaceConfig["storage"]>;
   tools?: Partial<DevspaceConfig["tools"]>;
-  handoff?: Partial<DevspaceConfig["handoff"]>;
   ui?: Partial<DevspaceConfig["ui"]>;
   artifacts?: Partial<DevspaceConfig["artifacts"]>;
   skills?: Partial<DevspaceConfig["skills"]>;
@@ -33,7 +32,6 @@ export function writeTestDevspaceConfig(
     workspaces: { ...defaults.workspaces, ...overrides.workspaces },
     storage: { ...defaults.storage, ...overrides.storage },
     tools: { ...defaults.tools, ...overrides.tools },
-    handoff: { ...defaults.handoff, ...overrides.handoff },
     ui: { ...defaults.ui, ...overrides.ui },
     artifacts: { ...defaults.artifacts, ...overrides.artifacts },
     skills: { ...defaults.skills, ...overrides.skills },

@@ -73,7 +73,6 @@ import {
   allowedRootsSentence,
   registerWorkspaceTools,
 } from "./mcp-workspace-tools.js";
-import { ConversationHandoffManager } from "./conversation-handoff.js";
 function mcpServerInfo() {
   return {
     name: "flyto2-runtime",
@@ -132,11 +131,8 @@ function serverInstructions(
   const diagnostics = config.exposeRuntimeInternals
     ? ` Diagnostic Runtime internals are explicitly enabled. Use ${toolNames.runtimeEvents}, ${toolNames.runtimeWait}, ${toolNames.runtimeEvidence}, or watch tools only when diagnosing Runtime behavior; normal coding should still use the primary workspace/file/process primitives.`
     : "";
-  const handoff = config.handoff.enabled
-    ? ` When first opening a workspace for a task, include a concise task_context. If Runtime reports that the conversation context budget was reached, stop using tools in that chat, show the saved handoff ID and resume prompt to the user, and continue only in a new chat with @DevSpace.`
-    : "";
 
-  return `${common} ${toolSurface.instructions({ agents, skills })}${execution}${diagnostics}${artifactInstruction}${showChangesInstruction}${handoff}${selfUpdateInstruction()}`;
+  return `${common} ${toolSurface.instructions({ agents, skills })}${execution}${diagnostics}${artifactInstruction}${showChangesInstruction}${selfUpdateInstruction()}`;
 }
 
 // A remote host can only update a Runtime it cannot restart by hand if it knows
@@ -195,7 +191,6 @@ export function createMcpServer(
   reactiveCommands: ReactiveCommandRunner,
   workspaceWatches: WorkspaceWatchRegistry,
   trackToolActivity?: TrackToolActivity,
-  conversationHandoffs?: ConversationHandoffManager,
 ): McpServer {
   const toolSurface = getToolSurface(config.toolMode);
   const server = new McpServer(
@@ -218,7 +213,6 @@ export function createMcpServer(
     reactiveCommands,
     workspaceWatches,
     trackToolActivity,
-    conversationHandoffs,
   );
   return server;
 }
@@ -236,16 +230,12 @@ function registerMcpSurface(
   reactiveCommands: ReactiveCommandRunner,
   workspaceWatches: WorkspaceWatchRegistry,
   trackToolActivity?: TrackToolActivity,
-  conversationHandoffs?: ConversationHandoffManager,
 ): void {
   const trackedTarget = trackToolActivity
     ? withTrackedToolHandlers(server, trackToolActivity)
     : server;
-  const guardedTarget = conversationHandoffs
-    ? withConversationHandoffHandlers(trackedTarget, conversationHandoffs)
-    : trackedTarget;
   const registrationTarget = withDurableToolHandlers(
-    guardedTarget,
+    trackedTarget,
     durableOperations,
     {
       onCompleted: (completion) => emitDurableToolEvent(runtimeEvents, completion),
@@ -259,7 +249,6 @@ function registerMcpSurface(
     workspaces,
     reviewCheckpoints,
     resolveLocalAgentProviders,
-    conversationHandoffs,
   });
 
   if (config.exposeRuntimeInternals) {
@@ -289,28 +278,6 @@ function registerMcpSurface(
       incomingArtifactAdapters,
     });
   }
-}
-
-function withConversationHandoffHandlers(
-  server: McpRegistrationTarget,
-  handoffs: ConversationHandoffManager,
-): McpRegistrationTarget {
-  return {
-    registerTool: ((...args: unknown[]) => {
-      const name = String(args[0]);
-      const handler = args.at(-1) as (...handlerArgs: unknown[]) => unknown;
-      return (server.registerTool as (...callArgs: unknown[]) => unknown)(
-        ...args.slice(0, -1),
-        (...handlerArgs: unknown[]) => handoffs.runTool(
-          name,
-          handlerArgs[0],
-          handlerArgs[1] as { _meta?: unknown } | undefined,
-          () => Promise.resolve(handler(...handlerArgs)),
-        ),
-      );
-    }) as McpRegistrationTarget["registerTool"],
-    registerResource: server.registerResource.bind(server),
-  };
 }
 
 function withTrackedToolHandlers(
@@ -370,7 +337,6 @@ export function createServer(
   const reactiveCommands = new ReactiveCommandRunner(config.stateDir, runtimeEvents);
   const workspaceWatches = new WorkspaceWatchRegistry(config.stateDir, runtimeEvents);
   const workspaces = new WorkspaceRegistry(config, workspaceStore);
-  const conversationHandoffs = new ConversationHandoffManager(config, workspaces);
   const reviewCheckpoints = createReviewCheckpointManager();
   const processSessions = new ProcessSessionManager();
   const toolActivities = new ToolActivityTracker();
@@ -407,7 +373,6 @@ export function createServer(
       reactiveCommands,
       workspaceWatches,
       toolActivities.track,
-      conversationHandoffs,
     );
   });
   const logMcpHandlerError = (error: Error) => logEvent(
@@ -586,7 +551,6 @@ export function createServer(
         oauthProvider.close();
         durableOperations.close();
         runtimeEvents.close();
-        conversationHandoffs.close();
         workspaceStore.close?.();
       })();
       return closePromise;
