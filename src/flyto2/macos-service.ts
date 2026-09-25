@@ -114,6 +114,15 @@ export function parseMacRuntimeConfigDirectory(plist: string): string | undefine
     .replaceAll("&amp;", "&");
 }
 
+function resolveMacRuntimeConfigDirectory(
+  configDirectory?: string,
+  homeDirectory = homedir(),
+): string {
+  return configDirectory
+    ?? installedMacRuntimeConfigDirectory(homeDirectory)
+    ?? devspaceConfigDir();
+}
+
 export function renderMacRuntimeLaunchAgent(options: {
   packageRoot: string;
   configDirectory: string;
@@ -176,7 +185,7 @@ export function installMacRuntimeService(
 ): MacRuntimeServiceStatus {
   assertMacOs();
   const packageRoot = options.packageRoot ?? flyto2RuntimePackageRoot();
-  const configDirectory = options.configDirectory ?? devspaceConfigDir();
+  const configDirectory = resolveMacRuntimeConfigDirectory(options.configDirectory, options.homeDirectory);
   const nodePath = options.nodePath ?? process.execPath;
   const homeDirectory = options.homeDirectory ?? homedir();
   const paths = macRuntimeServicePaths(homeDirectory);
@@ -242,7 +251,7 @@ export function startMacRuntimeService(
 ): MacRuntimeServiceStatus {
   assertMacOs();
   const packageRoot = options.packageRoot ?? flyto2RuntimePackageRoot();
-  const configDirectory = options.configDirectory ?? devspaceConfigDir();
+  const configDirectory = resolveMacRuntimeConfigDirectory(options.configDirectory, options.homeDirectory);
   const homeDirectory = options.homeDirectory ?? homedir();
   const paths = macRuntimeServicePaths(homeDirectory);
   if (!existsSync(paths.plistPath)) {
@@ -262,7 +271,7 @@ export function stopMacRuntimeService(
 ): MacRuntimeServiceStatus {
   assertMacOs();
   const packageRoot = options.packageRoot ?? flyto2RuntimePackageRoot();
-  const configDirectory = options.configDirectory ?? devspaceConfigDir();
+  const configDirectory = resolveMacRuntimeConfigDirectory(options.configDirectory, options.homeDirectory);
   const homeDirectory = options.homeDirectory ?? homedir();
   bootoutLabel(FLYTO2_RUNTIME_LAUNCH_AGENT_LABEL);
   return macRuntimeServiceStatus({ packageRoot, configDirectory, homeDirectory });
@@ -273,7 +282,7 @@ export function restartMacRuntimeService(
 ): MacRuntimeServiceStatus {
   assertMacOs();
   const packageRoot = options.packageRoot ?? flyto2RuntimePackageRoot();
-  const configDirectory = options.configDirectory ?? devspaceConfigDir();
+  const configDirectory = resolveMacRuntimeConfigDirectory(options.configDirectory, options.homeDirectory);
   const homeDirectory = options.homeDirectory ?? homedir();
   const paths = macRuntimeServicePaths(homeDirectory);
   if (!existsSync(paths.plistPath)) {
@@ -303,7 +312,7 @@ function reloadMacRuntimeService(
   options: Omit<InstallMacRuntimeServiceOptions, "start"> = {},
 ): MacRuntimeServiceStatus {
   const packageRoot = options.packageRoot ?? flyto2RuntimePackageRoot();
-  const configDirectory = options.configDirectory ?? devspaceConfigDir();
+  const configDirectory = resolveMacRuntimeConfigDirectory(options.configDirectory, options.homeDirectory);
   const homeDirectory = options.homeDirectory ?? homedir();
   const paths = macRuntimeServicePaths(homeDirectory);
   const config = loadConfig({
@@ -412,7 +421,7 @@ export function uninstallMacRuntimeService(
 ): MacRuntimeServiceStatus {
   assertMacOs();
   const packageRoot = options.packageRoot ?? flyto2RuntimePackageRoot();
-  const configDirectory = options.configDirectory ?? devspaceConfigDir();
+  const configDirectory = resolveMacRuntimeConfigDirectory(options.configDirectory, options.homeDirectory);
   const homeDirectory = options.homeDirectory ?? homedir();
   const paths = macRuntimeServicePaths(homeDirectory);
   bootoutLabel(FLYTO2_RUNTIME_LAUNCH_AGENT_LABEL);
@@ -429,7 +438,7 @@ export function rollbackMacRuntimeService(
 ): MacRuntimeServiceStatus {
   assertMacOs();
   const packageRoot = options.packageRoot ?? flyto2RuntimePackageRoot();
-  const configDirectory = options.configDirectory ?? devspaceConfigDir();
+  const configDirectory = resolveMacRuntimeConfigDirectory(options.configDirectory, options.homeDirectory);
   const homeDirectory = options.homeDirectory ?? homedir();
   const paths = macRuntimeServicePaths(homeDirectory);
   if (!existsSync(paths.previousPlistPath)) {
@@ -448,7 +457,7 @@ export function macRuntimeServiceStatus(options: {
   homeDirectory?: string;
 } = {}): MacRuntimeServiceStatus {
   const packageRoot = options.packageRoot ?? flyto2RuntimePackageRoot();
-  const configDirectory = options.configDirectory ?? devspaceConfigDir();
+  const configDirectory = resolveMacRuntimeConfigDirectory(options.configDirectory, options.homeDirectory);
   const homeDirectory = options.homeDirectory ?? homedir();
   const paths = macRuntimeServicePaths(homeDirectory);
 

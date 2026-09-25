@@ -94,6 +94,15 @@ export function parseWindowsRuntimeConfigDirectory(script: string): string | und
   return match?.[1]?.replaceAll("''", "'");
 }
 
+function resolveWindowsRuntimeConfigDirectory(
+  configDirectory?: string,
+  serviceRoot?: string,
+): string {
+  return configDirectory
+    ?? installedWindowsRuntimeConfigDirectory(serviceRoot)
+    ?? devspaceConfigDir();
+}
+
 export function renderWindowsRuntimeScript(options: {
   packageRoot: string;
   configDirectory: string;
@@ -149,7 +158,7 @@ export function installWindowsRuntimeService(
 ): WindowsRuntimeServiceStatus {
   assertWindows();
   const packageRoot = options.packageRoot ?? flyto2RuntimePackageRoot();
-  const configDirectory = options.configDirectory ?? devspaceConfigDir();
+  const configDirectory = resolveWindowsRuntimeConfigDirectory(options.configDirectory, options.serviceRoot);
   const nodePath = options.nodePath ?? process.execPath;
   const paths = windowsRuntimeServicePaths(options.serviceRoot);
   const cliPath = winPath.join(packageRoot, "dist", "cli.js");
@@ -205,7 +214,7 @@ export function startWindowsRuntimeService(
 ): WindowsRuntimeServiceStatus {
   assertWindows();
   const packageRoot = options.packageRoot ?? flyto2RuntimePackageRoot();
-  const configDirectory = options.configDirectory ?? devspaceConfigDir();
+  const configDirectory = resolveWindowsRuntimeConfigDirectory(options.configDirectory, options.serviceRoot);
   const paths = windowsRuntimeServicePaths(options.serviceRoot);
   if (!windowsScheduledTaskExists(FLYTO2_RUNTIME_WINDOWS_TASK)) {
     return installWindowsRuntimeService({ ...options, start: true });
@@ -238,7 +247,7 @@ export function restartWindowsRuntimeService(
 ): WindowsRuntimeServiceStatus {
   assertWindows();
   const packageRoot = options.packageRoot ?? flyto2RuntimePackageRoot();
-  const configDirectory = options.configDirectory ?? devspaceConfigDir();
+  const configDirectory = resolveWindowsRuntimeConfigDirectory(options.configDirectory, options.serviceRoot);
   const paths = windowsRuntimeServicePaths(options.serviceRoot);
   if (!windowsScheduledTaskExists(FLYTO2_RUNTIME_WINDOWS_TASK)) {
     return installWindowsRuntimeService({ ...options, start: true });
@@ -302,7 +311,7 @@ export function rollbackWindowsRuntimeService(
 ): WindowsRuntimeServiceStatus {
   assertWindows();
   const packageRoot = options.packageRoot ?? flyto2RuntimePackageRoot();
-  const configDirectory = options.configDirectory ?? devspaceConfigDir();
+  const configDirectory = resolveWindowsRuntimeConfigDirectory(options.configDirectory, options.serviceRoot);
   const paths = windowsRuntimeServicePaths(options.serviceRoot);
   if (!existsSync(paths.previousTaskXmlPath) || !existsSync(paths.previousScriptPath)) {
     throw new Error("No previous Flyto2 Runtime Windows task is available for rollback.");
@@ -342,7 +351,7 @@ export function windowsRuntimeServiceStatus(options: {
   serviceRoot?: string;
 } = {}): WindowsRuntimeServiceStatus {
   const packageRoot = options.packageRoot ?? flyto2RuntimePackageRoot();
-  const configDirectory = options.configDirectory ?? devspaceConfigDir();
+  const configDirectory = resolveWindowsRuntimeConfigDirectory(options.configDirectory, options.serviceRoot);
   const paths = windowsRuntimeServicePaths(options.serviceRoot);
   if (platform() !== "win32") {
     return {

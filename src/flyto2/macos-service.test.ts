@@ -70,6 +70,7 @@ test("native service installer can stage a LaunchAgent without loading it", {
   assert.equal(status.installed, true);
   assert.equal(status.loaded, loadedBeforeStage);
   assert.equal(status.plistPath, paths.plistPath);
+  assert.equal(macRuntimeServiceStatus({ homeDirectory }).configDirectory, configDirectory);
   const plist = await readFile(paths.plistPath, "utf8");
   assert.match(plist, /local\.flyto2\.runtime/);
   assert.match(plist, /FLYTO2_RUNTIME_CONFIG_DIR/);
