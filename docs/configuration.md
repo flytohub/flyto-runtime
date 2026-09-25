@@ -181,13 +181,13 @@ Subagent providers are explicit. Omitted providers are disabled:
 | Value | Behavior |
 | --- | --- |
 | `on-demand` | Default. `open_workspace` advertises the `subagents` skill and the model reads it only when the task benefits from delegation. |
-| `preload` | `open_workspace` includes the `subagents` workflow in its initial workspace instructions instead of advertising that skill for a separate read. |
+| `preload` | Claude-mode clients may include the `subagents` workflow in the initial workspace instructions instead of advertising that skill for a separate read. ChatGPT/Codex mode still keeps delegation on-demand so ordinary workspace opens stay compact. |
 
-Both modes keep ordinary work on the primary tools. Server instructions use
-`background_task` only to persist recovery state for multi-step work that may
+Both modes keep ordinary work on the primary tools. In ChatGPT/Codex mode,
+`background_task` only persists recovery state for multi-step work that may
 cross a page or MCP reconnect; ChatGPT continues the actual analysis, edits,
 verification, and commit work itself. Subagent providers run only through an
-explicit subagent workflow.
+explicit user-requested delegation workflow.
 
 Profiles are loaded from `~/.devspace/agents/*.md` and project
 `.devspace/agents/*.md`. `devspace agents targets` prints the configured targets

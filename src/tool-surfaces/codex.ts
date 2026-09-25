@@ -33,15 +33,17 @@ interface CodexProcessSnapshot extends Omit<ProcessSnapshot, "sessionId"> {
 
 const CODEX_DURABLE_EVENT_TYPE = "codex.exec.exited";
 const CODEX_DURABLE_SESSION_PREFIX = "proc_";
-const DEFAULT_CODEX_YIELD_MS = 3_000;
+const DEFAULT_CODEX_YIELD_MS = 750;
 const DEFAULT_CODEX_INTERACTIVE_YIELD_MS = 250;
-const DEFAULT_CODEX_POLL_YIELD_MS = 5_000;
-const LEGACY_SHELL_WAIT_MS = 1_000;
-const LEGACY_SHELL_POLL_WAIT_MS = 5_000;
+const DEFAULT_CODEX_POLL_YIELD_MS = 1_500;
+const DEFAULT_CODEX_RETRY_AFTER_MS = 5_000;
+const LEGACY_SHELL_WAIT_MS = 750;
+const LEGACY_SHELL_POLL_WAIT_MS = 1_000;
 // Tool output is copied into the host conversation. Keep the default small;
 // full command evidence remains available in the durable Runtime job and a
 // truncated result still preserves both the head and tail for diagnosis.
-const DEFAULT_MAX_OUTPUT_TOKENS = 1_000;
+const DEFAULT_MAX_OUTPUT_TOKENS = 600;
+const RUNNING_PROGRESS_PREVIEW_CHARS = 700;
 const CODEX_UNCERTAIN_OUTCOME_SIGNAL = "OUTCOME_UNCERTAIN";
 
 const CODEX_INSTRUCTIONS = `Follow instructions returned by ${toolNames.openWorkspace}; read applicable instruction and skill files before working in their scope.`;
@@ -151,14 +153,12 @@ function registerApplyPatchTool(context: ToolRegistrationContext): void {
     {
       title: "Apply patch",
       description:
-        "Apply one Codex-style patch to add, overwrite, update, delete, or move workspace files. Paths must be relative to the workspace.",
+        "Apply a Codex-style patch to workspace files. Paths are workspace-relative.",
       inputSchema: {
         workspace_id: z.string().describe(workspaceIdDescription),
         patch: z
           .string()
-          .describe(
-            "Patch text enclosed by *** Begin Patch and *** End Patch markers.",
-          ),
+          .describe("Patch enclosed by *** Begin Patch / *** End Patch."),
       },
       outputSchema: resultOutputSchema({
         additions: z.number(),
@@ -234,31 +234,25 @@ function registerExecCommandTool(
     {
       title: "Execute command",
       description:
-        "Run a command in a workspace with the user's local permissions. If the result is still running, continue its session_id with write_stdin instead of running the command again. Do not wrap status checks in shell sleep/polling loops; query once, let Runtime own long processes, and continue other useful work. Set tty=true only for input-driven interactive commands.",
+        "Run a workspace command. If still running, continue its session_id with write_stdin; never rerun it. Use tty only for interactive input.",
       inputSchema: {
         workspace_id: z.string().describe(workspaceIdDescription),
         cmd: z.string().min(1).describe("Shell command to execute."),
         tty: z
           .boolean()
           .optional()
-          .describe(
-            "Allocate a pseudo-terminal for interactive commands. Defaults to false.",
-          ),
+          .describe("Allocate a PTY for interactive input."),
         working_directory: z
           .string()
           .optional()
-          .describe(
-            "Working directory relative to the workspace root. Defaults to the workspace root.",
-          ),
+          .describe("Workspace-relative working directory."),
         timeout_seconds: z
           .number()
           .int()
           .positive()
           .max(3_600)
           .optional()
-          .describe(
-            "Optional hard timeout for a non-interactive command. Maximum 3600 seconds.",
-          ),
+          .describe("Optional non-interactive timeout, max 3600s."),
       },
       outputSchema: processOutputSchema(),
       annotations: SHELL_TOOL_ANNOTATIONS,
@@ -363,22 +357,20 @@ function registerWriteStdinTool(
     {
       title: "Continue process",
       description:
-        "Continue a session returned by exec_command. Omit chars to wait for completion. Interactive sessions accept input; \\u0003 interrupts or cancels the process. Do not rerun the original command while its session is still available, and do not call write_stdin again sooner than retry_after_ms when the process remains running.",
+        "Continue exec_command by session_id. Omit chars to wait; interactive sessions accept input; \\u0003 interrupts. Respect retry_after_ms.",
       inputSchema: {
         workspace_id: z
           .string()
-          .describe("Workspace identifier used to start the process."),
+          .describe("Workspace that started the process."),
         session_id: z
           .string()
           .min(1)
           .max(128)
-          .describe("Opaque process session identifier returned by exec_command."),
+          .describe("Session id from exec_command."),
         chars: z
           .string()
           .optional()
-          .describe(
-            "Input for an interactive session. Omit to wait for completion; use \\u0003 to interrupt or cancel.",
-          ),
+          .describe("Interactive input; omit to wait; \\u0003 interrupts."),
       },
       outputSchema: processOutputSchema(),
       annotations: SHELL_TOOL_ANNOTATIONS,
@@ -506,13 +498,15 @@ async function durableProcessSnapshot(
       - Date.parse(job.started_at),
   );
   if (job.status === "running") {
+    const evidence = reactiveCommands.readEvidence(job.evidence_ref, 1_024);
+    const progress = runningProgressPreview(evidence.text);
     return {
       sessionId: codexSessionIdForReactiveJob(jobId),
-      output: "",
-      outputTruncated: false,
+      output: progress,
+      outputTruncated: evidence.truncated || evidence.text.length > progress.length,
       running: true,
       wallTimeMs,
-      retryAfterMs: DEFAULT_CODEX_POLL_YIELD_MS,
+      retryAfterMs: DEFAULT_CODEX_RETRY_AFTER_MS,
     };
   }
 
@@ -531,6 +525,13 @@ async function durableProcessSnapshot(
     signal: orphaned ? CODEX_UNCERTAIN_OUTCOME_SIGNAL : job.signal,
     wallTimeMs,
   };
+}
+
+function runningProgressPreview(text: string): string {
+  const trimmed = text.trimEnd();
+  if (!trimmed) return "";
+  if (trimmed.length <= RUNNING_PROGRESS_PREVIEW_CHARS) return trimmed;
+  return `…${trimmed.slice(-RUNNING_PROGRESS_PREVIEW_CHARS)}`;
 }
 
 export function processLogFields(result: CodexProcessSnapshot): Partial<ToolLogFields> {

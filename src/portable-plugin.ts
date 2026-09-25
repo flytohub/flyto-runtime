@@ -15,6 +15,21 @@ export const DEFAULT_PLUGIN_DISPLAY_NAME = "Flyto2 Runtime";
 export const DEFAULT_PLUGIN_DESCRIPTION =
   "Connect ChatGPT and Codex to Flyto2 Runtime for workspace-scoped local development and automation.";
 
+export const PORTABLE_TOOL_CATALOG_REVISIONS = {
+  codex: "codex-v2",
+  claude: "claude-v1",
+} as const;
+
+export type PortableToolMode = keyof typeof PORTABLE_TOOL_CATALOG_REVISIONS;
+
+export function portablePluginServerName(
+  name = DEFAULT_PLUGIN_NAME,
+  toolMode: PortableToolMode = "codex",
+): string {
+  validatePluginName(name, "plugin name");
+  return `${name}-${PORTABLE_TOOL_CATALOG_REVISIONS[toolMode]}`;
+}
+
 export interface PortablePluginPackageOptions {
   mcpUrl: string;
   version: string;

@@ -70,7 +70,7 @@ Codex mode exposes `open_workspace`, `read`, `apply_patch`, `exec_command`, `wri
 
 Long non-interactive Codex commands automatically continue behind `exec_command`; the returned opaque process session is continued with `write_stdin`. Interactive PTY sessions use the same model-facing session shape, so the model never needs to choose between process implementations. Claude compatibility `bash` uses the same internal execution machinery. Models do not need separate event, wait, or evidence tools for normal work.
 
-To switch an existing installation to the Codex-first surface, run `flyto2-runtime config set tools.mode codex` and then `flyto2-runtime service restart`. If ChatGPT still shows the cached legacy five-tool list, reconnect the connector or start a fresh conversation when practical. Until the host refreshes its schema, a cached `bash` call using `@flyto2/task start <complete task>` is translated to the durable ChatGPT-owned task store. ChatGPT continues the work itself with the normal workspace tools; Runtime only preserves recovery state.
+To switch an existing installation to the Codex-first surface, run `flyto2-runtime config set tools.mode codex` and then `flyto2-runtime service restart`. Rebuild and replace the ChatGPT Plugin ZIP after a tool-surface change: generated packages now use a revisioned MCP catalog id such as `flyto2-runtime-codex-v2`, forcing a fresh tool scan instead of reusing the legacy five-tool identity. Until the host refreshes its schema, a cached `bash` call using `@flyto2/task start <complete task>` is translated to the durable ChatGPT-owned task store. ChatGPT continues the work itself with the normal workspace tools; Runtime only preserves recovery state.
 
 ## Claude, Codex, and custom MCP clients
 

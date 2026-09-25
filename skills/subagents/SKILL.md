@@ -1,19 +1,15 @@
 ---
 name: subagents
-description: Delegate focused coding, research, review, or verification work to a bounded DevSpace subagent. Use when a task benefits from separate context, a specialist perspective, or a follow-up with the same worker.
+description: Delegate focused coding, research, review, or verification work to a bounded DevSpace subagent. Use only when the user explicitly asks to delegate work to another local agent/provider.
 ---
 
 # DevSpace subagents
 
-Subagents are optional. Use the normal workspace tools for routine work. Use `background_task` when a complete multi-step task must keep running after the current ChatGPT turn, page, or MCP connection ends, or when a separate worker materially helps through independent context, specialization, or follow-up.
+Subagents are optional and must not silently take over normal ChatGPT coding work. Use the normal workspace tools for routine work. Invoke a local agent only when the user explicitly requests delegation to another provider or asks for a separate-agent review/research pass.
 
-## Durable work from MCP
+`background_task` is not a delegation primitive in ChatGPT/Codex mode. It stores a host-owned durable task record and recovery checkpoint; ChatGPT remains responsible for analysis, edits, tests, and completion after reconnecting.
 
-Start durable work with `background_task` using `action=start`, the current `workspace_id`, and a self-contained prompt. Runtime chooses an enabled provider and immediately returns a `task_id`; its detached local daemon owns the work from that point onward. The task can inspect, edit, and test inside the workspace even if ChatGPT disconnects.
-
-Use `action=wait` when the result is a dependency, or `action=status` for one immediate snapshot. Keep `include_response` false until the final response is actually needed so long conversations stay small. Use `action=continue` with the same `task_id` for related follow-up work. Reuse the same `operation_id` only when retrying the exact same start or continue call after losing its response.
-
-The CLI workflow below remains available for local terminal use.
+The CLI workflow below is the explicit delegation path.
 
 Run the DevSpace CLI from the project the subagent should use. Agent commands print compact XML fragments by default. Read that output directly. Do not add `--json`.
 

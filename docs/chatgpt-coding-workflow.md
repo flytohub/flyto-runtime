@@ -151,13 +151,14 @@ Skill paths may be outside the workspace. DevSpace only permits reading:
 
 Set `skills.enabled` to `false` to hide skills from workspace output. Enable
 Subagents and choose providers through `devspace init` or the persisted provider
-configuration. `subagents.instructions` defaults to `on-demand`, which exposes
-the managed `subagents` skill for a separate read only when the model decides
-delegation would help. Set it to `preload` to include those instructions in the
-initial `open_workspace` result instead. The skill teaches the minimal
+configuration. `subagents.instructions` defaults to `on-demand`. In ChatGPT/Codex
+mode the managed `subagents` skill always stays on-demand so the initial
+`open_workspace` result remains compact; `preload` applies only to Claude mode.
+The skill teaches the minimal
 `devspace agents targets`, `devspace agents ls`, `devspace agents run`,
 `devspace agents continue`, `devspace agents show`, and `devspace agents wait`
-workflow. The catalog
+workflow, and should be used only after an explicit user request to delegate.
+The catalog
 comes from `open_workspace`; `devspace agents ls` lists existing subagent
 sessions for that workspace.
 
@@ -184,11 +185,15 @@ DevSpace uses the Codex-style surface by default. It exposes:
 
 In this mode, `write`, `edit`, and `bash` are not registered. `exec_command`
 returns a process session ID when a command is still running after its bounded
-yield window. Modern calls wait up to about three seconds initially, and a
-`write_stdin` continuation may wait up to about five seconds for completion.
-A running result includes `retry_after_ms`; do not poll faster than that hint or
-wrap status checks in shell sleep loops. Cached legacy ChatGPT `bash` calls keep
-their short first yield so an older host catalog does not hold a request open.
+yield window. ChatGPT/Codex calls yield in under a second initially, and a
+continuation waits only briefly before returning control to the host. While a
+command is still running, Runtime returns a small tail preview of available
+process evidence instead of an empty response, so the host can show progress
+without copying the full log into conversation state. A running result still
+includes a conservative `retry_after_ms`; do not poll faster than that hint or
+wrap status checks in shell sleep loops. Cached legacy ChatGPT
+`bash` calls use the same short-yield principle so an older host catalog cannot
+hold a request open for multi-second validation work.
 If that cached five-tool catalog does not expose `background_task`, Runtime also
 accepts `@flyto2/task start <complete task>` through the cached `bash` tool and
 translates it to the same durable host-task state. ChatGPT must continue the work
@@ -199,7 +204,7 @@ itself with the normal workspace tools. Use
 a secondary model for these commands. Set `tty: true` only for commands that
 need a terminal.
 
-To keep long conversations usable, `read` returns at most 400 lines by default
+To keep long conversations usable, `read` returns at most 240 lines by default
 and provides the next offset when a file is longer. Command output is also
 bounded to a compact head-and-tail result by default. For non-interactive
 commands, Runtime retains the full durable evidence locally. These bounds never

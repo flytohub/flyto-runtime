@@ -240,10 +240,9 @@ serve` is not a prerequisite.
 `devspace agents ls` lists existing subagent sessions, not profile
 definitions.
 
-By default, `subagents.instructions` is `on-demand`, so `open_workspace`
-advertises the skill and the model reads it only when useful. Set it to
-`preload` to include the workflow directly in the initial workspace
-instructions instead.
+By default, `subagents.instructions` is `on-demand`. ChatGPT/Codex mode keeps
+the skill on-demand even if an older config says `preload`, so normal workspace
+opens stay compact. `preload` is honored only by Claude mode.
 
 For a Coding Agent, run the installation command printed by
 `devspace init`:

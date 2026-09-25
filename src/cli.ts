@@ -61,6 +61,7 @@ import {
   DEFAULT_PLUGIN_DISPLAY_NAME,
   DEFAULT_PLUGIN_NAME,
   mcpUrlFromPublicBaseUrl,
+  portablePluginServerName,
   writePortablePluginPackage,
 } from "./portable-plugin.js";
 
@@ -306,6 +307,7 @@ async function runInit({
       const plugin = await writePortablePluginPackage({
         mcpUrl: mcpUrlFromPublicBaseUrl(publicBaseUrl),
         version: typeof packageJson.version === "string" ? packageJson.version : "1.0.0",
+        serverName: portablePluginServerName(DEFAULT_PLUGIN_NAME, toolMode ?? "codex"),
       });
       chatGptPluginPath = plugin.outputPath;
     }
@@ -740,7 +742,7 @@ function runConfigCommand(args: string[]): void {
   const value = rest.join(" ").trim();
   if (!key || !value) {
     throw new Error(
-      "Usage: devspace config set <publicBaseUrl|tools.mode|tools.exposeRuntimeInternals> <value>",
+      "Usage: devspace config set <publicBaseUrl|tools.mode|tools.exposeRuntimeInternals|subagents.instructions> <value>",
     );
   }
 
@@ -766,9 +768,15 @@ function runConfigCommand(args: string[]): void {
         value === "true",
       );
       break;
+    case "subagents.instructions":
+      if (value !== "on-demand" && value !== "preload") {
+        throw new Error("subagents.instructions must be `on-demand` or `preload`.");
+      }
+      setDevspaceConfigValue(["subagents", "instructions"], value);
+      break;
     default:
       throw new Error(
-        "Supported config keys: publicBaseUrl, tools.mode, tools.exposeRuntimeInternals.",
+        "Supported config keys: publicBaseUrl, tools.mode, tools.exposeRuntimeInternals, subagents.instructions.",
       );
   }
   console.log(`Updated ${files.configPath}`);
@@ -1007,11 +1015,13 @@ async function runPluginCommand(args: string[]): Promise<void> {
   const packageJson = require("../package.json") as { version?: unknown };
   const version = options.version
     ?? (typeof packageJson.version === "string" ? packageJson.version : "1.0.0");
+  const pluginName = options.name?.trim() || DEFAULT_PLUGIN_NAME;
   const result = await writePortablePluginPackage({
     mcpUrl,
     version,
-    name: options.name,
-    serverName: options.serverName,
+    name: pluginName,
+    serverName: options.serverName
+      ?? portablePluginServerName(pluginName, files.config.tools.mode),
     displayName: options.displayName,
     description: options.description,
     outputPath: options.outputPath,
@@ -1024,7 +1034,8 @@ async function runPluginCommand(args: string[]): Promise<void> {
 
   console.log(`Created ChatGPT plugin: ${result.outputPath}`);
   console.log(`MCP URL: ${result.mcpUrl}`);
-  console.log("Upload the ZIP in ChatGPT Plugins. OAuth credentials are not stored in the package.");
+  console.log(`MCP catalog id: ${result.serverName}`);
+  console.log("Upload or replace the ZIP in ChatGPT Plugins so ChatGPT scans the current tool catalog. OAuth credentials are not stored in the package.");
 }
 
 interface PluginBuildCliOptions {
@@ -1137,6 +1148,7 @@ function printHelp(): void {
       "  devspace config set publicBaseUrl <url|null>",
       "  flyto2-runtime config set tools.mode <codex|claude>",
       "  flyto2-runtime config set tools.exposeRuntimeInternals <true|false>",
+      "  flyto2-runtime config set subagents.instructions <on-demand|preload>",
       "  devspace worktrees prune Prune managed worktrees unused for 12 hours",
       "  devspace show-changes <review-ref> [--json]",
       "  flyto2-runtime flyto2 manifest",

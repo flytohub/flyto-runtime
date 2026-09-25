@@ -9,6 +9,7 @@ import {
   defaultPortablePluginOutputPath,
   mcpUrlFromPublicBaseUrl,
   normalizePortableMcpUrl,
+  portablePluginServerName,
   writePortablePluginPackage,
 } from "./portable-plugin.js";
 
@@ -36,6 +37,11 @@ test("portable plugin refuses insecure remote URLs and credential-bearing URLs",
     () => normalizePortableMcpUrl("https://runtime.example/mcp?token=secret"),
     /must not contain query parameters/,
   );
+});
+
+test("portable plugin catalog identity changes with the model-facing tool surface", () => {
+  assert.equal(portablePluginServerName("flyto2-runtime", "codex"), "flyto2-runtime-codex-v2");
+  assert.equal(portablePluginServerName("flyto2-runtime", "claude"), "flyto2-runtime-claude-v1");
 });
 
 test("portable plugin package keeps URL and identity configurable", () => {

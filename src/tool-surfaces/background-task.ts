@@ -24,25 +24,23 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
     {
       title: "Persist durable ChatGPT task",
       description:
-        "Persist and recover a multi-step task owned by the current MCP host. Runtime stores the task, workspace binding, checkpoints, and final result so ChatGPT can resume after a page or MCP reconnect. Runtime does not delegate the task to Codex, Claude, a local agent, or any other model. Use normal read/edit/process tools to perform the work yourself. Use continue to save a recovery checkpoint, complete when finished, or stop when abandoned.",
+        "Persist ChatGPT-owned task state across reconnects. Runtime stores checkpoints only and never delegates to another model.",
       inputSchema: {
         action: z.enum(["start", "status", "wait", "continue", "complete", "stop"]),
         workspace_id: z.string().describe(workspaceIdDescription),
         task_id: z
           .string()
           .optional()
-          .describe("Task id returned by start. Required for every action except start."),
+          .describe("Task id; omit only for start."),
         prompt: z
           .string()
           .min(1)
           .optional()
-          .describe(
-            "Original task for start; recovery checkpoint/follow-up note for continue; final summary for complete; stop reason for stop.",
-          ),
+          .describe("Task text, checkpoint, final summary, or stop reason."),
         include_response: z
           .boolean()
           .optional()
-          .describe("Include the stored original prompt/checkpoint/final result. Defaults to false."),
+          .describe("Include stored task text. Defaults false."),
       },
       outputSchema: resultOutputSchema({
         task_id: z.string().optional(),

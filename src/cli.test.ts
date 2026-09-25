@@ -69,6 +69,21 @@ try {
   );
   assert.equal(loadConfig(env).exposeRuntimeInternals, true);
 
+  execFileSync(
+    "node",
+    [
+      "--import",
+      "tsx",
+      "src/cli.ts",
+      "config",
+      "set",
+      "subagents.instructions",
+      "on-demand",
+    ],
+    { cwd: process.cwd(), encoding: "utf8", env },
+  );
+  assert.equal(loadConfig(env).subagents.instructions, "on-demand");
+
   const doctor = execFileSync(
     "node",
     ["--import", "tsx", "src/cli.ts", "doctor"],
@@ -126,10 +141,16 @@ try {
     ],
     { cwd: process.cwd(), encoding: "utf8", env },
   );
-  const result = JSON.parse(output) as { ok?: boolean; mcpUrl?: string; outputPath?: string };
+  const result = JSON.parse(output) as {
+    ok?: boolean;
+    mcpUrl?: string;
+    outputPath?: string;
+    serverName?: string;
+  };
   assert.equal(result.ok, true);
   assert.equal(result.mcpUrl, "https://runtime.team.example/mcp");
   assert.equal(result.outputPath, outputPath);
+  assert.equal(result.serverName, "team-runtime-codex-v2");
 
   const archive = unzipSync(readFileSync(outputPath));
   const plugin = JSON.parse(strFromU8(archive["plugin.json"]!)) as { name?: string };
@@ -137,7 +158,10 @@ try {
     mcpServers?: Record<string, { url?: string }>;
   };
   assert.equal(plugin.name, "team-runtime");
-  assert.equal(mcp.mcpServers?.["team-runtime"]?.url, "https://runtime.team.example/mcp");
+  assert.equal(
+    mcp.mcpServers?.["team-runtime-codex-v2"]?.url,
+    "https://runtime.team.example/mcp",
+  );
 } finally {
   rmSync(pluginRoot, { recursive: true, force: true });
 }

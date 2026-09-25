@@ -54,6 +54,19 @@ test("tool modes expose the expected host-facing tool surface", async (t) => {
   }
 });
 
+test("Codex/ChatGPT tool catalog stays compact", async (t) => {
+  const context = await fixture(t, { toolMode: "codex", uiEnabled: false });
+  const tools = await context.client.listTools();
+  const serialized = JSON.stringify(tools.tools);
+  const descriptionChars = tools.tools.reduce(
+    (total, tool) => total + (tool.description?.length ?? 0),
+    0,
+  );
+
+  assert.ok(descriptionChars <= 1_000, `tool descriptions grew to ${descriptionChars} chars`);
+  assert.ok(serialized.length <= 20_000, `tool catalog grew to ${serialized.length} chars`);
+});
+
 test("ChatGPT durable task state is exposed without enabling local agents", async (t) => {
   const context = await fixture(t, {
     toolMode: "codex",
@@ -65,8 +78,8 @@ test("ChatGPT durable task state is exposed without enabling local agents", asyn
   assert.equal(names.filter((name) => name === "background_task").length, 1);
   assert.equal(names.length, 7);
   const backgroundTask = tools.tools.find((tool) => tool.name === "background_task");
-  assert.match(backgroundTask?.description ?? "", /current MCP host/);
-  assert.match(backgroundTask?.description ?? "", /does not delegate the task to Codex, Claude/);
+  assert.match(backgroundTask?.description ?? "", /ChatGPT-owned/);
+  assert.match(backgroundTask?.description ?? "", /never delegates to another model/);
 });
 
 test("healthz exposes only minimal public liveness", async (t) => {
@@ -193,9 +206,9 @@ test("read defaults to a compact resumable window", async (t) => {
       path: "large.txt",
     },
   }));
-  assert.match(String(result.result), /line-400/);
-  assert.doesNotMatch(String(result.result), /line-401/);
-  assert.match(String(result.result), /Use offset=401 to continue/);
+  assert.match(String(result.result), /line-240/);
+  assert.doesNotMatch(String(result.result), /line-241/);
+  assert.match(String(result.result), /Use offset=241 to continue/);
 });
 
 test("Codex non-interactive commands become durable behind exec_command", async (t) => {
@@ -232,6 +245,38 @@ test("Codex non-interactive commands become durable behind exec_command", async 
   assert.equal(finished.running, false);
   assert.equal(finished.exit_code, 0);
   assert.match(finished.result as string, /durable-finished/);
+});
+
+test("Codex running commands expose bounded progress instead of looking stalled", async (t) => {
+  const context = await fixture(t, { toolMode: "codex", uiEnabled: false });
+  const workspaceId = structuredContent(
+    await callOpen(context.client, context.project, "durable-codex-progress"),
+  ).workspace_id;
+  assert.equal(typeof workspaceId, "string");
+
+  const started = structuredContent(await context.client.callTool({
+    name: "exec_command",
+    arguments: {
+      workspace_id: workspaceId,
+      cmd: "node -e \"console.log('phase-one-ready');setTimeout(()=>console.log('phase-two-done'),3200)\"",
+    },
+  }));
+  assert.equal(started.running, true);
+  assert.match(String(started.result), /phase-one-ready/);
+  assert.ok(String(started.result).length < 1_200);
+
+  let finished = started;
+  for (let attempt = 0; attempt < 4 && finished.running; attempt += 1) {
+    finished = structuredContent(await context.client.callTool({
+      name: "write_stdin",
+      arguments: {
+        workspace_id: workspaceId,
+        session_id: started.session_id,
+      },
+    }));
+  }
+  assert.equal(finished.running, false);
+  assert.match(String(finished.result), /phase-two-done/);
 });
 
 test("Codex exec_command replays a lost response without repeating the process side effect", async (t) => {
@@ -970,8 +1015,9 @@ test("open_workspace advertises subagent instructions on demand by default", asy
   assert.doesNotMatch(String(opened.instruction), /# DevSpace subagents/);
 });
 
-test("open_workspace preloads subagent instructions when configured", async (t) => {
+test("open_workspace preloads subagent instructions for Claude mode when configured", async (t) => {
   const context = await fixture(t, {
+    toolMode: "claude",
     localAgentProviders: [{ name: "codex", available: true }],
     subagents: {
       enabled: true,
@@ -984,6 +1030,24 @@ test("open_workspace preloads subagent instructions when configured", async (t) 
   const skills = opened.skills as Array<Record<string, unknown>>;
   assert.equal(skills.some((skill) => skill.name === "subagents"), false);
   assert.match(String(opened.instruction), /# DevSpace subagents/);
+});
+
+test("open_workspace keeps subagent instructions on-demand in ChatGPT/Codex mode", async (t) => {
+  const context = await fixture(t, {
+    toolMode: "codex",
+    localAgentProviders: [{ name: "codex", available: true }],
+    subagents: {
+      enabled: true,
+      instructions: "preload",
+      providers: [{ id: "codex", enabled: true }],
+    },
+  });
+
+  const opened = structuredContent(await callOpen(context.client, context.project, "chat-1"));
+  const skills = opened.skills as Array<Record<string, unknown>>;
+  assert.equal(skills.some((skill) => skill.name === "subagents"), true);
+  assert.doesNotMatch(String(opened.instruction), /# DevSpace subagents/);
+  assert.doesNotMatch(String(opened.instruction), /Runtime chooses an enabled provider/);
 });
 
 test("open_workspace scopes checkout reuse to OpenAI session metadata", async (t) => {
@@ -1806,7 +1870,7 @@ test("a cached ChatGPT bash call yields quickly and polls via @flyto2/job", asyn
   const startedBody = await started.json() as { result: { structuredContent: { session_id: string; running: boolean } } };
   assert.equal(startedBody.result.structuredContent.running, true);
   let polledText = "";
-  for (let attempt = 0; attempt < 3 && !/polled-later/.test(polledText); attempt += 1) {
+  for (let attempt = 0; attempt < 5 && !/polled-later/.test(polledText); attempt += 1) {
     const polled = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
       name: "bash", arguments: { workspaceId, command: `@flyto2/job ${startedBody.result.structuredContent.session_id}` },
     });

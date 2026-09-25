@@ -43,7 +43,7 @@ interface OpenWorkspaceInput {
   base_ref?: string;
 }
 
-const DEFAULT_READ_LIMIT_LINES = 400;
+const DEFAULT_READ_LIMIT_LINES = 240;
 
 const workspaceSkillOutputSchema = z.object({
   name: z.string(),
@@ -97,23 +97,23 @@ function registerOpenWorkspaceTool(options: WorkspaceToolRegistrationOptions): v
     {
       title: "Open workspace",
       description:
-        "Start work in a project directory or isolated worktree when no usable workspace_id exists for it. During continued work, reuse the existing workspace_id instead of calling this tool again. By default this uses the actual checkout; set mode=\"worktree\" for isolated or parallel work.",
+        "Open a project once and return its reusable workspace_id. Use mode=\"worktree\" only for isolated Git work.",
       inputSchema: {
         path: z
           .string()
           .describe(
-            `Absolute path, or a leading-tilde home path such as ~/project, to a project directory inside an allowed root. ${allowedRootsSentence(config.allowedRoots)}`,
+            `Project path inside an allowed root. ${allowedRootsSentence(config.allowedRoots)}`,
           ),
         mode: z
           .enum(["checkout", "worktree"])
           .optional()
           .describe(
-            "Defaults to checkout, which works in the actual directory. Use worktree for isolated or parallel Git work.",
+            "checkout (default) or isolated Git worktree.",
           ),
         base_ref: z
           .string()
           .optional()
-          .describe("Git ref to base a worktree on. Only used with mode=\"worktree\". Defaults to HEAD."),
+          .describe("Optional worktree base ref; defaults to HEAD."),
       },
       outputSchema: {
         workspace_id: z.string(),
@@ -258,7 +258,11 @@ function buildWorkspacePresentation(
   resolveLocalAgentProviders: () => LocalAgentProviderStatus[],
 ) {
   const { workspace, agentsFiles, availableAgentsFiles } = context;
-  const preloadSubagents = config.subagents.enabled
+  // ChatGPT/Codex owns its coding loop. Even if an older user config asks to
+  // preload subagent instructions, keep delegation opt-in so open_workspace
+  // does not spend context on a workflow the host did not explicitly request.
+  const preloadSubagents = config.toolMode === "claude"
+    && config.subagents.enabled
     && config.subagents.instructions === "preload";
   const subagentsSkill = workspace.skills.find((skill) => skill.name === "subagents");
   const preloadedSubagentInstructions = context.includeDiscoveryContext
@@ -454,15 +458,7 @@ function registerReadTool(options: WorkspaceToolRegistrationOptions): void {
     {
       title: "Read file",
       description:
-        [
-          `Read all or part of a file in a workspace. Reads default to ${DEFAULT_READ_LIMIT_LINES} lines; continue with offset when more is needed.`,
-          "Use this tool to inspect relevant AGENTS.md or CLAUDE.md files listed by open_workspace before working in nested directories.",
-          config.skillsEnabled
-            ? "If available skills were returned and a task matches one, read the returned skill path before proceeding."
-            : "",
-        ]
-          .filter(Boolean)
-          .join(" "),
+        `Read up to ${DEFAULT_READ_LIMIT_LINES} lines of a workspace file. Continue with offset when needed; also use it for instruction or skill paths returned by open_workspace.`,
       inputSchema: {
         workspace_id: z.string().describe(workspaceIdDescription),
         path: z
@@ -537,7 +533,7 @@ function registerShowChangesTool(options: WorkspaceToolRegistrationOptions): voi
     {
       title: "Show changes",
       description:
-        "Show the changes made in this turn for an open workspace. Call this once after the final related file change and before your final response so the user can review the combined diff. Do not call it after each individual file change.",
+        "Record and summarize the combined workspace diff. Call once after the final related edit.",
       inputSchema: {
         workspace_id: z.string().describe(workspaceIdDescription),
       },
