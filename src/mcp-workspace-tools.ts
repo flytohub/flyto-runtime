@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs";
 import * as z from "zod/v4";
 import type { ServerConfig } from "./config.js";
-import type { ConversationContinuityManager, ConversationContinuitySummary } from "./conversation-continuity.js";
 import { AccessDeniedError } from "./roots.js";
 import { readFileTool } from "./pi-tools.js";
 import type { McpRegistrationTarget } from "./mcp-modern-server.js";
@@ -35,14 +34,12 @@ interface WorkspaceToolRegistrationOptions {
   workspaces: WorkspaceRegistry;
   reviewCheckpoints: ReviewCheckpointManager;
   resolveLocalAgentProviders: () => LocalAgentProviderStatus[];
-  conversationContinuity?: ConversationContinuityManager;
 }
 
 interface OpenWorkspaceInput {
   path: string;
   mode?: "checkout" | "worktree";
   base_ref?: string;
-  task_context?: string;
 }
 
 const DEFAULT_READ_LIMIT_LINES = 400;
@@ -75,16 +72,6 @@ const workspaceLocalAgentProviderOutputSchema = z.object({
 
 const workspaceAvailableAgentsFileOutputSchema = z.object({
   path: z.string(),
-});
-
-const conversationContinuityOutputSchema = z.object({
-  checkpoint_id: z.string(),
-  created_at: z.string(),
-  task_context: z.string().optional(),
-  branch: z.string().optional(),
-  head: z.string().optional(),
-  recent_activities: z.array(z.string()),
-  note: z.string(),
 });
 
 /** Explain the filesystem boundary to hosts that cannot inspect the user's machine directly. */
@@ -126,13 +113,6 @@ function registerOpenWorkspaceTool(options: WorkspaceToolRegistrationOptions): v
           .string()
           .optional()
           .describe("Git ref to base a worktree on. Only used with mode=\"worktree\". Defaults to HEAD."),
-        task_context: z
-          .string()
-          .max(1_500)
-          .optional()
-          .describe(
-            "Short summary of the user's current goal and critical constraints, without secrets. Runtime stores this only as bounded local continuity so a new ChatGPT conversation can pick up the same workspace without requiring the user to explain everything again.",
-          ),
       },
       outputSchema: {
         workspace_id: z.string(),
@@ -167,7 +147,6 @@ function registerOpenWorkspaceTool(options: WorkspaceToolRegistrationOptions): v
           }),
         ]),
         instruction: z.string(),
-        continuity: conversationContinuityOutputSchema.optional(),
       },
       annotations: { readOnlyHint: true },
     },
@@ -185,7 +164,6 @@ async function handleOpenWorkspace(
     workspaces,
     reviewCheckpoints,
     resolveLocalAgentProviders,
-    conversationContinuity,
   } = options;
   const startedAt = performance.now();
   const context = await openWorkspaceContext(
@@ -204,12 +182,6 @@ async function handleOpenWorkspace(
     config,
     resolveLocalAgentProviders,
   );
-  const continuity = !context.workspaceReused
-    ? conversationContinuity?.latestForWorkspace(workspace.root, requestMeta)
-    : undefined;
-  const resultText = continuity
-    ? `${presentation.resultText}\n\n${formatContinuitySummary(continuity)}`
-    : presentation.resultText;
 
   logToolCall(config, {
     tool: "open_workspace",
@@ -220,7 +192,7 @@ async function handleOpenWorkspace(
   });
 
   return {
-    content: [{ type: "text" as const, text: resultText }],
+    content: [{ type: "text" as const, text: presentation.resultText }],
     structuredContent: {
       workspace_id: workspace.id,
       root: workspace.root,
@@ -252,21 +224,8 @@ async function handleOpenWorkspace(
           }
         : {}),
       instruction: presentation.instruction,
-      continuity,
     },
   };
-}
-
-function formatContinuitySummary(continuity: ConversationContinuitySummary): string {
-  const details = [
-    continuity.task_context ? `prior task: ${continuity.task_context}` : undefined,
-    continuity.branch ? `branch ${continuity.branch}` : undefined,
-    continuity.head ? `HEAD ${continuity.head.slice(0, 12)}` : undefined,
-  ].filter(Boolean).join("; ");
-  return [
-    `Recent prior-chat Runtime checkpoint ${continuity.checkpoint_id} is available${details ? ` (${details})` : ""}.`,
-    continuity.note,
-  ].join(" ");
 }
 
 async function openWorkspaceContext(

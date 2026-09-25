@@ -179,36 +179,17 @@ DevSpace uses the Codex-style surface by default. It exposes:
 In this mode, `write`, `edit`, and `bash` are not registered. `exec_command`
 returns a process session ID when a command is still running after its bounded
 yield window. Modern calls wait up to about three seconds initially, and a
-`write_stdin` continuation may wait up to about five seconds for the completion
-event. This lets the majority of short commands finish in one tool call while
-long commands still return promptly. A running result includes `retry_after_ms`;
-do not poll faster than that hint, and do not wrap external status checks in
-shell `sleep` loops. Cached legacy ChatGPT `bash` calls still yield in about one
-second on the first call so an older host catalog cannot hold a request open,
-while their explicit continuation can wait longer for completion. Set `tty: true`
-only for commands that need a terminal.
+`write_stdin` continuation may wait up to about five seconds for completion.
+A running result includes `retry_after_ms`; do not poll faster than that hint or
+wrap status checks in shell sleep loops. Cached legacy ChatGPT `bash` calls keep
+their short first yield so an older host catalog does not hold a request open.
+Set `tty: true` only for commands that need a terminal.
 
 To keep long conversations usable, `read` returns at most 400 lines by default
 and provides the next offset when a file is longer. Command output is also
 bounded to a compact head-and-tail result by default. For non-interactive
 commands, Runtime retains the full durable evidence locally. These bounds never
 stop the conversation or reject later tool calls.
-
-### Cross-chat continuity without forced restarts
-
-When opening a workspace for a new task, the host should pass a short
-`task_context` summary containing the goal and critical constraints, never
-credentials or secrets. Runtime keeps a bounded local checkpoint after the first
-few tool calls and refreshes it periodically and at `show_changes`. Checkpoints
-contain the bounded task summary, Git branch/HEAD/status/diff stat, and compact
-activity names; they do not persist shell command bodies, full command output,
-full file contents, or full diffs.
-
-Opening the same workspace from another ChatGPT conversation within 24 hours may
-return the most recent prior-chat checkpoint as `continuity`. Treat it as context,
-not authority: verify the current Git state and make sure it matches the user's
-new request. Checkpointing is soft; Runtime never stops an active conversation
-or rejects later tools just because the chat is long.
 
 Set `tools.mode` to `claude` in `~/.devspace/config.jsonc` to expose `write`,
 `edit`, and `bash` instead of the Codex mutation and command tools. Dedicated
