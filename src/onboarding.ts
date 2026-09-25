@@ -62,7 +62,7 @@ export function updateOnboardingSubagentsConfig(
 }
 
 export const ONBOARDING_CLIENT_OPTIONS = [
-  { value: "chatgpt", label: "ChatGPT", hint: "Connect through HTTPS with the compact six-tool surface." },
+  { value: "chatgpt", label: "ChatGPT", hint: "Connect through HTTPS with the compact coding tool surface." },
   { value: "codex", label: "Codex", hint: "Show connection instructions; no client is registered automatically." },
   { value: "claude", label: "Claude", hint: "Connect Claude Code or another Claude MCP client." },
   { value: "custom", label: "Direct MCP / custom client", hint: "Use Streamable HTTP with OAuth; Cloud is optional." },

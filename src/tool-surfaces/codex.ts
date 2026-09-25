@@ -20,6 +20,7 @@ import {
   runLoggedToolOperation,
   textBlock,
 } from "./shared.js";
+import { registerBackgroundTaskTool } from "./background-task.js";
 
 type CodexRegistration = (context: ToolRegistrationContext) => void;
 
@@ -56,6 +57,7 @@ export function registerCodexTools(context: ToolRegistrationContext): void {
 }
 
 const CODEX_REGISTRATIONS: readonly CodexRegistration[] = [
+  registerBackgroundTaskTool,
   registerApplyPatchTool,
   registerCodexProcessTools,
 ];

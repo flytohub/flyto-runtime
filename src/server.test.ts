@@ -53,6 +53,21 @@ test("tool modes expose the expected host-facing tool surface", async (t) => {
   }
 });
 
+test("enabled local agents add one compact durable background task tool", async (t) => {
+  const context = await fixture(t, {
+    toolMode: "codex",
+    uiEnabled: false,
+    localAgentProviders: [{ name: "claude", available: true }],
+  });
+  const tools = await context.client.listTools();
+  const names = tools.tools.map((tool) => tool.name);
+
+  assert.equal(names.filter((name) => name === "background_task").length, 1);
+  assert.equal(names.length, 7);
+  const backgroundTask = tools.tools.find((tool) => tool.name === "background_task");
+  assert.match(backgroundTask?.description ?? "", /continue after the current ChatGPT turn/);
+});
+
 test("healthz exposes only minimal public liveness", async (t) => {
   const context = await httpServerFixture(t, "flyto2-health-");
   const response = await fetch(`${context.localBaseUrl}/healthz`);

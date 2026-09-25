@@ -10,6 +10,8 @@ durable agent manager and live provider runtimes. `devspace agents run` is a
 thin local client that starts or reuses the daemon automatically; `devspace
 serve` is not required. A run returns an agent id immediately, while the daemon
 persists its status, latest response, and provider session id.
+The MCP `background_task` tool uses the same daemon and state, so a task keeps
+running when the originating ChatGPT turn, page, or connection ends.
 
 Profiles are discovered from:
 

@@ -127,9 +127,9 @@ from the installed DevSpace package and wins over other skills named
 When Subagents are enabled, DevSpace discovers agent profiles
 from `~/.devspace/agents/*.md` and project `.devspace/agents/*.md`.
 Claude compatibility mode exposes their compact profile catalog through
-`open_workspace`. Codex mode keeps that non-callable catalog out of ChatGPT's
-initial context; its on-demand `subagents` skill uses the existing CLI workflow
-when delegation is actually needed.
+`open_workspace`. Both tool modes expose `background_task`, which delegates a
+complete task to the detached local-agent daemon so it survives the ChatGPT
+turn, page, and MCP connection that started it.
 
 Example profiles are packaged under `examples/agents/` for users who want
 starter templates. Copy or adapt them into one of the active profile directories
@@ -171,6 +171,7 @@ DevSpace uses the Codex-style surface by default. It exposes:
 
 - `open_workspace`
 - `read`
+- `background_task` (when subagents are enabled)
 - `apply_patch`
 - `exec_command`
 - `write_stdin`
@@ -190,6 +191,10 @@ and provides the next offset when a file is longer. Command output is also
 bounded to a compact head-and-tail result by default. For non-interactive
 commands, Runtime retains the full durable evidence locally. These bounds never
 stop the conversation or reject later tool calls.
+
+`background_task` also keeps its final response out of the conversation by
+default. Ask for `include_response=true` only after completion when that result
+is needed; the full response remains in Runtime's durable local state.
 
 Set `tools.mode` to `claude` in `~/.devspace/config.jsonc` to expose `write`,
 `edit`, and `bash` instead of the Codex mutation and command tools. Dedicated

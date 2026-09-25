@@ -5,9 +5,17 @@ description: Delegate focused coding, research, review, or verification work to 
 
 # DevSpace subagents
 
-Subagents are optional. Use the normal workspace tools for routine work; delegate only when a separate worker materially helps through independent context, specialization, or follow-up.
+Subagents are optional. Use the normal workspace tools for routine work. Use `background_task` when a complete multi-step task must keep running after the current ChatGPT turn, page, or MCP connection ends, or when a separate worker materially helps through independent context, specialization, or follow-up.
 
-Run the DevSpace CLI through the shell or process tool from the project the subagent should use. Agent commands print compact XML fragments by default. Read that output directly. Do not add `--json`.
+## Durable work from MCP
+
+Start durable work with `background_task` using `action=start`, the current `workspace_id`, and a self-contained prompt. Runtime chooses an enabled provider and immediately returns a `task_id`; its detached local daemon owns the work from that point onward. The task can inspect, edit, and test inside the workspace even if ChatGPT disconnects.
+
+Use `action=wait` when the result is a dependency, or `action=status` for one immediate snapshot. Keep `include_response` false until the final response is actually needed so long conversations stay small. Use `action=continue` with the same `task_id` for related follow-up work. Reuse the same `operation_id` only when retrying the exact same start or continue call after losing its response.
+
+The CLI workflow below remains available for local terminal use.
+
+Run the DevSpace CLI from the project the subagent should use. Agent commands print compact XML fragments by default. Read that output directly. Do not add `--json`.
 
 ## Choose a target
 

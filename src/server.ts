@@ -52,6 +52,7 @@ import { ReactiveCommandRunner } from "./flyto2/reactive-command.js";
 import { emitDurableToolEvent } from "./flyto2/tool-events.js";
 import { WorkspaceWatchRegistry } from "./flyto2/workspace-watch.js";
 import { WorkspaceRegistry } from "./workspaces.js";
+import { createLocalAgentClient } from "./local-agent-client.js";
 import {
   getLocalAgentProviderAvailabilitySnapshot,
 } from "./local-agent-availability.js";
@@ -127,8 +128,11 @@ function serverInstructions(
   const diagnostics = config.exposeRuntimeInternals
     ? ` Diagnostic Runtime internals are explicitly enabled. Use ${toolNames.runtimeEvents}, ${toolNames.runtimeWait}, ${toolNames.runtimeEvidence}, or watch tools only when diagnosing Runtime behavior; normal coding should still use the primary workspace/file/process primitives.`
     : "";
+  const backgroundTasks = config.subagents.enabled
+    ? ` For multi-step work that must survive the current turn, page, or MCP connection, start ${toolNames.backgroundTask}; the detached local daemon then owns the task through completion. Use its status or wait action later, and request its response only when needed.`
+    : "";
 
-  return `${common} ${toolSurface.instructions({ agents, skills })}${execution}${diagnostics}${artifactInstruction}${showChangesInstruction}${selfUpdateInstruction()}`;
+  return `${common} ${toolSurface.instructions({ agents, skills })}${execution}${backgroundTasks}${diagnostics}${artifactInstruction}${showChangesInstruction}${selfUpdateInstruction()}`;
 }
 
 // A remote host can only update a Runtime it cannot restart by hand if it knows
@@ -238,6 +242,7 @@ function registerMcpSurface(
     },
   );
   const toolSurface = getToolSurface(config.toolMode);
+  const localAgents = createLocalAgentClient(config);
 
   registerWorkspaceTools({
     server: registrationTarget,
@@ -265,6 +270,8 @@ function registerMcpSurface(
     processSessions,
     runtimeEvents,
     reactiveCommands,
+    localAgents,
+    resolveLocalAgentProviders,
   });
 
   if (config.artifactsEnabled && isArtifactDownloadSupportedPlatform()) {

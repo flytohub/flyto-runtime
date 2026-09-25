@@ -127,11 +127,11 @@ field is still accepted in v1 configuration files for upgrade compatibility,
 but it has no runtime effect.
 
 In Codex mode, the initial workspace response contains required instruction
-files, nested instruction paths, and the on-demand skill catalog. It omits local
-agent provider/profile availability and diagnostics because the six-tool Codex
-surface cannot call those records directly. Reopening the same checkout in the
-same conversation is only a lightweight workspace handshake and does not resend
-the discovery payload.
+files, nested instruction paths, and the on-demand skill catalog. When
+subagents are enabled, the compact `background_task` tool starts, observes,
+waits for, and continues work owned by the detached local-agent daemon.
+Reopening the same checkout in the same conversation is only a lightweight
+workspace handshake and does not resend the discovery payload.
 
 ## Skills and subagents
 
@@ -182,8 +182,9 @@ Subagent providers are explicit. Omitted providers are disabled:
 | `on-demand` | Default. `open_workspace` advertises the `subagents` skill and the model reads it only when the task benefits from delegation. |
 | `preload` | `open_workspace` includes the `subagents` workflow in its initial workspace instructions instead of advertising that skill for a separate read. |
 
-Both modes only make the workflow available; neither tells the model to prefer
-subagents for routine work.
+Both modes keep ordinary work on the primary tools. Server instructions direct
+the model to `background_task` only when multi-step work must survive the
+current turn, page, or MCP connection.
 
 Profiles are loaded from `~/.devspace/agents/*.md` and project
 `.devspace/agents/*.md`. `devspace agents targets` prints the configured targets
