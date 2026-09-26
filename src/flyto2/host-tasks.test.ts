@@ -20,6 +20,7 @@ test("HostTaskStore persists ChatGPT-owned task state", async (t) => {
   });
   assert.match(created.id, /^task_[a-f0-9]{32}$/);
   assert.equal(created.status, "active");
+  assert.equal(created.repoRoot, "/workspace");
   assert.equal(created.prompt, "Fix the issue.");
 
   const checkpointed = store.checkpoint(created.id, "Edited source; tests pending.");
@@ -103,6 +104,35 @@ test("HostTaskStore never adopts a task across repo roots", async (t) => {
   assert.equal(adopted?.workspaceRoot, "/workspace-a");
 });
 
+test("HostTaskStore adopts one repo task across execution roots", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "flyto2-host-task-worktree-recovery-"));
+  const store = new HostTaskStore(stateDir);
+  t.after(async () => {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  });
+
+  const created = store.create({
+    workspaceId: "ws_source",
+    repoRoot: "/repo",
+    workspaceRoot: "/repo",
+    prompt: "Move into a managed worktree.",
+  });
+  const found = store.findLatestActiveByRepoRoot("/repo");
+  assert.equal(found?.id, created.id);
+
+  const adopted = store.adoptActive(
+    created.id,
+    "ws_worktree",
+    "/managed/repo-wt",
+    "/repo",
+  );
+  assert.equal(adopted?.repoRoot, "/repo");
+  assert.equal(adopted?.workspaceId, "ws_worktree");
+  assert.equal(adopted?.workspaceRoot, "/managed/repo-wt");
+  assert.equal(store.findLatestActiveByRepoRoot("/repo")?.id, created.id);
+});
+
 test("HostTaskStore persists compact stage progress", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "flyto2-host-task-plan-"));
   const store = new HostTaskStore(stateDir);
@@ -137,6 +167,9 @@ test("HostTaskStore persists compact stage progress", async (t) => {
 
   const reopened = store.get(created.id);
   assert.deepEqual(reopened?.plan, updated?.plan);
+
+  const released = store.updatePlan(created.id, { activeSessionId: null });
+  assert.equal(released?.plan?.activeSessionId, undefined);
 
   const completed = store.complete(created.id, "Released.");
   assert.deepEqual(completed?.plan?.stages.map((stage) => stage.status), ["done", "done", "done"]);

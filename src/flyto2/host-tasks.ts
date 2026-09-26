@@ -24,6 +24,7 @@ export interface HostTaskPlan {
 export interface HostTaskRecord {
   id: string;
   workspaceId: string;
+  repoRoot: string;
   workspaceRoot: string;
   prompt: string;
   status: HostTaskStatus;
@@ -38,6 +39,7 @@ export interface HostTaskRecord {
 interface HostTaskRow {
   id: string;
   workspace_id: string;
+  repo_root: string;
   workspace_root: string;
   prompt: string;
   status: HostTaskStatus;
@@ -59,6 +61,7 @@ export class HostTaskStore {
   create(input: {
     workspaceId: string;
     workspaceRoot: string;
+    repoRoot?: string;
     prompt: string;
     plan?: HostTaskPlan;
   }): HostTaskRecord {
@@ -66,6 +69,7 @@ export class HostTaskStore {
     const record: HostTaskRecord = {
       id: "task_" + randomUUID().replaceAll("-", ""),
       workspaceId: input.workspaceId,
+      repoRoot: input.repoRoot ?? input.workspaceRoot,
       workspaceRoot: input.workspaceRoot,
       prompt: input.prompt,
       status: "active",
@@ -76,11 +80,12 @@ export class HostTaskStore {
 
     this.database.sqlite.prepare(
       `insert into host_tasks (
-        id, workspace_id, workspace_root, prompt, status, plan_json, created_at, updated_at
-      ) values (?, ?, ?, ?, ?, ?, ?, ?)`,
+        id, workspace_id, repo_root, workspace_root, prompt, status, plan_json, created_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       record.id,
       record.workspaceId,
+      record.repoRoot,
       record.workspaceRoot,
       record.prompt,
       record.status,
@@ -94,7 +99,7 @@ export class HostTaskStore {
 
   get(id: string): HostTaskRecord | undefined {
     const row = this.database.sqlite.prepare(
-      `select id, workspace_id, workspace_root, prompt, status, plan_json, checkpoint,
+      `select id, workspace_id, repo_root, workspace_root, prompt, status, plan_json, checkpoint,
               result, created_at, updated_at, completed_at
        from host_tasks
        where id = ?`,
@@ -104,7 +109,7 @@ export class HostTaskStore {
 
   findLatestActiveByRoot(workspaceRoot: string): HostTaskRecord | undefined {
     const row = this.database.sqlite.prepare(
-      `select id, workspace_id, workspace_root, prompt, status, plan_json, checkpoint,
+      `select id, workspace_id, repo_root, workspace_root, prompt, status, plan_json, checkpoint,
               result, created_at, updated_at, completed_at
        from host_tasks
        where workspace_root = ? and status = 'active'
@@ -116,7 +121,7 @@ export class HostTaskStore {
 
   findLatestByRoot(workspaceRoot: string): HostTaskRecord | undefined {
     const row = this.database.sqlite.prepare(
-      `select id, workspace_id, workspace_root, prompt, status, plan_json, checkpoint,
+      `select id, workspace_id, repo_root, workspace_root, prompt, status, plan_json, checkpoint,
               result, created_at, updated_at, completed_at
        from host_tasks
        where workspace_root = ?
@@ -126,9 +131,33 @@ export class HostTaskStore {
     return row ? hostTaskFromRow(row) : undefined;
   }
 
+  findLatestActiveByRepoRoot(repoRoot: string): HostTaskRecord | undefined {
+    const row = this.database.sqlite.prepare(
+      `select id, workspace_id, repo_root, workspace_root, prompt, status, plan_json, checkpoint,
+              result, created_at, updated_at, completed_at
+       from host_tasks
+       where repo_root = ? and status = 'active'
+       order by updated_at desc, rowid desc
+       limit 1`,
+    ).get(repoRoot) as HostTaskRow | undefined;
+    return row ? hostTaskFromRow(row) : undefined;
+  }
+
+  findLatestByRepoRoot(repoRoot: string): HostTaskRecord | undefined {
+    const row = this.database.sqlite.prepare(
+      `select id, workspace_id, repo_root, workspace_root, prompt, status, plan_json, checkpoint,
+              result, created_at, updated_at, completed_at
+       from host_tasks
+       where repo_root = ?
+       order by updated_at desc, rowid desc
+       limit 1`,
+    ).get(repoRoot) as HostTaskRow | undefined;
+    return row ? hostTaskFromRow(row) : undefined;
+  }
+
   listActiveWithPlans(): HostTaskRecord[] {
     const rows = this.database.sqlite.prepare(
-      `select id, workspace_id, workspace_root, prompt, status, plan_json, checkpoint,
+      `select id, workspace_id, repo_root, workspace_root, prompt, status, plan_json, checkpoint,
               result, created_at, updated_at, completed_at
        from host_tasks
        where status = 'active' and plan_json is not null
@@ -145,13 +174,14 @@ export class HostTaskStore {
     id: string,
     workspaceId: string,
     workspaceRoot: string,
+    repoRoot = workspaceRoot,
   ): HostTaskRecord | undefined {
     const now = new Date().toISOString();
     this.database.sqlite.prepare(
       `update host_tasks
-       set workspace_id = ?, updated_at = ?
-       where id = ? and workspace_root = ? and status = 'active'`,
-    ).run(workspaceId, now, id, workspaceRoot);
+       set workspace_id = ?, workspace_root = ?, updated_at = ?
+       where id = ? and repo_root = ? and status = 'active'`,
+    ).run(workspaceId, workspaceRoot, now, id, repoRoot);
     return this.get(id);
   }
 
@@ -171,7 +201,7 @@ export class HostTaskStore {
       currentStage?: number;
       stageStatus?: HostTaskPlanStageStatus;
       stageSummary?: string;
-      activeSessionId?: string;
+      activeSessionId?: string | null;
       activeJobId?: string | null;
       evidenceRef?: string;
       autoRun?: boolean;
@@ -229,6 +259,7 @@ function hostTaskFromRow(row: HostTaskRow): HostTaskRecord {
   return {
     id: row.id,
     workspaceId: row.workspace_id,
+    repoRoot: row.repo_root,
     workspaceRoot: row.workspace_root,
     prompt: row.prompt,
     status: row.status,
@@ -263,7 +294,7 @@ function updateTaskPlan(
     currentStage?: number;
     stageStatus?: HostTaskPlanStageStatus;
     stageSummary?: string;
-    activeSessionId?: string;
+    activeSessionId?: string | null;
     activeJobId?: string | null;
     evidenceRef?: string;
     autoRun?: boolean;
@@ -293,7 +324,9 @@ function updateTaskPlan(
     currentStage,
     autoRun: input.autoRun ?? current.autoRun,
     stages,
-    activeSessionId: input.activeSessionId ?? (shouldClearSession ? undefined : current.activeSessionId),
+    activeSessionId: input.activeSessionId === null
+      ? undefined
+      : input.activeSessionId ?? (shouldClearSession ? undefined : current.activeSessionId),
     activeJobId: input.activeJobId === null
       ? undefined
       : input.activeJobId ?? (shouldClearSession ? undefined : current.activeJobId),

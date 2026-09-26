@@ -84,8 +84,9 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
         active_session_id: z
           .string()
           .max(128)
+          .nullable()
           .optional()
-          .describe("Current long-command session_id, when one is still resumable."),
+          .describe("Current long-command session_id when resumable; pass null after it finishes to release worktree pinning."),
         include_response: z
           .boolean()
           .optional()
@@ -96,6 +97,7 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
         status: z.enum(["running", "completed", "failed", "stopped"]),
         workspace_id: z.string().optional(),
         workspace_root: z.string().optional(),
+        repository_root: z.string().optional(),
         updated_at: z.string().optional(),
         plan: z.object({
           current_stage: z.number().int(),
@@ -132,6 +134,7 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
       include_response,
     }) => {
       const workspace = await context.workspaces.getWorkspace(workspace_id);
+      const repoRoot = workspace.sourceRoot ?? workspace.root;
       const previewChars = context.config.toolMode === "codex"
         ? CODEX_RESPONSE_PREVIEW_CHARS
         : DEFAULT_RESPONSE_PREVIEW_CHARS;
@@ -140,6 +143,7 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
         if (!prompt) return invalidInput("prompt is required for action=start.");
         const record = context.hostTasks.create({
           workspaceId: workspace_id,
+          repoRoot,
           workspaceRoot: workspace.root,
           prompt,
           plan: plan ? createPlan(plan, auto_run === true) : undefined,
@@ -157,12 +161,18 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
 
       if (!task_id) {
         if (action !== "status") return invalidInput(`task_id is required for action=${action}.`);
-        const recoverable = context.hostTasks.findLatestActiveByRoot(workspace.root)
-          ?? context.hostTasks.findLatestByRoot(workspace.root);
+        const recoverable = context.hostTasks.findLatestActiveByRepoRoot(repoRoot)
+          ?? context.hostTasks.findLatestByRepoRoot(repoRoot);
         if (!recoverable) {
-          return failedResult(`No durable task was found for ${workspace.root}.`);
+          return failedResult(`No durable task was found for repository ${repoRoot}.`);
         }
-        const recovered = adoptTask(context, recoverable, workspace_id, workspace.root);
+        const recovered = adoptTask(
+          context,
+          recoverable,
+          workspace_id,
+          workspace.root,
+          repoRoot,
+        );
         if ("error" in recovered) return failedResult(recovered.error, recoverable.id);
         const recoveryMessage = recovered.status === "active"
           ? `Recovered durable task ${recovered.id} for this repo from a previous ChatGPT workspace. ChatGPT can resume from the stored plan/checkpoint.`
@@ -175,7 +185,13 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
         );
       }
 
-      const current = scopedTask(context, task_id, workspace_id, workspace.root);
+      const current = scopedTask(
+        context,
+        task_id,
+        workspace_id,
+        workspace.root,
+        repoRoot,
+      );
       if ("error" in current) return failedResult(current.error, task_id);
 
       if (action === "status" || action === "wait") {
@@ -267,13 +283,14 @@ function scopedTask(
   taskId: string,
   workspaceId: string,
   workspaceRoot: string,
+  repoRoot: string,
 ): HostTaskRecord | { error: string } {
   const record = context.hostTasks.get(taskId);
   if (!record) return { error: `Durable task ${taskId} was not found.` };
-  if (record.workspaceRoot !== workspaceRoot) {
-    return { error: `Durable task ${taskId} does not belong to this workspace.` };
+  if (record.repoRoot !== repoRoot) {
+    return { error: `Durable task ${taskId} does not belong to this repository.` };
   }
-  return adoptTask(context, record, workspaceId, workspaceRoot);
+  return adoptTask(context, record, workspaceId, workspaceRoot, repoRoot);
 }
 
 function adoptTask(
@@ -281,14 +298,32 @@ function adoptTask(
   record: HostTaskRecord,
   workspaceId: string,
   workspaceRoot: string,
+  repoRoot: string,
 ): HostTaskRecord | { error: string } {
-  if (record.workspaceRoot !== workspaceRoot) {
-    return { error: `Durable task ${record.id} does not belong to this workspace.` };
+  if (record.repoRoot !== repoRoot) {
+    return { error: `Durable task ${record.id} does not belong to this repository.` };
   }
-  if (record.workspaceId === workspaceId || record.status !== "active") return record;
+  if (record.status !== "active") return record;
+  if (record.workspaceId === workspaceId && record.workspaceRoot === workspaceRoot) return record;
 
-  const adopted = context.hostTasks.adoptActive(record.id, workspaceId, workspaceRoot);
-  if (!adopted || adopted.workspaceId !== workspaceId) {
+  const executionRootChanged = record.workspaceRoot !== workspaceRoot;
+  const executionInFlight = record.plan?.activeJobId !== undefined
+    || record.plan?.activeSessionId !== undefined;
+  if (executionRootChanged && executionInFlight) {
+    return record;
+  }
+
+  const adopted = context.hostTasks.adoptActive(
+    record.id,
+    workspaceId,
+    workspaceRoot,
+    repoRoot,
+  );
+  if (
+    !adopted
+    || adopted.workspaceId !== workspaceId
+    || adopted.workspaceRoot !== workspaceRoot
+  ) {
     return { error: `Durable task ${record.id} could not be recovered into this workspace.` };
   }
   return adopted;
@@ -318,6 +353,7 @@ function recordResult(
     status,
     workspace_id: record.workspaceId,
     workspace_root: record.workspaceRoot,
+    repository_root: record.repoRoot,
     updated_at: record.updatedAt,
     plan: record.plan ? planOutput(record.plan) : undefined,
     original_prompt: originalPrompt,
@@ -401,6 +437,7 @@ function toolResult(
     status: BackgroundTaskStatus;
     workspace_id?: string;
     workspace_root?: string;
+    repository_root?: string;
     updated_at?: string;
     plan?: {
       current_stage: number;

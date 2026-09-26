@@ -97,6 +97,7 @@ export const hostTasks = sqliteTable(
     id: text("id").primaryKey(),
     workspaceId: text("workspace_id").notNull(),
     workspaceRoot: text("workspace_root").notNull(),
+    repoRoot: text("repo_root").notNull(),
     prompt: text("prompt").notNull(),
     status: text("status").notNull(),
     planJson: text("plan_json"),
@@ -109,6 +110,7 @@ export const hostTasks = sqliteTable(
   (table) => [
     index("host_tasks_workspace_idx").on(table.workspaceId, table.status, table.updatedAt),
     index("host_tasks_root_idx").on(table.workspaceRoot, table.status, table.updatedAt),
+    index("host_tasks_repo_root_idx").on(table.repoRoot, table.status, table.updatedAt),
   ],
 );
 

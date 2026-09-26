@@ -58,6 +58,7 @@ async function testDatabaseConfiguration(stateDir: string): Promise<void> {
       { version: 12, name: "conversation-handoffs" },
       { version: 13, name: "host-tasks" },
       { version: 14, name: "host-task-plans" },
+      { version: 15, name: "host-task-repo-identity" },
     ]);
   } finally {
     database.close();

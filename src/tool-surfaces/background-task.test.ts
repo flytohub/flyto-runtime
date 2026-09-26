@@ -23,12 +23,23 @@ function fixture() {
       },
     },
     workspaces: {
-      getWorkspace: async () => ({ root: "/workspace" }),
+      getWorkspace: async (workspaceId: string) => {
+        if (workspaceId === "ws_source") return { root: "/repo" };
+        if (workspaceId === "ws_worktree") {
+          return { root: "/managed/repo-wt", sourceRoot: "/repo" };
+        }
+        if (workspaceId === "ws_worktree_2") {
+          return { root: "/managed/repo-wt-2", sourceRoot: "/repo" };
+        }
+        if (workspaceId === "ws_other_repo") return { root: "/other-repo" };
+        return { root: "/workspace" };
+      },
     },
     hostTasks: {
       create: (input: {
         workspaceId: string;
         workspaceRoot: string;
+        repoRoot?: string;
         prompt: string;
         plan?: HostTaskRecord["plan"];
       }) => {
@@ -37,6 +48,7 @@ function fixture() {
         const record: HostTaskRecord = {
           id: `task_${String(sequence).padStart(32, "0")}`,
           workspaceId: input.workspaceId,
+          repoRoot: input.repoRoot ?? input.workspaceRoot,
           workspaceRoot: input.workspaceRoot,
           prompt: input.prompt,
           status: "active",
@@ -56,14 +68,28 @@ function fixture() {
         Array.from(records.values())
           .filter((record) => record.workspaceRoot === workspaceRoot)
           .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0],
-      adoptActive: (id: string, workspaceId: string, workspaceRoot: string) => {
+      findLatestActiveByRepoRoot: (repoRoot: string) =>
+        Array.from(records.values())
+          .filter((record) => record.repoRoot === repoRoot && record.status === "active")
+          .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0],
+      findLatestByRepoRoot: (repoRoot: string) =>
+        Array.from(records.values())
+          .filter((record) => record.repoRoot === repoRoot)
+          .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0],
+      adoptActive: (
+        id: string,
+        workspaceId: string,
+        workspaceRoot: string,
+        repoRoot = workspaceRoot,
+      ) => {
         const current = records.get(id);
-        if (!current || current.workspaceRoot !== workspaceRoot || current.status !== "active") {
+        if (!current || current.repoRoot !== repoRoot || current.status !== "active") {
           return current;
         }
         const updated = {
           ...current,
           workspaceId,
+          workspaceRoot,
           updatedAt: "2026-01-01T00:01:30.000Z",
         };
         records.set(id, updated);
@@ -82,7 +108,7 @@ function fixture() {
           currentStage?: number;
           stageStatus?: "pending" | "running" | "done" | "blocked";
           stageSummary?: string;
-          activeSessionId?: string;
+          activeSessionId?: string | null;
         },
       ) => {
         const current = records.get(id);
@@ -105,7 +131,9 @@ function fixture() {
           plan: {
             currentStage: stage,
             stages,
-            activeSessionId: input.activeSessionId,
+            activeSessionId: input.activeSessionId === null
+              ? undefined
+              : input.activeSessionId,
           },
           updatedAt: "2026-01-01T00:01:45.000Z",
         };
@@ -163,6 +191,7 @@ test("background_task records a ChatGPT-owned durable task without delegating", 
   assert.match(String(response.structuredContent.result), /will not start another model or local-agent provider/);
   assert.equal(response.structuredContent.workspace_id, "ws_1");
   assert.equal(response.structuredContent.workspace_root, "/workspace");
+  assert.equal(response.structuredContent.repository_root, "/workspace");
   assert.equal(response.structuredContent.updated_at, "2026-01-01T00:00:00.000Z");
   assert.equal("provider" in response.structuredContent, false);
 });
@@ -257,7 +286,7 @@ test("background_task rejects cross-repo task access", async () => {
   const taskId = String(started.structuredContent.task_id);
   const current = records.get(taskId);
   assert.ok(current);
-  records.set(taskId, { ...current, workspaceRoot: "/different-repo" });
+  records.set(taskId, { ...current, repoRoot: "/different-repo" });
 
   const response = await handler({
     action: "status",
@@ -265,7 +294,94 @@ test("background_task rejects cross-repo task access", async () => {
     task_id: taskId,
   });
   assert.equal(response.isError, true);
-  assert.match(String(response.structuredContent.result), /does not belong to this workspace/);
+  assert.match(String(response.structuredContent.result), /does not belong to this repository/);
+});
+
+test("background_task follows one durable task from source checkout into a managed worktree", async () => {
+  const { handler, records } = fixture();
+  const started = await handler({
+    action: "start",
+    workspace_id: "ws_source",
+    prompt: "Continue this task in an isolated worktree.",
+  });
+  const taskId = String(started.structuredContent.task_id);
+  assert.equal(started.structuredContent.workspace_root, "/repo");
+  assert.equal(started.structuredContent.repository_root, "/repo");
+
+  const recovered = await handler({
+    action: "status",
+    workspace_id: "ws_worktree",
+    include_response: true,
+  });
+
+  assert.equal(recovered.isError, undefined);
+  assert.equal(recovered.structuredContent.task_id, taskId);
+  assert.equal(recovered.structuredContent.workspace_id, "ws_worktree");
+  assert.equal(recovered.structuredContent.workspace_root, "/managed/repo-wt");
+  assert.equal(recovered.structuredContent.repository_root, "/repo");
+  assert.equal(records.get(taskId)?.workspaceRoot, "/managed/repo-wt");
+  assert.equal(records.get(taskId)?.repoRoot, "/repo");
+});
+
+test("background_task never switches execution roots while a durable stage is still in flight", async () => {
+  const { handler, records } = fixture();
+  const started = await handler({
+    action: "start",
+    workspace_id: "ws_worktree",
+    prompt: "Keep the running stage pinned to its worktree.",
+    plan: ["Long test", "Deploy"],
+  });
+  const taskId = String(started.structuredContent.task_id);
+  const current = records.get(taskId);
+  assert.ok(current?.plan);
+  records.set(taskId, {
+    ...current,
+    plan: { ...current.plan, activeSessionId: "proc_running" },
+  });
+
+  const recovered = await handler({
+    action: "status",
+    workspace_id: "ws_worktree_2",
+    task_id: taskId,
+  });
+
+  assert.equal(recovered.isError, undefined);
+  assert.equal(recovered.structuredContent.workspace_root, "/managed/repo-wt");
+  assert.equal(recovered.structuredContent.repository_root, "/repo");
+  assert.equal(records.get(taskId)?.workspaceId, "ws_worktree");
+  assert.equal(records.get(taskId)?.workspaceRoot, "/managed/repo-wt");
+});
+
+test("background_task can release manual-session pinning before adopting a new worktree", async () => {
+  const { handler, records } = fixture();
+  const started = await handler({
+    action: "start",
+    workspace_id: "ws_worktree",
+    prompt: "Move after the manual command finishes.",
+    plan: ["Validate", "Commit"],
+  });
+  const taskId = String(started.structuredContent.task_id);
+  await handler({
+    action: "continue",
+    workspace_id: "ws_worktree",
+    task_id: taskId,
+    active_session_id: "proc_finished",
+  });
+  await handler({
+    action: "continue",
+    workspace_id: "ws_worktree",
+    task_id: taskId,
+    active_session_id: null,
+  });
+
+  const recovered = await handler({
+    action: "status",
+    workspace_id: "ws_worktree_2",
+    task_id: taskId,
+  });
+  assert.equal(recovered.structuredContent.workspace_root, "/managed/repo-wt-2");
+  assert.equal(records.get(taskId)?.workspaceId, "ws_worktree_2");
+  assert.equal(records.get(taskId)?.workspaceRoot, "/managed/repo-wt-2");
 });
 
 test("background_task adopts an active task into a new ChatGPT workspace for the same repo", async () => {

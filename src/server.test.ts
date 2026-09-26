@@ -141,6 +141,55 @@ test("a new ChatGPT conversation recovers the latest active durable task for the
   assert.equal(explicitStatus.checkpoint, "Old-chat checkpoint is ready.");
 });
 
+test("a durable task follows its source repo into a real managed worktree", async (t) => {
+  const context = await fixture(t, { git: true, toolMode: "codex", uiEnabled: false });
+  const sourceWorkspace = structuredContent(
+    await callOpen(context.client, context.project, "repo-worktree-source"),
+  );
+  assert.equal(typeof sourceWorkspace.workspace_id, "string");
+
+  const started = structuredContent(await context.client.callTool({
+    name: "background_task",
+    arguments: {
+      action: "start",
+      workspace_id: sourceWorkspace.workspace_id,
+      prompt: "Continue this repo task in a managed worktree.",
+    },
+  }));
+  const taskId = started.task_id;
+  assert.equal(typeof taskId, "string");
+  assert.equal(started.workspace_root, context.project);
+  assert.equal(started.repository_root, context.project);
+
+  const worktreeWorkspace = structuredContent(await context.client.callTool({
+    name: "open_workspace",
+    arguments: {
+      path: context.project,
+      mode: "worktree",
+    },
+  }));
+  assert.equal(typeof worktreeWorkspace.workspace_id, "string");
+  assert.equal(typeof worktreeWorkspace.root, "string");
+  assert.notEqual(worktreeWorkspace.root, context.project);
+
+  const recovered = structuredContent(await context.client.callTool({
+    name: "background_task",
+    arguments: {
+      action: "status",
+      workspace_id: worktreeWorkspace.workspace_id,
+      include_response: true,
+    },
+  }));
+  assert.equal(recovered.task_id, taskId);
+  assert.equal(recovered.workspace_id, worktreeWorkspace.workspace_id);
+  assert.equal(recovered.workspace_root, worktreeWorkspace.root);
+  assert.equal(recovered.repository_root, context.project);
+  assert.equal(
+    recovered.original_prompt,
+    "Continue this repo task in a managed worktree.",
+  );
+});
+
 test("background_task auto_run advances deterministic stages without ChatGPT polling", async (t) => {
   const context = await fixture(t, { toolMode: "codex", uiEnabled: false });
   const workspace = structuredContent(

@@ -77,6 +77,11 @@ const migrations: Migration[] = [
     name: "host-task-plans",
     up: migrateHostTaskPlans,
   },
+  {
+    version: 15,
+    name: "host-task-repo-identity",
+    up: migrateHostTaskRepoIdentity,
+  },
 ];
 
 export const FLYTO2_STATE_SCHEMA_VERSION =
@@ -435,6 +440,19 @@ function migrateHostTasks(sqlite: Database.Database): void {
 
 function migrateHostTaskPlans(sqlite: Database.Database): void {
   addColumnIfMissing(sqlite, "host_tasks", "plan_json", "text");
+}
+
+function migrateHostTaskRepoIdentity(sqlite: Database.Database): void {
+  addColumnIfMissing(sqlite, "host_tasks", "repo_root", "text not null default ''");
+  sqlite.prepare(
+    `update host_tasks
+     set repo_root = workspace_root
+     where repo_root = ''`,
+  ).run();
+  sqlite.exec(`
+    create index if not exists host_tasks_repo_root_idx
+      on host_tasks(repo_root, status, updated_at desc);
+  `);
 }
 
 function addColumnIfMissing(

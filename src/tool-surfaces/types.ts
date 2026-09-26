@@ -83,7 +83,7 @@ export interface ToolRegistrationContext {
   reactiveCommands: ReactiveCommandRunner;
   hostTasks: Pick<
     HostTaskStore,
-    "create" | "get" | "findLatestActiveByRoot" | "findLatestByRoot" | "adoptActive" | "checkpoint" | "updatePlan" | "complete" | "stop"
+    "create" | "get" | "findLatestActiveByRoot" | "findLatestByRoot" | "findLatestActiveByRepoRoot" | "findLatestByRepoRoot" | "adoptActive" | "checkpoint" | "updatePlan" | "complete" | "stop"
   >;
   taskPipelines: Pick<TaskPipelineRunner, "start">;
 }
