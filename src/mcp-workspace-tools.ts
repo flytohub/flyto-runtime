@@ -44,6 +44,9 @@ interface OpenWorkspaceInput {
 }
 
 const DEFAULT_READ_LIMIT_LINES = 240;
+const DEFAULT_READ_MAX_CHARS = 12_000;
+const READ_TRUNCATION_MARKER =
+  "\n... read output truncated; use a smaller line range or a targeted command ...\n";
 
 const workspaceSkillOutputSchema = z.object({
   name: z.string(),
@@ -515,14 +518,29 @@ function registerReadTool(options: WorkspaceToolRegistrationOptions): void {
         durationMs: Math.round(performance.now() - startedAt),
       });
 
+      const result = truncateReadResult(contentText(response.content));
+      const content = config.toolMode === "codex"
+        ? [textBlock(`Read ${input.path}; full model-readable text is in structuredContent.result.`)]
+        : response.content;
+
       return {
         ...response,
+        content,
         structuredContent: {
-          result: contentText(response.content),
+          result,
         },
       };
     },
   );
+}
+
+function truncateReadResult(result: string): string {
+  if (result.length <= DEFAULT_READ_MAX_CHARS) return result;
+
+  const available = DEFAULT_READ_MAX_CHARS - READ_TRUNCATION_MARKER.length;
+  const tailChars = Math.min(1_000, Math.floor(available / 4));
+  const headChars = Math.max(0, available - tailChars);
+  return `${result.slice(0, headChars)}${READ_TRUNCATION_MARKER}${result.slice(-tailChars)}`;
 }
 
 function registerShowChangesTool(options: WorkspaceToolRegistrationOptions): void {

@@ -14,6 +14,9 @@ function fixture() {
   const records = new Map<string, HostTaskRecord>();
   let sequence = 0;
   const context = {
+    config: {
+      toolMode: "codex",
+    },
     server: {
       registerTool: (_name: string, _definition: unknown, registered: Handler) => {
         handler = registered;
@@ -159,6 +162,20 @@ test("background_task stores completion result for a later ChatGPT session", asy
   });
   assert.equal(completed.structuredContent.status, "completed");
   assert.equal(completed.structuredContent.response, "Tests pass; committed as abc1234.");
+});
+
+test("background_task keeps ChatGPT recovery previews compact", async () => {
+  const { handler } = fixture();
+  const response = await handler({
+    action: "start",
+    workspace_id: "ws_1",
+    prompt: "p".repeat(10_000),
+    include_response: true,
+  });
+
+  const prompt = String(response.structuredContent.original_prompt);
+  assert.ok(prompt.length < 3_100);
+  assert.match(prompt, /Response truncated/);
 });
 
 test("background_task rejects cross-workspace task access", async () => {

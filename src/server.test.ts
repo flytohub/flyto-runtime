@@ -176,16 +176,19 @@ test("Codex command output is bounded by default", async (t) => {
   ).workspace_id;
   assert.equal(typeof workspaceId, "string");
 
-  const result = structuredContent(await context.client.callTool({
+  const response = await context.client.callTool({
     name: "exec_command",
     arguments: {
       workspace_id: workspaceId,
       cmd: "node -e \"console.log('z'.repeat(25000))\"",
     },
-  }));
+  });
+  const result = structuredContent(response);
   assert.equal(result.running, false);
   assert.equal(result.output_truncated, true);
   assert.ok(String(result.result).length <= 4_200);
+  assert.ok(toolTextContent(response).length < 200);
+  assert.doesNotMatch(toolTextContent(response), /zzzzzzzzzz/);
 });
 
 test("read defaults to a compact resumable window", async (t) => {
@@ -209,6 +212,29 @@ test("read defaults to a compact resumable window", async (t) => {
   assert.match(String(result.result), /line-240/);
   assert.doesNotMatch(String(result.result), /line-241/);
   assert.match(String(result.result), /Use offset=241 to continue/);
+});
+
+test("Codex read bounds a pathological single-line file without duplicating it into content", async (t) => {
+  const context = await fixture(t, { toolMode: "codex", uiEnabled: false });
+  const workspaceId = structuredContent(
+    await callOpen(context.client, context.project, "bounded-read-characters"),
+  ).workspace_id;
+  assert.equal(typeof workspaceId, "string");
+  await writeFile(join(context.project, "single-line.txt"), "x".repeat(50_000));
+
+  const response = await context.client.callTool({
+    name: "read",
+    arguments: {
+      workspace_id: workspaceId,
+      path: "single-line.txt",
+    },
+  });
+  const result = structuredContent(response);
+  const resultText = String(result.result);
+  assert.ok(resultText.length <= 12_000);
+  assert.match(resultText, /read output truncated/);
+  assert.ok(toolTextContent(response).length < 200);
+  assert.doesNotMatch(toolTextContent(response), /xxxxxxxxxx/);
 });
 
 test("Codex non-interactive commands become durable behind exec_command", async (t) => {
@@ -1658,6 +1684,20 @@ function structuredContent(result: Awaited<ReturnType<Client["callTool"]>>): Rec
     `Expected structured tool output, got: ${JSON.stringify(result.content ?? [])}`,
   );
   return result.structuredContent as Record<string, unknown>;
+}
+
+function toolTextContent(result: Awaited<ReturnType<Client["callTool"]>>): string {
+  const content = Array.isArray(result.content) ? result.content : [];
+  return content
+    .filter((item): item is { type: "text"; text: string } =>
+      typeof item === "object"
+      && item !== null
+      && "type" in item
+      && item.type === "text"
+      && "text" in item
+      && typeof item.text === "string")
+    .map((item) => item.text)
+    .join("\n");
 }
 
 test("existing ChatGPT camelCase tool calls survive the Runtime migration", async (t) => {

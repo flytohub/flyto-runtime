@@ -7,7 +7,8 @@ import {
 } from "./types.js";
 import { resultOutputSchema, textBlock } from "./shared.js";
 
-const RESPONSE_PREVIEW_CHARS = 8_000;
+const DEFAULT_RESPONSE_PREVIEW_CHARS = 8_000;
+const CODEX_RESPONSE_PREVIEW_CHARS = 3_000;
 
 const BACKGROUND_TASK_ANNOTATIONS = {
   readOnlyHint: false,
@@ -53,6 +54,9 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
     },
     async ({ action, workspace_id, task_id, prompt, include_response }) => {
       const workspace = await context.workspaces.getWorkspace(workspace_id);
+      const previewChars = context.config.toolMode === "codex"
+        ? CODEX_RESPONSE_PREVIEW_CHARS
+        : DEFAULT_RESPONSE_PREVIEW_CHARS;
 
       if (action === "start") {
         if (!prompt) return invalidInput("prompt is required for action=start.");
@@ -64,6 +68,7 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
         return recordResult(
           record,
           include_response === true,
+          previewChars,
           `Durable task ${record.id} is recorded for ChatGPT. Continue the work with the normal workspace tools. Runtime will preserve this task state across reconnects and will not start another model or local-agent provider.`,
         );
       }
@@ -78,7 +83,7 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
             ? `Durable task ${current.id} is still active. There is no background model to wait for; ChatGPT should resume it with normal workspace tools.`
             : `Durable task ${current.id} is active and ready for ChatGPT to resume.`
           : undefined;
-        return recordResult(current, include_response === true, message);
+        return recordResult(current, include_response === true, previewChars, message);
       }
 
       if (action === "continue") {
@@ -91,6 +96,7 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
         return recordResult(
           updated,
           include_response === true,
+          previewChars,
           `Checkpoint saved for durable task ${updated.id}. ChatGPT remains the only task owner; continue with normal workspace tools.`,
         );
       }
@@ -104,6 +110,7 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
         return recordResult(
           completed,
           include_response === true,
+          previewChars,
           `Durable task ${completed.id} completed by ChatGPT.`,
         );
       }
@@ -113,7 +120,12 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
       }
       const stopped = context.hostTasks.stop(current.id, prompt);
       if (!stopped) return failedResult(`Durable task ${current.id} no longer exists.`, current.id);
-      return recordResult(stopped, include_response === true, `Durable task ${stopped.id} stopped.`);
+      return recordResult(
+        stopped,
+        include_response === true,
+        previewChars,
+        `Durable task ${stopped.id} stopped.`,
+      );
     },
   );
 }
@@ -135,12 +147,13 @@ function scopedTask(
 function recordResult(
   record: HostTaskRecord,
   includeResponse: boolean,
+  previewChars: number,
   message?: string,
 ) {
   const status = recordStatus(record);
-  const originalPrompt = includeResponse ? responsePreview(record.prompt) : undefined;
-  const checkpoint = includeResponse ? responsePreview(record.checkpoint) : undefined;
-  const response = includeResponse ? responsePreview(record.result) : undefined;
+  const originalPrompt = includeResponse ? responsePreview(record.prompt, previewChars) : undefined;
+  const checkpoint = includeResponse ? responsePreview(record.checkpoint, previewChars) : undefined;
+  const response = includeResponse ? responsePreview(record.result, previewChars) : undefined;
   const result = message
     ?? (status === "completed"
       ? `Durable task ${record.id} completed.`
@@ -164,10 +177,10 @@ function recordStatus(record: HostTaskRecord): BackgroundTaskStatus {
   return "running";
 }
 
-function responsePreview(response: string | undefined): string | undefined {
+function responsePreview(response: string | undefined, maxChars: number): string | undefined {
   if (!response) return undefined;
-  if (response.length <= RESPONSE_PREVIEW_CHARS) return response;
-  return `${response.slice(0, RESPONSE_PREVIEW_CHARS)}\n[Response truncated; full value remains in Runtime state.]`;
+  if (response.length <= maxChars) return response;
+  return `${response.slice(0, maxChars)}\n[Response truncated; full value remains in Runtime state.]`;
 }
 
 function invalidInput(message: string) {

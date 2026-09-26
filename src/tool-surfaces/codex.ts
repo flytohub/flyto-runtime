@@ -64,11 +64,11 @@ const CODEX_REGISTRATIONS: readonly CodexRegistration[] = [
   registerCodexProcessTools,
 ];
 
-function processResult(snapshot: CodexProcessSnapshot, legacyShell = false): string {
+function processStatus(snapshot: CodexProcessSnapshot, legacyShell = false): string {
   const retryHint = snapshot.retryAfterMs
     ? ` Wait about ${Math.max(1, Math.round(snapshot.retryAfterMs / 1_000))}s before checking again; do not poll faster.`
     : "";
-  const status = snapshot.running
+  return snapshot.running
     ? legacyShell
       ? `Still running (session ${snapshot.sessionId}). Get more output with this same bash tool using command exactly: ${LEGACY_JOB_COMMAND} ${snapshot.sessionId} (append --cancel to stop it). Do not rerun the original command.${retryHint}`
       : `Process is still running with session_id=${snapshot.sessionId}. Continue it with write_stdin.${retryHint}`
@@ -77,6 +77,10 @@ function processResult(snapshot: CodexProcessSnapshot, legacyShell = false): str
       : snapshot.signal
         ? `Process exited after signal ${snapshot.signal}.`
         : `Process exited with code ${snapshot.exitCode ?? "unknown"}.`;
+}
+
+function processResult(snapshot: CodexProcessSnapshot, legacyShell = false): string {
+  const status = processStatus(snapshot, legacyShell);
   return snapshot.output
     ? `${snapshot.output.replace(/\n$/, "")}\n${status}`
     : status;
@@ -96,7 +100,10 @@ function processOutputSchema(): z.ZodRawShape {
 
 function processToolResponse(snapshot: CodexProcessSnapshot, legacyShell = false) {
   const result = processResult(snapshot, legacyShell);
-  const content = [textBlock(result)];
+  // ChatGPT records both content and structuredContent in the conversation
+  // transcript. Keep the full command output in one place only so every
+  // command does not consume context twice.
+  const content = [textBlock(processStatus(snapshot, legacyShell))];
   return {
     content,
     structuredContent: {
