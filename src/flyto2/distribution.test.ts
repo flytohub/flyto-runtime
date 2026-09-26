@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { checkForAppUpdate, newerStableRelease, packagedDistribution, packagedLocationProblem } from "./distribution.js";
 
@@ -45,4 +47,47 @@ test("the app offers only a newer promoted stable Runtime from the flyto2 releas
   assert.equal(await checkForAppUpdate("1.1.0", offline), undefined);
   const serving = (async () => ({ ok: true, json: async () => channel })) as unknown as typeof fetch;
   assert.deepEqual(await checkForAppUpdate("1.1.0", serving), { version: "1.2.0", url: channel.release_url });
+});
+
+test("the merged release SBOM keeps CycloneDX identity required by GitHub attestation", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "release-sbom-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const base = {
+    $schema: "http://cyclonedx.org/schema/bom-1.7.schema.json",
+    bomFormat: "CycloneDX",
+    specVersion: "1.7",
+    version: 1,
+    metadata: { tools: { components: [] } },
+  };
+  writeFileSync(join(root, "sbom-arm64.cdx.json"), JSON.stringify({
+    ...base,
+    serialNumber: "urn:uuid:11111111-1111-4111-8111-111111111111",
+    components: [{ type: "library", name: "shared", version: "1", purl: "pkg:npm/shared@1" }],
+  }));
+  writeFileSync(join(root, "sbom-x64.cdx.json"), JSON.stringify({
+    ...base,
+    serialNumber: "urn:uuid:22222222-2222-4222-8222-222222222222",
+    components: [
+      { type: "library", name: "shared", version: "1", purl: "pkg:npm/shared@1" },
+      { type: "library", name: "x64-only", version: "1", purl: "pkg:npm/x64-only@1" },
+    ],
+  }));
+
+  const script = fileURLToPath(new URL("../../scripts/release-candidate.mjs", import.meta.url));
+  execFileSync(process.execPath, [script, "sbom", root], { stdio: "pipe" });
+  const merged = JSON.parse(
+    readFileSync(join(root, "flyto2-runtime-1.1.0.cdx.json"), "utf8"),
+  ) as {
+    $schema?: string;
+    bomFormat?: string;
+    specVersion?: string;
+    serialNumber?: string;
+    components?: unknown[];
+  };
+
+  assert.equal(merged.$schema, base.$schema);
+  assert.equal(merged.bomFormat, "CycloneDX");
+  assert.equal(merged.specVersion, "1.7");
+  assert.match(merged.serialNumber ?? "", /^urn:uuid:[0-9a-f-]{36}$/);
+  assert.equal(merged.components?.length, 2);
 });

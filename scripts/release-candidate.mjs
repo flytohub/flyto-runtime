@@ -10,7 +10,7 @@
 //     GITHUB_REPOSITORY, GITHUB_SHA, GITHUB_RUN_ID and GITHUB_WORKFLOW_REF.
 //
 // Standard library only, so the candidate job needs no install step.
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 
@@ -49,8 +49,10 @@ function writeSbom() {
   }
   const [first] = boms;
   const merged = {
+    ...(first.$schema ? { $schema: first.$schema } : {}),
     bomFormat: "CycloneDX",
     specVersion: first.specVersion,
+    serialNumber: `urn:uuid:${randomUUID()}`,
     version: 1,
     metadata: {
       timestamp: new Date().toISOString(),
