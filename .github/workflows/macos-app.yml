@@ -225,6 +225,37 @@ jobs:
           rm -f candidate/*.dmg.sha256
           node scripts/release-candidate.mjs sbom candidate
 
+      - name: Validate the merged SBOM
+        env:
+          SBOM_PATH: candidate/flyto2-runtime-${{ steps.source.outputs.version }}.cdx.json
+        run: |
+          node --input-type=module - "$SBOM_PATH" <<'NODE'
+          import { readFileSync, statSync } from "node:fs"
+
+          const [path] = process.argv.slice(2)
+          const size = statSync(path).size
+          const maxSize = 16 * 1024 * 1024
+          if (size > maxSize) {
+            console.error(`Merged SBOM is ${size} bytes; GitHub attestation allows at most ${maxSize}.`)
+            process.exit(1)
+          }
+
+          const sbom = JSON.parse(readFileSync(path, "utf8"))
+          if (sbom.bomFormat !== "CycloneDX") {
+            console.error(`Merged SBOM bomFormat must be CycloneDX; got ${JSON.stringify(sbom.bomFormat)}.`)
+            process.exit(1)
+          }
+          if (typeof sbom.serialNumber !== "string" || !sbom.serialNumber) {
+            console.error("Merged SBOM is missing serialNumber.")
+            process.exit(1)
+          }
+          if (typeof sbom.specVersion !== "string" || !sbom.specVersion) {
+            console.error("Merged SBOM is missing specVersion.")
+            process.exit(1)
+          }
+          console.log(`Validated CycloneDX ${sbom.specVersion} SBOM: ${path} (${size} bytes).`)
+          NODE
+
       - name: Attest build provenance
         id: provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
@@ -233,10 +264,11 @@ jobs:
 
       - name: Attest the SBOM
         id: sbom
-        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
         with:
           subject-path: candidate/*.dmg
-          sbom-path: candidate/flyto2-runtime-${{ steps.source.outputs.version }}.cdx.json
+          predicate-type: https://cyclonedx.org/bom
+          predicate-path: candidate/flyto2-runtime-${{ steps.source.outputs.version }}.cdx.json
 
       - name: Write checksums and the release manifest
         env:

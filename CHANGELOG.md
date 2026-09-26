@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.1.1 - 2026-09-26
+
 - Setup can create a free Cloudflare quick tunnel instead of asking for a URL: it installs `cloudflared` with consent, keeps the tunnel running as a background service, waits until the new hostname exists in DNS, and the Runtime follows the URL whenever the tunnel restarts. `service quick-tunnel start|stop|status` manages it.
 - `open_workspace` names the allowed roots in its description and in access denials.
 - Cached ChatGPT `bash` calls wait for long commands and continue with `@flyto2/job <session>`.

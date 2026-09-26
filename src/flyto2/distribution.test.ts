@@ -75,8 +75,11 @@ test("the merged release SBOM keeps CycloneDX identity required by GitHub attest
 
   const script = fileURLToPath(new URL("../../scripts/release-candidate.mjs", import.meta.url));
   execFileSync(process.execPath, [script, "sbom", root], { stdio: "pipe" });
+  const packageVersion = (JSON.parse(
+    readFileSync(fileURLToPath(new URL("../../package.json", import.meta.url)), "utf8"),
+  ) as { version: string }).version;
   const merged = JSON.parse(
-    readFileSync(join(root, "flyto2-runtime-1.1.0.cdx.json"), "utf8"),
+    readFileSync(join(root, `flyto2-runtime-${packageVersion}.cdx.json`), "utf8"),
   ) as {
     $schema?: string;
     bomFormat?: string;
@@ -90,4 +93,16 @@ test("the merged release SBOM keeps CycloneDX identity required by GitHub attest
   assert.equal(merged.specVersion, "1.7");
   assert.match(merged.serialNumber ?? "", /^urn:uuid:[0-9a-f-]{36}$/);
   assert.equal(merged.components?.length, 2);
+});
+
+test("the macOS candidate workflow uses explicit CycloneDX attestation instead of deprecated format detection", () => {
+  const workflow = readFileSync(
+    fileURLToPath(new URL("../../.github/workflows/macos-app.yml", import.meta.url)),
+    "utf8",
+  );
+  assert.doesNotMatch(workflow, /actions\/attest-sbom@/);
+  assert.match(workflow, /actions\/attest@59d89421af93a897026c735860bf21b6eb4f7b26/);
+  assert.match(workflow, /predicate-type:\s*https:\/\/cyclonedx\.org\/bom/);
+  assert.match(workflow, /predicate-path:\s*candidate\/flyto2-runtime-\$\{\{ steps\.source\.outputs\.version \}\}\.cdx\.json/);
+  assert.match(workflow, /Validate the merged SBOM/);
 });

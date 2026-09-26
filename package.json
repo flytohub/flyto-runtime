@@ -1,6 +1,6 @@
 {
   "name": "flyto2-runtime",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Give ChatGPT secure access to your machine. Turn ChatGPT into Codex.",
   "repository": {
     "type": "git",
