@@ -71,7 +71,7 @@ function processStatus(snapshot: CodexProcessSnapshot, legacyShell = false): str
   return snapshot.running
     ? legacyShell
       ? `Still running (session ${snapshot.sessionId}). Get more output with this same bash tool using command exactly: ${LEGACY_JOB_COMMAND} ${snapshot.sessionId} (append --cancel to stop it). Do not rerun the original command.${retryHint}`
-      : `Process is still running with session_id=${snapshot.sessionId}. Continue it with write_stdin.${retryHint}`
+      : `Process is still running with session_id=${snapshot.sessionId}. Continue it with write_stdin after the retry hint. Do not poll more than once in the same assistant turn; if it is still running, return control to the user and resume this same session_id in a later turn.${retryHint}`
     : snapshot.signal === CODEX_UNCERTAIN_OUTCOME_SIGNAL
       ? "Process outcome is uncertain. Do not rerun the command blindly."
       : snapshot.signal

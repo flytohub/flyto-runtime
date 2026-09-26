@@ -314,6 +314,8 @@ test("Codex non-interactive commands become durable behind exec_command", async 
   assert.equal(started.retry_after_ms, 5_000);
   assert.match(started.session_id as string, /^proc_[a-f0-9]{32}$/);
   assert.match(started.result as string, /Wait about 5s before checking again/);
+  assert.match(started.result as string, /Do not poll more than once in the same assistant turn/);
+  assert.match(started.result as string, /resume this same session_id in a later turn/);
   assert.match(started.result as string, new RegExp(String(started.session_id)));
   assert.doesNotMatch(started.result as string, /job_/);
 
