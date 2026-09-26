@@ -129,7 +129,7 @@ function serverInstructions(
     ? ` Diagnostic Runtime internals are explicitly enabled. Use ${toolNames.runtimeEvents}, ${toolNames.runtimeWait}, ${toolNames.runtimeEvidence}, or watch tools only when diagnosing Runtime behavior; normal coding should still use the primary workspace/file/process primitives.`
     : "";
   const backgroundTasks =
-    ` For non-trivial multi-step work that should be recoverable across a ChatGPT page or MCP reconnect, start ${toolNames.backgroundTask} as a durable host-owned task record, then continue the work yourself with the normal workspace tools. Runtime never delegates that task to another model or local agent. Save a checkpoint before an expected disconnect and mark the task complete when the work is finished.`;
+    ` For non-trivial multi-step work, immediately start ${toolNames.backgroundTask} before the first edit or long command so a stalled ChatGPT turn always leaves a durable handoff. Runtime never delegates that task to another model or local agent. Save checkpoints at meaningful milestones. After a page stall, reconnect, or new ChatGPT conversation, call ${toolNames.backgroundTask} with action=status and no task_id once after opening the repo; Runtime will recover the latest active task for that repo. Mark the task complete when the work is finished.`;
 
   return `${common} ${toolSurface.instructions({ agents, skills })}${execution}${backgroundTasks}${diagnostics}${artifactInstruction}${showChangesInstruction}${selfUpdateInstruction()}`;
 }

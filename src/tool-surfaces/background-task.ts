@@ -25,7 +25,7 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
     {
       title: "Persist durable ChatGPT task",
       description:
-        "Persist ChatGPT-owned task state across reconnects. Runtime stores checkpoints only and never delegates to another model.",
+        "Persist and recover ChatGPT-owned task state across reconnects. Use status without task_id to recover the latest active task for this repo. Runtime never delegates to another model.",
       inputSchema: {
         action: z.enum(["start", "status", "wait", "continue", "complete", "stop"]),
         workspace_id: z.string().describe(workspaceIdDescription),
@@ -46,6 +46,9 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
       outputSchema: resultOutputSchema({
         task_id: z.string().optional(),
         status: z.enum(["running", "completed", "failed", "stopped"]),
+        workspace_id: z.string().optional(),
+        workspace_root: z.string().optional(),
+        updated_at: z.string().optional(),
         original_prompt: z.string().optional(),
         checkpoint: z.string().optional(),
         response: z.string().optional(),
@@ -198,6 +201,9 @@ function recordResult(
     result,
     task_id: record.id,
     status,
+    workspace_id: record.workspaceId,
+    workspace_root: record.workspaceRoot,
+    updated_at: record.updatedAt,
     original_prompt: originalPrompt,
     checkpoint,
     response,
@@ -233,6 +239,9 @@ function toolResult(
     result: string;
     task_id?: string;
     status: BackgroundTaskStatus;
+    workspace_id?: string;
+    workspace_root?: string;
+    updated_at?: string;
     original_prompt?: string;
     checkpoint?: string;
     response?: string;

@@ -112,6 +112,9 @@ test("background_task records a ChatGPT-owned durable task without delegating", 
   assert.match(String(response.structuredContent.task_id), /^task_/);
   assert.match(String(response.structuredContent.result), /recorded for ChatGPT/);
   assert.match(String(response.structuredContent.result), /will not start another model or local-agent provider/);
+  assert.equal(response.structuredContent.workspace_id, "ws_1");
+  assert.equal(response.structuredContent.workspace_root, "/workspace");
+  assert.equal(response.structuredContent.updated_at, "2026-01-01T00:00:00.000Z");
   assert.equal("provider" in response.structuredContent, false);
 });
 
@@ -263,6 +266,9 @@ test("background_task status without task_id recovers the latest active task for
   });
 
   assert.equal(recovered.structuredContent.task_id, taskId);
+  assert.equal(recovered.structuredContent.workspace_id, "ws_new");
+  assert.equal(recovered.structuredContent.workspace_root, "/workspace");
+  assert.equal(recovered.structuredContent.updated_at, "2026-01-01T00:01:30.000Z");
   assert.equal(
     recovered.structuredContent.checkpoint,
     "Checkpoint from the old conversation.",
