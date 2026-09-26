@@ -99,6 +99,7 @@ export const hostTasks = sqliteTable(
     workspaceRoot: text("workspace_root").notNull(),
     prompt: text("prompt").notNull(),
     status: text("status").notNull(),
+    planJson: text("plan_json"),
     checkpoint: text("checkpoint"),
     result: text("result"),
     createdAt: text("created_at").notNull(),

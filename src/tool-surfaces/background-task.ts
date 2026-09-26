@@ -1,5 +1,9 @@
 import * as z from "zod/v4";
-import type { HostTaskRecord } from "../flyto2/host-tasks.js";
+import type {
+  HostTaskPlan,
+  HostTaskPlanStageStatus,
+  HostTaskRecord,
+} from "../flyto2/host-tasks.js";
 import {
   toolNames,
   workspaceIdDescription,
@@ -9,6 +13,19 @@ import { resultOutputSchema, textBlock } from "./shared.js";
 
 const DEFAULT_RESPONSE_PREVIEW_CHARS = 8_000;
 const CODEX_RESPONSE_PREVIEW_CHARS = 3_000;
+const MAX_PLAN_STAGES = 10;
+const MAX_STAGE_TITLE_CHARS = 80;
+const MAX_STAGE_SUMMARY_CHARS = 240;
+const MAX_STAGE_COMMAND_CHARS = 4_000;
+
+const planStageInputSchema = z.union([
+  z.string().min(1).max(MAX_STAGE_TITLE_CHARS),
+  z.object({
+    title: z.string().min(1).max(MAX_STAGE_TITLE_CHARS),
+    command: z.string().min(1).max(MAX_STAGE_COMMAND_CHARS).optional(),
+    timeout_seconds: z.number().int().min(1).max(3_600).optional(),
+  }),
+]);
 
 const BACKGROUND_TASK_ANNOTATIONS = {
   readOnlyHint: false,
@@ -25,7 +42,7 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
     {
       title: "Persist durable ChatGPT task",
       description:
-        "Persist and recover ChatGPT-owned task state across reconnects. Use status without task_id to recover the latest active task for this repo. Runtime never delegates to another model.",
+        "Persist and recover ChatGPT-owned task state across reconnects. Optional deterministic plan commands can auto-run stage-by-stage in Runtime; failures stop for ChatGPT reasoning. Runtime never delegates to another model.",
       inputSchema: {
         action: z.enum(["start", "status", "wait", "continue", "complete", "stop"]),
         workspace_id: z.string().describe(workspaceIdDescription),
@@ -38,6 +55,37 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
           .min(1)
           .optional()
           .describe("Task text, checkpoint, final summary, or stop reason."),
+        plan: z
+          .array(planStageInputSchema)
+          .min(1)
+          .max(MAX_PLAN_STAGES)
+          .optional()
+          .describe("Optional 1-10 stage plan for start. A stage may include a deterministic local command; command text stays local and is not returned by status."),
+        auto_run: z
+          .boolean()
+          .optional()
+          .describe("Start/resume deterministic commands from the current plan stage. Runtime advances successful command stages automatically and stops on failure or a manual stage."),
+        current_stage: z
+          .number()
+          .int()
+          .min(1)
+          .max(MAX_PLAN_STAGES)
+          .optional()
+          .describe("1-based current plan stage for continue."),
+        stage_status: z
+          .enum(["pending", "running", "done", "blocked"])
+          .optional()
+          .describe("Status for current_stage. Defaults running when current_stage is supplied."),
+        stage_summary: z
+          .string()
+          .max(MAX_STAGE_SUMMARY_CHARS)
+          .optional()
+          .describe("Short current-stage summary; keep detailed output in Runtime evidence."),
+        active_session_id: z
+          .string()
+          .max(128)
+          .optional()
+          .describe("Current long-command session_id, when one is still resumable."),
         include_response: z
           .boolean()
           .optional()
@@ -49,13 +97,40 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
         workspace_id: z.string().optional(),
         workspace_root: z.string().optional(),
         updated_at: z.string().optional(),
+        plan: z.object({
+          current_stage: z.number().int(),
+          total_stages: z.number().int(),
+          auto_run: z.boolean(),
+          active_session_id: z.string().optional(),
+          active_job_id: z.string().optional(),
+          stages: z.array(z.object({
+            index: z.number().int(),
+            title: z.string(),
+            status: z.enum(["pending", "running", "done", "blocked"]),
+            summary: z.string().optional(),
+            automated: z.boolean(),
+            evidence_ref: z.string().optional(),
+          })),
+        }).optional(),
         original_prompt: z.string().optional(),
         checkpoint: z.string().optional(),
         response: z.string().optional(),
       }),
       annotations: BACKGROUND_TASK_ANNOTATIONS,
     },
-    async ({ action, workspace_id, task_id, prompt, include_response }) => {
+    async ({
+      action,
+      workspace_id,
+      task_id,
+      prompt,
+      plan,
+      auto_run,
+      current_stage,
+      stage_status,
+      stage_summary,
+      active_session_id,
+      include_response,
+    }) => {
       const workspace = await context.workspaces.getWorkspace(workspace_id);
       const previewChars = context.config.toolMode === "codex"
         ? CODEX_RESPONSE_PREVIEW_CHARS
@@ -67,9 +142,13 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
           workspaceId: workspace_id,
           workspaceRoot: workspace.root,
           prompt,
+          plan: plan ? createPlan(plan, auto_run === true) : undefined,
         });
+        const started = auto_run === true
+          ? context.taskPipelines.start(record.id) ?? record
+          : record;
         return recordResult(
-          record,
+          started,
           include_response === true,
           previewChars,
           `Durable task ${record.id} is recorded for ChatGPT. Continue the work with the normal workspace tools. Runtime will preserve this task state across reconnects and will not start another model or local-agent provider.`,
@@ -78,17 +157,21 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
 
       if (!task_id) {
         if (action !== "status") return invalidInput(`task_id is required for action=${action}.`);
-        const recoverable = context.hostTasks.findLatestActiveByRoot(workspace.root);
+        const recoverable = context.hostTasks.findLatestActiveByRoot(workspace.root)
+          ?? context.hostTasks.findLatestByRoot(workspace.root);
         if (!recoverable) {
-          return failedResult(`No active durable task was found for ${workspace.root}.`);
+          return failedResult(`No durable task was found for ${workspace.root}.`);
         }
         const recovered = adoptTask(context, recoverable, workspace_id, workspace.root);
         if ("error" in recovered) return failedResult(recovered.error, recoverable.id);
+        const recoveryMessage = recovered.status === "active"
+          ? `Recovered durable task ${recovered.id} for this repo from a previous ChatGPT workspace. ChatGPT can resume from the stored plan/checkpoint.`
+          : `Recovered latest durable task ${recovered.id} for this repo; it is already ${recovered.status}.`;
         return recordResult(
           recovered,
           include_response === true,
           previewChars,
-          `Recovered durable task ${recovered.id} for this repo from a previous ChatGPT workspace. ChatGPT can resume from the stored checkpoint with normal workspace tools.`,
+          recoveryMessage,
         );
       }
 
@@ -105,12 +188,43 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
       }
 
       if (action === "continue") {
-        if (!prompt) return invalidInput("prompt is required for action=continue.");
+        const hasPlanUpdate = current_stage !== undefined
+          || stage_status !== undefined
+          || stage_summary !== undefined
+          || active_session_id !== undefined;
+        if (!prompt && !hasPlanUpdate && auto_run !== true) {
+          return invalidInput("prompt, plan progress, or auto_run=true is required for action=continue.");
+        }
         if (current.status !== "active") {
           return failedResult(`Durable task ${current.id} is already ${current.status}.`, current.id);
         }
-        const updated = context.hostTasks.checkpoint(current.id, prompt);
+        let updated = prompt ? context.hostTasks.checkpoint(current.id, prompt) : current;
         if (!updated) return failedResult(`Durable task ${current.id} no longer exists.`, current.id);
+        if (hasPlanUpdate) {
+          if (!updated.plan) {
+            return failedResult(`Durable task ${current.id} has no persisted plan to update.`, current.id);
+          }
+          const stage = current_stage ?? updated.plan.currentStage;
+          if (stage > updated.plan.stages.length) {
+            return failedResult(
+              `current_stage ${stage} exceeds this task's ${updated.plan.stages.length} plan stages.`,
+              current.id,
+            );
+          }
+          updated = context.hostTasks.updatePlan(current.id, {
+            currentStage: current_stage,
+            stageStatus: stage_status,
+            stageSummary: stage_summary,
+            activeSessionId: active_session_id,
+          });
+          if (!updated) return failedResult(`Durable task ${current.id} no longer exists.`, current.id);
+        }
+        if (updated.plan && auto_run !== undefined) {
+          updated = context.hostTasks.updatePlan(current.id, { autoRun: auto_run }) ?? updated;
+        }
+        if (updated.plan?.autoRun === true) {
+          updated = context.taskPipelines.start(current.id) ?? updated;
+        }
         return recordResult(
           updated,
           include_response === true,
@@ -190,12 +304,13 @@ function recordResult(
   const originalPrompt = includeResponse ? responsePreview(record.prompt, previewChars) : undefined;
   const checkpoint = includeResponse ? responsePreview(record.checkpoint, previewChars) : undefined;
   const response = includeResponse ? responsePreview(record.result, previewChars) : undefined;
-  const result = message
+  const baseResult = message
     ?? (status === "completed"
       ? `Durable task ${record.id} completed.`
       : status === "stopped"
         ? `Durable task ${record.id} stopped.`
         : `Durable task ${record.id} is active and ready for ChatGPT to resume.`);
+  const result = appendPlanProgress(baseResult, record.plan);
 
   return toolResult({
     result,
@@ -204,10 +319,55 @@ function recordResult(
     workspace_id: record.workspaceId,
     workspace_root: record.workspaceRoot,
     updated_at: record.updatedAt,
+    plan: record.plan ? planOutput(record.plan) : undefined,
     original_prompt: originalPrompt,
     checkpoint,
     response,
   });
+}
+
+function createPlan(
+  entries: Array<string | { title: string; command?: string; timeout_seconds?: number }>,
+  autoRun: boolean,
+): HostTaskPlan {
+  return {
+    currentStage: 1,
+    autoRun,
+    stages: entries.map((entry, index) => {
+      const normalized = typeof entry === "string" ? { title: entry } : entry;
+      return {
+        title: normalized.title,
+        status: index === 0 ? "running" : "pending",
+        command: normalized.command,
+        timeoutSeconds: normalized.timeout_seconds,
+      };
+    }),
+  };
+}
+
+function planOutput(plan: HostTaskPlan) {
+  return {
+    current_stage: plan.currentStage,
+    total_stages: plan.stages.length,
+    auto_run: plan.autoRun === true,
+    active_session_id: plan.activeSessionId,
+    active_job_id: plan.activeJobId,
+    stages: plan.stages.map((stage, index) => ({
+      index: index + 1,
+      title: stage.title,
+      status: stage.status,
+      summary: stage.summary,
+      automated: stage.command !== undefined,
+      evidence_ref: stage.evidenceRef,
+    })),
+  };
+}
+
+function appendPlanProgress(message: string, plan: HostTaskPlan | undefined): string {
+  if (!plan) return message;
+  const current = plan.stages[plan.currentStage - 1];
+  if (!current) return message;
+  return `${message} Progress ${plan.currentStage}/${plan.stages.length}: ${current.title} (${current.status}).`;
 }
 
 function recordStatus(record: HostTaskRecord): BackgroundTaskStatus {
@@ -242,6 +402,21 @@ function toolResult(
     workspace_id?: string;
     workspace_root?: string;
     updated_at?: string;
+    plan?: {
+      current_stage: number;
+      total_stages: number;
+      auto_run: boolean;
+      active_session_id?: string;
+      active_job_id?: string;
+      stages: Array<{
+        index: number;
+        title: string;
+        status: HostTaskPlanStageStatus;
+        summary?: string;
+        automated: boolean;
+        evidence_ref?: string;
+      }>;
+    };
     original_prompt?: string;
     checkpoint?: string;
     response?: string;

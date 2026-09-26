@@ -57,6 +57,8 @@ export interface ReactiveRunnerHealth {
   orphaned: number;
 }
 
+export type ReactiveJobTerminalListener = (job: ReactiveJobRecord) => void;
+
 interface ReactiveJobRow {
   id: string;
   workspace_id: string;
@@ -85,6 +87,7 @@ export class ReactiveCommandRunner {
   private readonly database: DatabaseHandle;
   private readonly evidenceDir: string;
   private readonly active = new Map<string, ActiveReactiveJob>();
+  private readonly terminalListeners = new Set<ReactiveJobTerminalListener>();
   private closed = false;
 
   constructor(
@@ -241,6 +244,11 @@ export class ReactiveCommandRunner {
     return row ? reactiveJobFromRow(row) : undefined;
   }
 
+  onTerminal(listener: ReactiveJobTerminalListener): () => void {
+    this.terminalListeners.add(listener);
+    return () => this.terminalListeners.delete(listener);
+  }
+
   signal(
     jobId: string,
     workspaceId: string,
@@ -369,6 +377,7 @@ export class ReactiveCommandRunner {
       }
     }
     this.active.clear();
+    this.terminalListeners.clear();
     this.database.close();
   }
 
@@ -426,6 +435,7 @@ export class ReactiveCommandRunner {
       },
       evidence: [evidence],
     });
+    this.notifyTerminal(jobId);
   }
 
   private appendEvidence(active: ActiveReactiveJob, data: Buffer): void {
@@ -470,6 +480,7 @@ export class ReactiveCommandRunner {
       },
       evidence: [{ kind: "process.log", ref: evidenceRefForJob(jobId) }],
     });
+    this.notifyTerminal(jobId);
   }
 
   private reconcileInterruptedJobs(): void {
@@ -508,6 +519,18 @@ export class ReactiveCommandRunner {
         },
         evidence: [{ kind: "process.log", ref: evidenceRefForJob(row.id) }],
       });
+    }
+  }
+
+  private notifyTerminal(jobId: string): void {
+    const job = this.get(jobId);
+    if (!job || job.status === "running") return;
+    for (const listener of this.terminalListeners) {
+      try {
+        listener(job);
+      } catch {
+        // Listener failures must never corrupt the reactive runner's durable state.
+      }
     }
   }
 }

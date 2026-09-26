@@ -53,6 +53,7 @@ import { emitDurableToolEvent } from "./flyto2/tool-events.js";
 import { WorkspaceWatchRegistry } from "./flyto2/workspace-watch.js";
 import { WorkspaceRegistry } from "./workspaces.js";
 import { HostTaskStore } from "./flyto2/host-tasks.js";
+import { TaskPipelineRunner } from "./flyto2/task-pipeline.js";
 import {
   getLocalAgentProviderAvailabilitySnapshot,
 } from "./local-agent-availability.js";
@@ -129,7 +130,7 @@ function serverInstructions(
     ? ` Diagnostic Runtime internals are explicitly enabled. Use ${toolNames.runtimeEvents}, ${toolNames.runtimeWait}, ${toolNames.runtimeEvidence}, or watch tools only when diagnosing Runtime behavior; normal coding should still use the primary workspace/file/process primitives.`
     : "";
   const backgroundTasks =
-    ` For non-trivial multi-step work, immediately start ${toolNames.backgroundTask} before the first edit or long command so a stalled ChatGPT turn always leaves a durable handoff. Runtime never delegates that task to another model or local agent. Save checkpoints at meaningful milestones. After a page stall, reconnect, or new ChatGPT conversation, call ${toolNames.backgroundTask} with action=status and no task_id once after opening the repo; Runtime will recover the latest active task for that repo. Mark the task complete when the work is finished.`;
+    ` For non-trivial multi-step work, immediately start ${toolNames.backgroundTask} before the first edit or long command so a stalled ChatGPT turn always leaves a durable handoff. If the work has a clear 2-10 stage plan, persist it. Deterministic stages such as tests, build, verify, commit/push, or waiting for GitHub CI may include a local command; set auto_run=true when Runtime should run those stages and advance on successful process exit without asking the user to say continue. A GitHub CI stage can use a blocking command such as gh run watch ... --exit-status, so CI completion becomes the trigger. Runtime stops automatic advancement on command failure, orphaned outcome, or a stage without a command; ChatGPT remains the only reasoning/coding owner. Keep stage summaries short and command output in Runtime evidence. After a page stall, reconnect, or new ChatGPT conversation, call ${toolNames.backgroundTask} with action=status and no task_id once after opening the repo; Runtime will recover the latest task, including completed results and remaining stages.`;
 
   return `${common} ${toolSurface.instructions({ agents, skills })}${execution}${backgroundTasks}${diagnostics}${artifactInstruction}${showChangesInstruction}${selfUpdateInstruction()}`;
 }
@@ -190,8 +191,10 @@ export function createMcpServer(
   reactiveCommands: ReactiveCommandRunner,
   workspaceWatches: WorkspaceWatchRegistry,
   hostTasks: HostTaskStore,
+  taskPipelines?: TaskPipelineRunner,
   trackToolActivity?: TrackToolActivity,
 ): McpServer {
+  const ownedTaskPipelines = taskPipelines ?? new TaskPipelineRunner(hostTasks, reactiveCommands);
   const toolSurface = getToolSurface(config.toolMode);
   const server = new McpServer(
     mcpServerInfo(),
@@ -213,6 +216,7 @@ export function createMcpServer(
     reactiveCommands,
     workspaceWatches,
     hostTasks,
+    ownedTaskPipelines,
     trackToolActivity,
   );
   return server;
@@ -231,6 +235,7 @@ function registerMcpSurface(
   reactiveCommands: ReactiveCommandRunner,
   workspaceWatches: WorkspaceWatchRegistry,
   hostTasks: HostTaskStore,
+  taskPipelines: TaskPipelineRunner,
   trackToolActivity?: TrackToolActivity,
 ): void {
   const trackedTarget = trackToolActivity
@@ -272,6 +277,7 @@ function registerMcpSurface(
     runtimeEvents,
     reactiveCommands,
     hostTasks,
+    taskPipelines,
   });
 
   if (config.artifactsEnabled && isArtifactDownloadSupportedPlatform()) {
@@ -339,6 +345,7 @@ export function createServer(
   const reactiveCommands = new ReactiveCommandRunner(config.stateDir, runtimeEvents);
   const workspaceWatches = new WorkspaceWatchRegistry(config.stateDir, runtimeEvents);
   const hostTasks = new HostTaskStore(config.stateDir);
+  const taskPipelines = new TaskPipelineRunner(hostTasks, reactiveCommands);
   const workspaces = new WorkspaceRegistry(config, workspaceStore);
   const reviewCheckpoints = createReviewCheckpointManager();
   const processSessions = new ProcessSessionManager();
@@ -368,6 +375,7 @@ export function createServer(
       reactiveCommands,
       workspaceWatches,
       hostTasks,
+      taskPipelines,
       toolActivities.track,
     );
   });
@@ -541,6 +549,7 @@ export function createServer(
         await toolActivities.waitForIdle();
         processSessions.shutdown();
         workspaceWatches.shutdown();
+        taskPipelines.shutdown();
         reactiveCommands.shutdown();
         oauthProvider.close();
         durableOperations.close();

@@ -102,3 +102,43 @@ test("HostTaskStore never adopts a task across repo roots", async (t) => {
   assert.equal(adopted?.workspaceId, "ws_old");
   assert.equal(adopted?.workspaceRoot, "/workspace-a");
 });
+
+test("HostTaskStore persists compact stage progress", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "flyto2-host-task-plan-"));
+  const store = new HostTaskStore(stateDir);
+  t.after(async () => {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  });
+
+  const created = store.create({
+    workspaceId: "ws_1",
+    workspaceRoot: "/workspace",
+    prompt: "Release task.",
+    plan: {
+      currentStage: 1,
+      stages: [
+        { title: "Audit", status: "running" },
+        { title: "Test", status: "pending" },
+        { title: "Deploy", status: "pending" },
+      ],
+    },
+  });
+  const updated = store.updatePlan(created.id, {
+    currentStage: 2,
+    stageStatus: "running",
+    stageSummary: "Full suite running.",
+    activeSessionId: "proc_123",
+  });
+  assert.equal(updated?.plan?.currentStage, 2);
+  assert.equal(updated?.plan?.stages[0]?.status, "done");
+  assert.equal(updated?.plan?.stages[1]?.summary, "Full suite running.");
+  assert.equal(updated?.plan?.activeSessionId, "proc_123");
+
+  const reopened = store.get(created.id);
+  assert.deepEqual(reopened?.plan, updated?.plan);
+
+  const completed = store.complete(created.id, "Released.");
+  assert.deepEqual(completed?.plan?.stages.map((stage) => stage.status), ["done", "done", "done"]);
+  assert.equal(completed?.plan?.activeSessionId, undefined);
+});

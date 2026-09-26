@@ -72,6 +72,11 @@ const migrations: Migration[] = [
     name: "host-tasks",
     up: migrateHostTasks,
   },
+  {
+    version: 14,
+    name: "host-task-plans",
+    up: migrateHostTaskPlans,
+  },
 ];
 
 export const FLYTO2_STATE_SCHEMA_VERSION =
@@ -428,9 +433,13 @@ function migrateHostTasks(sqlite: Database.Database): void {
   `);
 }
 
+function migrateHostTaskPlans(sqlite: Database.Database): void {
+  addColumnIfMissing(sqlite, "host_tasks", "plan_json", "text");
+}
+
 function addColumnIfMissing(
   sqlite: Database.Database,
-  table: "workspace_sessions" | "local_agent_sessions",
+  table: "workspace_sessions" | "local_agent_sessions" | "host_tasks",
   column: string,
   definition: string,
 ): void {
