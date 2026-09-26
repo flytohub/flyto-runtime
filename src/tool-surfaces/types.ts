@@ -80,7 +80,10 @@ export interface ToolRegistrationContext {
   processSessions: ProcessSessionManager;
   runtimeEvents: RuntimeEventStore;
   reactiveCommands: ReactiveCommandRunner;
-  hostTasks: Pick<HostTaskStore, "create" | "get" | "checkpoint" | "complete" | "stop">;
+  hostTasks: Pick<
+    HostTaskStore,
+    "create" | "get" | "findLatestActiveByRoot" | "adoptActive" | "checkpoint" | "complete" | "stop"
+  >;
 }
 
 export interface ToolInstructionContext {

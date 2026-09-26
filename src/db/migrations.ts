@@ -422,6 +422,9 @@ function migrateHostTasks(sqlite: Database.Database): void {
 
     create index if not exists host_tasks_workspace_idx
       on host_tasks(workspace_id, status, updated_at desc);
+
+    create index if not exists host_tasks_root_idx
+      on host_tasks(workspace_root, status, updated_at desc);
   `);
 }
 

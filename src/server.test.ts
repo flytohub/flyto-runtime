@@ -82,6 +82,65 @@ test("ChatGPT durable task state is exposed without enabling local agents", asyn
   assert.match(backgroundTask?.description ?? "", /never delegates to another model/);
 });
 
+test("a new ChatGPT conversation recovers the latest active durable task for the same repo", async (t) => {
+  const context = await fixture(t, { toolMode: "codex", uiEnabled: false });
+  const oldWorkspace = structuredContent(
+    await callOpen(context.client, context.project, "cross-conversation-old"),
+  ).workspace_id;
+  assert.equal(typeof oldWorkspace, "string");
+
+  const started = structuredContent(await context.client.callTool({
+    name: "background_task",
+    arguments: {
+      action: "start",
+      workspace_id: oldWorkspace,
+      prompt: "Resume this task from a fresh ChatGPT conversation.",
+    },
+  }));
+  const taskId = started.task_id;
+  assert.equal(typeof taskId, "string");
+
+  await context.client.callTool({
+    name: "background_task",
+    arguments: {
+      action: "continue",
+      workspace_id: oldWorkspace,
+      task_id: taskId,
+      prompt: "Old-chat checkpoint is ready.",
+    },
+  });
+
+  const newWorkspace = structuredContent(
+    await callOpen(context.client, context.project, "cross-conversation-new"),
+  ).workspace_id;
+  assert.equal(typeof newWorkspace, "string");
+  assert.notEqual(newWorkspace, oldWorkspace);
+
+  const recovered = structuredContent(await context.client.callTool({
+    name: "background_task",
+    arguments: {
+      action: "status",
+      workspace_id: newWorkspace,
+      include_response: true,
+    },
+  }));
+  assert.equal(recovered.task_id, taskId);
+  assert.equal(recovered.checkpoint, "Old-chat checkpoint is ready.");
+  assert.match(String(recovered.result), /previous ChatGPT workspace/);
+
+  const explicitStatus = structuredContent(await context.client.callTool({
+    name: "background_task",
+    arguments: {
+      action: "status",
+      workspace_id: newWorkspace,
+      task_id: taskId,
+      include_response: true,
+    },
+  }));
+  assert.equal(explicitStatus.task_id, taskId);
+  assert.equal(explicitStatus.checkpoint, "Old-chat checkpoint is ready.");
+});
+
 test("healthz exposes only minimal public liveness", async (t) => {
   const context = await httpServerFixture(t, "flyto2-health-");
   const response = await fetch(`${context.localBaseUrl}/healthz`);

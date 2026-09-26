@@ -79,6 +79,32 @@ export class HostTaskStore {
     return row ? hostTaskFromRow(row) : undefined;
   }
 
+  findLatestActiveByRoot(workspaceRoot: string): HostTaskRecord | undefined {
+    const row = this.database.sqlite.prepare(
+      `select id, workspace_id, workspace_root, prompt, status, checkpoint,
+              result, created_at, updated_at, completed_at
+       from host_tasks
+       where workspace_root = ? and status = 'active'
+       order by updated_at desc, rowid desc
+       limit 1`,
+    ).get(workspaceRoot) as HostTaskRow | undefined;
+    return row ? hostTaskFromRow(row) : undefined;
+  }
+
+  adoptActive(
+    id: string,
+    workspaceId: string,
+    workspaceRoot: string,
+  ): HostTaskRecord | undefined {
+    const now = new Date().toISOString();
+    this.database.sqlite.prepare(
+      `update host_tasks
+       set workspace_id = ?, updated_at = ?
+       where id = ? and workspace_root = ? and status = 'active'`,
+    ).run(workspaceId, now, id, workspaceRoot);
+    return this.get(id);
+  }
+
   checkpoint(id: string, checkpoint: string): HostTaskRecord | undefined {
     const now = new Date().toISOString();
     this.database.sqlite.prepare(

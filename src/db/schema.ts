@@ -107,6 +107,7 @@ export const hostTasks = sqliteTable(
   },
   (table) => [
     index("host_tasks_workspace_idx").on(table.workspaceId, table.status, table.updatedAt),
+    index("host_tasks_root_idx").on(table.workspaceRoot, table.status, table.updatedAt),
   ],
 );
 

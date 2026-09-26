@@ -32,7 +32,7 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
         task_id: z
           .string()
           .optional()
-          .describe("Task id; omit only for start."),
+          .describe("Task id; omit for start, or for status to recover the latest active task for this repo."),
         prompt: z
           .string()
           .min(1)
@@ -73,7 +73,22 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
         );
       }
 
-      if (!task_id) return invalidInput(`task_id is required for action=${action}.`);
+      if (!task_id) {
+        if (action !== "status") return invalidInput(`task_id is required for action=${action}.`);
+        const recoverable = context.hostTasks.findLatestActiveByRoot(workspace.root);
+        if (!recoverable) {
+          return failedResult(`No active durable task was found for ${workspace.root}.`);
+        }
+        const recovered = adoptTask(context, recoverable, workspace_id, workspace.root);
+        if ("error" in recovered) return failedResult(recovered.error, recoverable.id);
+        return recordResult(
+          recovered,
+          include_response === true,
+          previewChars,
+          `Recovered durable task ${recovered.id} for this repo from a previous ChatGPT workspace. ChatGPT can resume from the stored checkpoint with normal workspace tools.`,
+        );
+      }
+
       const current = scopedTask(context, task_id, workspace_id, workspace.root);
       if ("error" in current) return failedResult(current.error, task_id);
 
@@ -138,10 +153,28 @@ function scopedTask(
 ): HostTaskRecord | { error: string } {
   const record = context.hostTasks.get(taskId);
   if (!record) return { error: `Durable task ${taskId} was not found.` };
-  if (record.workspaceId !== workspaceId || record.workspaceRoot !== workspaceRoot) {
+  if (record.workspaceRoot !== workspaceRoot) {
     return { error: `Durable task ${taskId} does not belong to this workspace.` };
   }
-  return record;
+  return adoptTask(context, record, workspaceId, workspaceRoot);
+}
+
+function adoptTask(
+  context: ToolRegistrationContext,
+  record: HostTaskRecord,
+  workspaceId: string,
+  workspaceRoot: string,
+): HostTaskRecord | { error: string } {
+  if (record.workspaceRoot !== workspaceRoot) {
+    return { error: `Durable task ${record.id} does not belong to this workspace.` };
+  }
+  if (record.workspaceId === workspaceId || record.status !== "active") return record;
+
+  const adopted = context.hostTasks.adoptActive(record.id, workspaceId, workspaceRoot);
+  if (!adopted || adopted.workspaceId !== workspaceId) {
+    return { error: `Durable task ${record.id} could not be recovered into this workspace.` };
+  }
+  return adopted;
 }
 
 function recordResult(
