@@ -259,7 +259,9 @@ function registerExecCommandTool(
           .positive()
           .max(3_600)
           .optional()
-          .describe("Optional non-interactive timeout, max 3600s."),
+          .describe(
+            "Optional non-interactive timeout, max 3600s. For GitHub watch commands this is a no-progress watchdog refreshed by output, not a total runtime deadline.",
+          ),
       },
       outputSchema: processOutputSchema(),
       annotations: SHELL_TOOL_ANNOTATIONS,

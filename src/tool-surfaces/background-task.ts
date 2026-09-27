@@ -30,7 +30,7 @@ const planStageInputSchema = z.union([
       .min(1)
       .max(3_600)
       .optional()
-      .describe("Optional command timeout. GitHub watch stages default to 3600s when omitted; other stages keep Runtime's normal timeout behavior."),
+      .describe("Optional command timeout. GitHub watch stages default to a 3600s no-progress watchdog when omitted; active output refreshes it, so total runtime is not capped."),
   }),
 ]);
 
@@ -42,6 +42,12 @@ const BACKGROUND_TASK_ANNOTATIONS = {
 };
 
 type BackgroundTaskStatus = "running" | "completed" | "failed" | "stopped";
+type BackgroundTaskExecutionState =
+  | "waiting_for_host"
+  | "running"
+  | "completed"
+  | "failed"
+  | "stopped";
 
 export function registerBackgroundTaskTool(context: ToolRegistrationContext): void {
   context.server.registerTool(
@@ -102,6 +108,13 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
       outputSchema: resultOutputSchema({
         task_id: z.string().optional(),
         status: z.enum(["running", "completed", "failed", "stopped"]),
+        execution_state: z.enum([
+          "waiting_for_host",
+          "running",
+          "completed",
+          "failed",
+          "stopped",
+        ]),
         workspace_id: z.string().optional(),
         workspace_root: z.string().optional(),
         repository_root: z.string().optional(),
@@ -343,6 +356,7 @@ function recordResult(
   message?: string,
 ) {
   const status = recordStatus(record);
+  const executionState = recordExecutionState(record);
   const originalPrompt = includeResponse ? responsePreview(record.prompt, previewChars) : undefined;
   const checkpoint = includeResponse ? responsePreview(record.checkpoint, previewChars) : undefined;
   const response = includeResponse ? responsePreview(record.result, previewChars) : undefined;
@@ -351,13 +365,16 @@ function recordResult(
       ? `Durable task ${record.id} completed.`
       : status === "stopped"
         ? `Durable task ${record.id} stopped.`
-        : `Durable task ${record.id} is active and ready for ChatGPT to resume.`);
+        : executionState === "running"
+          ? `Durable task ${record.id} is active with Runtime execution in flight.`
+          : `Durable task ${record.id} is active, but no Runtime execution is in flight; it is waiting for ChatGPT to resume.`);
   const result = appendPlanProgress(baseResult, record.plan);
 
   return toolResult({
     result,
     task_id: record.id,
     status,
+    execution_state: executionState,
     workspace_id: record.workspaceId,
     workspace_root: record.workspaceRoot,
     repository_root: record.repoRoot,
@@ -430,6 +447,15 @@ function recordStatus(record: HostTaskRecord): BackgroundTaskStatus {
   return "running";
 }
 
+function recordExecutionState(record: HostTaskRecord): BackgroundTaskExecutionState {
+  if (record.status === "completed") return "completed";
+  if (record.status === "stopped") return "stopped";
+  if (record.plan?.activeJobId !== undefined || record.plan?.activeSessionId !== undefined) {
+    return "running";
+  }
+  return "waiting_for_host";
+}
+
 function responsePreview(response: string | undefined, maxChars: number): string | undefined {
   if (!response) return undefined;
   if (response.length <= maxChars) return response;
@@ -445,6 +471,7 @@ function failedResult(error: string, taskId?: string) {
     result: error,
     task_id: taskId,
     status: "failed" as const,
+    execution_state: "failed" as const,
   }, true);
 }
 
@@ -453,6 +480,7 @@ function toolResult(
     result: string;
     task_id?: string;
     status: BackgroundTaskStatus;
+    execution_state: BackgroundTaskExecutionState;
     workspace_id?: string;
     workspace_root?: string;
     repository_root?: string;

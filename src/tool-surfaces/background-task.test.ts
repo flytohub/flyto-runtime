@@ -186,6 +186,7 @@ test("background_task records a ChatGPT-owned durable task without delegating", 
   });
 
   assert.equal(response.structuredContent.status, "running");
+  assert.equal(response.structuredContent.execution_state, "waiting_for_host");
   assert.match(String(response.structuredContent.task_id), /^task_/);
   assert.match(String(response.structuredContent.result), /recorded for ChatGPT/);
   assert.match(String(response.structuredContent.result), /will not start another model or local-agent provider/);
@@ -239,6 +240,7 @@ test("background_task wait never implies another model is running", async () => 
     task_id: taskId,
   });
   assert.equal(waited.structuredContent.status, "running");
+  assert.equal(waited.structuredContent.execution_state, "waiting_for_host");
   assert.match(String(waited.structuredContent.result), /There is no background model to wait for/);
 });
 
@@ -259,6 +261,7 @@ test("background_task stores completion result for a later ChatGPT session", asy
     include_response: true,
   });
   assert.equal(completed.structuredContent.status, "completed");
+  assert.equal(completed.structuredContent.execution_state, "completed");
   assert.equal(completed.structuredContent.response, "Tests pass; committed as abc1234.");
 });
 
@@ -402,6 +405,7 @@ test("background_task adopts an active task into a new ChatGPT workspace for the
 
   assert.equal(recovered.isError, undefined);
   assert.equal(recovered.structuredContent.status, "running");
+  assert.equal(recovered.structuredContent.execution_state, "waiting_for_host");
   assert.equal(records.get(taskId)?.workspaceId, "ws_new");
   assert.equal(
     recovered.structuredContent.original_prompt,
@@ -472,6 +476,7 @@ test("background_task preserves a five-stage plan so a new chat knows stages 4 a
   assert.equal(plan.current_stage, 3);
   assert.equal(plan.total_stages, 5);
   assert.equal(plan.active_session_id, "proc_long_test");
+  assert.equal(progressed.structuredContent.execution_state, "running");
   assert.deepEqual(plan.stages.map((stage) => stage.status), [
     "done",
     "done",
@@ -493,6 +498,7 @@ test("background_task preserves a five-stage plan so a new chat knows stages 4 a
   assert.equal(recoveredPlan.stages[4]?.title, "Live verify");
   assert.equal(recoveredPlan.stages[4]?.status, "pending");
   assert.equal(recoveredPlan.active_session_id, "proc_long_test");
+  assert.equal(recovered.structuredContent.execution_state, "running");
   assert.match(String(recovered.structuredContent.result), /Progress 3\/5: Test \(running\)/);
 });
 
@@ -567,6 +573,7 @@ test("background_task status without task_id returns the latest completed task w
   });
   assert.equal(recovered.structuredContent.task_id, taskId);
   assert.equal(recovered.structuredContent.status, "completed");
+  assert.equal(recovered.structuredContent.execution_state, "completed");
   assert.equal(recovered.structuredContent.response, "Done.");
   assert.match(String(recovered.structuredContent.result), /already completed/);
 });

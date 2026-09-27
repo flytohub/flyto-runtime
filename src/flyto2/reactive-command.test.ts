@@ -3,7 +3,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { ReactiveCommandRunner } from "./reactive-command.js";
+import {
+  isProgressAwareWatchCommand,
+  ReactiveCommandRunner,
+} from "./reactive-command.js";
 import { RuntimeEventStore } from "./runtime-events.js";
 
 test("reactive commands return immediately and publish shallow completion with evidence", async (t) => {
@@ -140,6 +143,52 @@ test("reactive timeout cannot be converted into success by a clean SIGTERM handl
   assert.equal(event?.payload.timed_out, true);
   assert.equal(event?.payload.success, false);
   assert.equal(runner.get(receipt.job_id)?.status, "failed");
+});
+
+test("idle timeout is refreshed by command progress instead of enforcing a wall-clock deadline", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "flyto2-reactive-idle-timeout-"));
+  const events = new RuntimeEventStore(stateDir);
+  const runner = new ReactiveCommandRunner(stateDir, events);
+  t.after(async () => {
+    runner.shutdown();
+    events.close();
+    await rm(stateDir, { recursive: true, force: true });
+  });
+
+  const receipt = runner.start({
+    workspace_id: "ws-idle-timeout",
+    workspace_root: stateDir,
+    cwd: stateDir,
+    command:
+      "node -e \"let n=0; const i=setInterval(()=>{process.stdout.write('tick\\n'); if(++n===4){clearInterval(i); process.exit(0)}},200)\"",
+    timeout_seconds: 0.5,
+    timeout_mode: "idle",
+  });
+  const event = await events.wait({
+    correlation_id: receipt.job_id,
+    type: receipt.event_type,
+    timeout_ms: 2_000,
+  });
+
+  assert.equal(event?.payload.success, true);
+  assert.equal(event?.payload.timed_out, false);
+  assert.equal(runner.get(receipt.job_id)?.status, "completed");
+});
+
+test("GitHub watch commands use progress-aware timeout semantics", () => {
+  assert.equal(
+    isProgressAwareWatchCommand("gh run watch 123 --repo flytohub/flyto-cloud --exit-status"),
+    true,
+  );
+  assert.equal(
+    isProgressAwareWatchCommand("gh pr checks 377 --repo flytohub/flyto-cloud --required --watch --interval 10"),
+    true,
+  );
+  assert.equal(
+    isProgressAwareWatchCommand("gh run view 123 --repo flytohub/flyto-cloud"),
+    false,
+  );
+  assert.equal(isProgressAwareWatchCommand("pnpm test --watch"), false);
 });
 
 test("reactive command can be cancelled through the internal process boundary", async (t) => {

@@ -25,6 +25,7 @@ export interface ReactiveCommandInput {
   cwd: string;
   event_type?: string;
   timeout_seconds?: number;
+  timeout_mode?: "deadline" | "idle";
 }
 
 export interface ReactiveJobReceipt {
@@ -79,6 +80,8 @@ interface ActiveReactiveJob {
   truncated: boolean;
   finished: boolean;
   timedOut: boolean;
+  timeoutSeconds?: number;
+  timeoutMode?: "deadline" | "idle";
   timeoutTimer?: NodeJS.Timeout;
   killTimer?: NodeJS.Timeout;
 }
@@ -158,37 +161,10 @@ export class ReactiveCommandRunner {
 
     const timeoutSeconds = normalizeTimeoutSeconds(input.timeout_seconds);
     if (timeoutSeconds !== undefined) {
-      active.timeoutTimer = setTimeout(() => {
-        if (active.finished || this.closed) return;
-        active.timedOut = true;
-        this.appendEvidence(
-          active,
-          Buffer.from(`Flyto2 Runtime: command timed out after ${timeoutSeconds} seconds.\n`, "utf8"),
-        );
-        try {
-          terminateProcessTree(
-            active.child,
-            "SIGTERM",
-            process.platform !== "win32",
-          );
-        } catch {
-          // The close/error handlers below will reconcile the final state.
-        }
-        active.killTimer = setTimeout(() => {
-          if (active.finished || this.closed) return;
-          try {
-            terminateProcessTree(
-              active.child,
-              "SIGKILL",
-              process.platform !== "win32",
-            );
-          } catch {
-            // The next Runtime startup will reconcile a still-running row.
-          }
-        }, 1_000);
-        active.killTimer.unref();
-      }, timeoutSeconds * 1_000);
-      active.timeoutTimer.unref();
+      active.timeoutSeconds = timeoutSeconds;
+      active.timeoutMode = input.timeout_mode
+        ?? (isProgressAwareWatchCommand(command) ? "idle" : "deadline");
+      this.armTimeout(active);
     }
 
     const append = (data: Buffer) => this.appendEvidence(active, data);
@@ -440,6 +416,9 @@ export class ReactiveCommandRunner {
 
   private appendEvidence(active: ActiveReactiveJob, data: Buffer): void {
     if (active.finished || this.closed || data.length === 0) return;
+    if (active.timeoutMode === "idle" && !active.timedOut) {
+      this.armTimeout(active);
+    }
     const remaining = MAX_EVIDENCE_BYTES - active.evidenceBytes;
     if (remaining <= 0) {
       active.truncated = true;
@@ -449,6 +428,43 @@ export class ReactiveCommandRunner {
     writeSync(active.evidenceFd, chunk);
     active.evidenceBytes += chunk.length;
     if (chunk.length < data.length) active.truncated = true;
+  }
+
+  private armTimeout(active: ActiveReactiveJob): void {
+    const timeoutSeconds = active.timeoutSeconds;
+    if (timeoutSeconds === undefined || active.finished || this.closed) return;
+    if (active.timeoutTimer) clearTimeout(active.timeoutTimer);
+    active.timeoutTimer = setTimeout(() => {
+      if (active.finished || this.closed) return;
+      active.timedOut = true;
+      const message = active.timeoutMode === "idle"
+        ? `Flyto2 Runtime: watch command made no output progress for ${timeoutSeconds} seconds; terminating stalled process.\n`
+        : `Flyto2 Runtime: command timed out after ${timeoutSeconds} seconds.\n`;
+      this.appendEvidence(active, Buffer.from(message, "utf8"));
+      try {
+        terminateProcessTree(
+          active.child,
+          "SIGTERM",
+          process.platform !== "win32",
+        );
+      } catch {
+        // The close/error handlers below will reconcile the final state.
+      }
+      active.killTimer = setTimeout(() => {
+        if (active.finished || this.closed) return;
+        try {
+          terminateProcessTree(
+            active.child,
+            "SIGKILL",
+            process.platform !== "win32",
+          );
+        } catch {
+          // The next Runtime startup will reconcile a still-running row.
+        }
+      }, 1_000);
+      active.killTimer.unref();
+    }, timeoutSeconds * 1_000);
+    active.timeoutTimer.unref();
   }
 
   private failBeforeStart(
@@ -565,6 +581,12 @@ function normalizeTimeoutSeconds(value: number | undefined): number | undefined 
     throw new Error("timeout_seconds must be greater than 0 and at most 3600.");
   }
   return value;
+}
+
+export function isProgressAwareWatchCommand(command: string): boolean {
+  const trimmed = command.trim();
+  if (/^gh\s+run\s+watch\b/.test(trimmed)) return true;
+  return /^gh\s+pr\s+checks\b.*(?:^|\s)--watch(?:\s|$)/.test(trimmed);
 }
 
 function normalizeEventType(value: string | undefined): string {
