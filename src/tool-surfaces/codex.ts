@@ -71,7 +71,7 @@ function processStatus(snapshot: CodexProcessSnapshot, legacyShell = false): str
   return snapshot.running
     ? legacyShell
       ? `Still running (session ${snapshot.sessionId}). Get more output with this same bash tool using command exactly: ${LEGACY_JOB_COMMAND} ${snapshot.sessionId} (append --cancel to stop it). Do not rerun the original command.${retryHint}`
-      : `Process is still running with session_id=${snapshot.sessionId}. Continue it with write_stdin after the retry hint. Do not poll more than once in the same assistant turn; if it is still running, return control to the user and resume this same session_id in a later turn.${retryHint}`
+      : `Process is running durably with session_id=${snapshot.sessionId}. For a non-interactive command, end this assistant turn now instead of waiting again. Resume this same session_id with write_stdin in a later turn; never rerun the original command. Use background_task auto_run for multi-stage deterministic waits such as CI, builds, releases, or deploys.${retryHint}`
     : snapshot.signal === CODEX_UNCERTAIN_OUTCOME_SIGNAL
       ? "Process outcome is uncertain. Do not rerun the command blindly."
       : snapshot.signal
@@ -241,7 +241,7 @@ function registerExecCommandTool(
     {
       title: "Execute command",
       description:
-        "Run a workspace command. If still running, continue its session_id with write_stdin; never rerun it. Use tty only for interactive input.",
+        "Run a workspace command. If a non-interactive command is still running, return control and resume its session_id in a later turn; never rerun it. Use tty only for interactive input.",
       inputSchema: {
         workspace_id: z.string().describe(workspaceIdDescription),
         cmd: z.string().min(1).describe("Shell command to execute."),
@@ -364,7 +364,7 @@ function registerWriteStdinTool(
     {
       title: "Continue process",
       description:
-        "Continue exec_command by session_id. Omit chars to wait; interactive sessions accept input; \\u0003 interrupts. Respect retry_after_ms.",
+        "Resume exec_command by session_id in a later turn. Immediate use is for interactive TTY input; avoid same-turn polling. \\u0003 interrupts.",
       inputSchema: {
         workspace_id: z
           .string()

@@ -17,13 +17,20 @@ const MAX_PLAN_STAGES = 10;
 const MAX_STAGE_TITLE_CHARS = 80;
 const MAX_STAGE_SUMMARY_CHARS = 240;
 const MAX_STAGE_COMMAND_CHARS = 4_000;
+const DEFAULT_EXTERNAL_WATCH_TIMEOUT_SECONDS = 3_600;
 
 const planStageInputSchema = z.union([
   z.string().min(1).max(MAX_STAGE_TITLE_CHARS),
   z.object({
     title: z.string().min(1).max(MAX_STAGE_TITLE_CHARS),
     command: z.string().min(1).max(MAX_STAGE_COMMAND_CHARS).optional(),
-    timeout_seconds: z.number().int().min(1).max(3_600).optional(),
+    timeout_seconds: z
+      .number()
+      .int()
+      .min(1)
+      .max(3_600)
+      .optional()
+      .describe("Optional command timeout. GitHub watch stages default to 3600s when omitted; other stages keep Runtime's normal timeout behavior."),
   }),
 ]);
 
@@ -375,10 +382,21 @@ function createPlan(
         title: normalized.title,
         status: index === 0 ? "running" : "pending",
         command: normalized.command,
-        timeoutSeconds: normalized.timeout_seconds,
+        timeoutSeconds: normalized.timeout_seconds
+          ?? defaultExternalWatchTimeoutSeconds(normalized.command),
       };
     }),
   };
+}
+
+function defaultExternalWatchTimeoutSeconds(command: string | undefined): number | undefined {
+  if (!command) return undefined;
+  const trimmed = command.trim();
+  if (/^gh\s+run\s+watch\b/.test(trimmed)) return DEFAULT_EXTERNAL_WATCH_TIMEOUT_SECONDS;
+  if (/^gh\s+pr\s+checks\b.*(?:^|\s)--watch(?:\s|$)/.test(trimmed)) {
+    return DEFAULT_EXTERNAL_WATCH_TIMEOUT_SECONDS;
+  }
+  return undefined;
 }
 
 function planOutput(plan: HostTaskPlan) {

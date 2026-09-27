@@ -335,6 +335,9 @@ test("Codex process tools keep model-facing controls minimal", async (t) => {
   for (const tool of [exec, stdin]) {
     assert.doesNotMatch(tool?.description ?? "", /runtime_|job_|evidence|reactive/i);
   }
+  assert.match(exec?.description ?? "", /return control/i);
+  assert.match(stdin?.description ?? "", /later turn/i);
+  assert.match(stdin?.description ?? "", /same-turn polling/i);
 });
 
 test("Codex command output is bounded by default", async (t) => {
@@ -423,8 +426,9 @@ test("Codex non-interactive commands become durable behind exec_command", async 
   assert.equal(started.retry_after_ms, 5_000);
   assert.match(started.session_id as string, /^proc_[a-f0-9]{32}$/);
   assert.match(started.result as string, /Wait about 5s before checking again/);
-  assert.match(started.result as string, /Do not poll more than once in the same assistant turn/);
-  assert.match(started.result as string, /resume this same session_id in a later turn/);
+  assert.match(started.result as string, /end this assistant turn now instead of waiting again/);
+  assert.match(started.result as string, /Resume this same session_id with write_stdin in a later turn/);
+  assert.match(started.result as string, /background_task auto_run/);
   assert.match(started.result as string, new RegExp(String(started.session_id)));
   assert.doesNotMatch(started.result as string, /job_/);
 
@@ -2099,7 +2103,9 @@ test("a client cannot opt a modern exec_command into legacy wording by sending t
   const response = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
     name: "exec_command", arguments: { workspace_id: openedBody.result.structuredContent.workspace_id, cmd: "sleep 5" },
   }, { "x-flyto2-legacy-shell": "1" });
-  assert.match(await response.text(), /Continue it with write_stdin/);
+  const responseText = await response.text();
+  assert.match(responseText, /end this assistant turn now instead of waiting again/);
+  assert.match(responseText, /Resume this same session_id with write_stdin in a later turn/);
 });
 
 test("open_workspace names the allowed roots so a host never has to guess or search home", async (t) => {

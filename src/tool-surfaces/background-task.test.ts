@@ -497,7 +497,7 @@ test("background_task preserves a five-stage plan so a new chat knows stages 4 a
 });
 
 test("background_task keeps deterministic commands local while exposing automation state", async () => {
-  const { handler } = fixture();
+  const { handler, records } = fixture();
   const response = await handler({
     action: "start",
     workspace_id: "ws_1",
@@ -517,6 +517,32 @@ test("background_task keeps deterministic commands local while exposing automati
   assert.equal(plan.stages[2]?.automated, false);
   assert.equal("command" in (plan.stages[0] ?? {}), false);
   assert.equal("timeout_seconds" in (plan.stages[1] ?? {}), false);
+
+  const taskId = String(response.structuredContent.task_id);
+  const stored = records.get(taskId);
+  assert.equal(stored?.plan?.stages[0]?.timeoutSeconds, undefined);
+  assert.equal(stored?.plan?.stages[1]?.timeoutSeconds, 120);
+});
+
+test("background_task gives GitHub watch stages a one-hour default without changing normal commands", async () => {
+  const { handler, records } = fixture();
+  const response = await handler({
+    action: "start",
+    workspace_id: "ws_1",
+    prompt: "Wait for CI and then build.",
+    plan: [
+      { title: "CI", command: "gh run watch 123 -R flytohub/flyto-runtime --exit-status" },
+      { title: "PR checks", command: "gh pr checks 373 -R flytohub/flyto-cloud --watch" },
+      { title: "Build", command: "npm run build" },
+      { title: "Explicit CI", command: "gh run watch 456 --exit-status", timeout_seconds: 900 },
+    ],
+  });
+  const taskId = String(response.structuredContent.task_id);
+  const stages = records.get(taskId)?.plan?.stages ?? [];
+  assert.equal(stages[0]?.timeoutSeconds, 3_600);
+  assert.equal(stages[1]?.timeoutSeconds, 3_600);
+  assert.equal(stages[2]?.timeoutSeconds, undefined);
+  assert.equal(stages[3]?.timeoutSeconds, 900);
 });
 
 test("background_task status without task_id returns the latest completed task when nothing is active", async () => {
