@@ -279,7 +279,7 @@ function registerExecCommandTool(
           .max(3_600)
           .optional()
           .describe(
-            "Optional non-interactive timeout, max 3600s. For GitHub watch commands this is a no-progress watchdog refreshed by output, not a total runtime deadline.",
+            "Optional non-interactive no-progress watchdog, max 3600s per observation window. Output resets stall suspicion; a live silent process receives adaptive observation windows before Runtime considers it stalled. This is not a total runtime deadline.",
           ),
       },
       outputSchema: processOutputSchema(),

@@ -286,6 +286,7 @@ function registerShellTool(context: ToolRegistrationContext): void {
           cwd,
           event_type: LEGACY_BASH_EVENT_TYPE,
           timeout_seconds: input.timeout ?? 30,
+          timeout_mode: "deadline",
         });
         jobId = receipt.job_id;
         const outcome = await legacyJobResponse(

@@ -3,10 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import {
-  isProgressAwareWatchCommand,
-  ReactiveCommandRunner,
-} from "./reactive-command.js";
+import { ReactiveCommandRunner } from "./reactive-command.js";
 import { RuntimeEventStore } from "./runtime-events.js";
 
 test("reactive commands return immediately and publish shallow completion with evidence", async (t) => {
@@ -85,7 +82,7 @@ test("terminal reactive jobs can be discarded after a synchronous compatibility 
   );
 });
 
-test("reactive command timeout terminates the process and records timeout evidence", async (t) => {
+test("reactive command idle watchdog requires repeated no-progress observations before terminating", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "flyto2-reactive-timeout-"));
   const events = new RuntimeEventStore(stateDir);
   const runner = new ReactiveCommandRunner(stateDir, events);
@@ -110,13 +107,12 @@ test("reactive command timeout terminates the process and records timeout eviden
 
   assert.equal(event?.payload.success, false);
   assert.equal(event?.payload.timed_out, true);
-  assert.match(
-    runner.readEvidence(receipt.evidence_ref).text,
-    /timed out after 0\.1 seconds/i,
-  );
+  const evidence = runner.readEvidence(receipt.evidence_ref).text;
+  assert.match(evidence, /process is still alive; extending the stall watchdog/i);
+  assert.match(evidence, /across 3 adaptive watchdog observations/i);
 });
 
-test("reactive timeout cannot be converted into success by a clean SIGTERM handler", async (t) => {
+test("adaptive idle timeout cannot be converted into success by a clean SIGTERM handler", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "flyto2-reactive-timeout-clean-"));
   const events = new RuntimeEventStore(stateDir);
   const runner = new ReactiveCommandRunner(stateDir, events);
@@ -162,7 +158,6 @@ test("idle timeout is refreshed by command progress instead of enforcing a wall-
     command:
       "node -e \"let n=0; const i=setInterval(()=>{process.stdout.write('tick\\n'); if(++n===4){clearInterval(i); process.exit(0)}},200)\"",
     timeout_seconds: 0.5,
-    timeout_mode: "idle",
   });
   const event = await events.wait({
     correlation_id: receipt.job_id,
@@ -175,20 +170,33 @@ test("idle timeout is refreshed by command progress instead of enforcing a wall-
   assert.equal(runner.get(receipt.job_id)?.status, "completed");
 });
 
-test("GitHub watch commands use progress-aware timeout semantics", () => {
-  assert.equal(
-    isProgressAwareWatchCommand("gh run watch 123 --repo flytohub/flyto-cloud --exit-status"),
-    true,
-  );
-  assert.equal(
-    isProgressAwareWatchCommand("gh pr checks 377 --repo flytohub/flyto-cloud --required --watch --interval 10"),
-    true,
-  );
-  assert.equal(
-    isProgressAwareWatchCommand("gh run view 123 --repo flytohub/flyto-cloud"),
-    false,
-  );
-  assert.equal(isProgressAwareWatchCommand("pnpm test --watch"), false);
+test("explicit deadline mode still enforces a hard wall-clock timeout", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "flyto2-reactive-deadline-"));
+  const events = new RuntimeEventStore(stateDir);
+  const runner = new ReactiveCommandRunner(stateDir, events);
+  t.after(async () => {
+    runner.shutdown();
+    events.close();
+    await rm(stateDir, { recursive: true, force: true });
+  });
+
+  const receipt = runner.start({
+    workspace_id: "ws-deadline",
+    workspace_root: stateDir,
+    cwd: stateDir,
+    command: "node -e \"setInterval(()=>process.stdout.write('still-alive\\n'),25)\"",
+    timeout_seconds: 0.1,
+    timeout_mode: "deadline",
+  });
+  const event = await events.wait({
+    correlation_id: receipt.job_id,
+    type: receipt.event_type,
+    timeout_ms: 2_000,
+  });
+
+  assert.equal(event?.payload.success, false);
+  assert.equal(event?.payload.timed_out, true);
+  assert.match(runner.readEvidence(receipt.evidence_ref).text, /timed out after 0\.1 seconds/i);
 });
 
 test("reactive command can be cancelled through the internal process boundary", async (t) => {

@@ -30,7 +30,7 @@ const planStageInputSchema = z.union([
       .min(1)
       .max(3_600)
       .optional()
-      .describe("Optional command timeout. GitHub watch stages default to a 3600s no-progress watchdog when omitted; active output refreshes it, so total runtime is not capped."),
+      .describe("Optional no-progress watchdog per observation window. Output resets stall suspicion and a live silent process receives adaptive observation windows before termination; total runtime is not capped. GitHub watch stages default to 3600s when omitted."),
   }),
 ]);
 

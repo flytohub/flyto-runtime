@@ -17,6 +17,8 @@ import { RuntimeEventStore } from "./runtime-events.js";
 
 const MAX_EVIDENCE_BYTES = 10 * 1024 * 1024;
 const MAX_EVIDENCE_READ_CHARACTERS = 64 * 1024;
+const MAX_IDLE_STALL_STRIKES = 3;
+const MAX_IDLE_BACKOFF_MULTIPLIER = 4;
 
 export interface ReactiveCommandInput {
   workspace_id: string;
@@ -80,6 +82,7 @@ interface ActiveReactiveJob {
   truncated: boolean;
   finished: boolean;
   timedOut: boolean;
+  idleStallStrikes: number;
   timeoutSeconds?: number;
   timeoutMode?: "deadline" | "idle";
   timeoutTimer?: NodeJS.Timeout;
@@ -156,14 +159,14 @@ export class ReactiveCommandRunner {
       truncated: false,
       finished: false,
       timedOut: false,
+      idleStallStrikes: 0,
     };
     this.active.set(jobId, active);
 
     const timeoutSeconds = normalizeTimeoutSeconds(input.timeout_seconds);
     if (timeoutSeconds !== undefined) {
       active.timeoutSeconds = timeoutSeconds;
-      active.timeoutMode = input.timeout_mode
-        ?? (isProgressAwareWatchCommand(command) ? "idle" : "deadline");
+      active.timeoutMode = input.timeout_mode ?? "idle";
       this.armTimeout(active);
     }
 
@@ -417,8 +420,14 @@ export class ReactiveCommandRunner {
   private appendEvidence(active: ActiveReactiveJob, data: Buffer): void {
     if (active.finished || this.closed || data.length === 0) return;
     if (active.timeoutMode === "idle" && !active.timedOut) {
+      active.idleStallStrikes = 0;
       this.armTimeout(active);
     }
+    this.writeEvidence(active, data);
+  }
+
+  private writeEvidence(active: ActiveReactiveJob, data: Buffer): void {
+    if (active.finished || this.closed || data.length === 0) return;
     const remaining = MAX_EVIDENCE_BYTES - active.evidenceBytes;
     if (remaining <= 0) {
       active.truncated = true;
@@ -434,13 +443,38 @@ export class ReactiveCommandRunner {
     const timeoutSeconds = active.timeoutSeconds;
     if (timeoutSeconds === undefined || active.finished || this.closed) return;
     if (active.timeoutTimer) clearTimeout(active.timeoutTimer);
+    const idleMultiplier = active.timeoutMode === "idle"
+      ? Math.min(
+          MAX_IDLE_BACKOFF_MULTIPLIER,
+          Math.max(1, 2 ** active.idleStallStrikes),
+        )
+      : 1;
+    const timeoutMs = timeoutSeconds * idleMultiplier * 1_000;
     active.timeoutTimer = setTimeout(() => {
       if (active.finished || this.closed) return;
+      if (active.timeoutMode === "idle" && active.child.exitCode === null) {
+        active.idleStallStrikes += 1;
+        if (active.idleStallStrikes < MAX_IDLE_STALL_STRIKES) {
+          const nextMultiplier = Math.min(
+            MAX_IDLE_BACKOFF_MULTIPLIER,
+            2 ** active.idleStallStrikes,
+          );
+          this.writeEvidence(
+            active,
+            Buffer.from(
+              `Flyto2 Runtime: no command output progress for ${timeoutSeconds * idleMultiplier} seconds, but the process is still alive; extending the stall watchdog (observation ${active.idleStallStrikes}/${MAX_IDLE_STALL_STRIKES}, next window ${timeoutSeconds * nextMultiplier} seconds).\n`,
+              "utf8",
+            ),
+          );
+          this.armTimeout(active);
+          return;
+        }
+      }
       active.timedOut = true;
       const message = active.timeoutMode === "idle"
-        ? `Flyto2 Runtime: watch command made no output progress for ${timeoutSeconds} seconds; terminating stalled process.\n`
+        ? `Flyto2 Runtime: command remained alive without output progress across ${MAX_IDLE_STALL_STRIKES} adaptive watchdog observations; terminating the stalled process.\n`
         : `Flyto2 Runtime: command timed out after ${timeoutSeconds} seconds.\n`;
-      this.appendEvidence(active, Buffer.from(message, "utf8"));
+      this.writeEvidence(active, Buffer.from(message, "utf8"));
       try {
         terminateProcessTree(
           active.child,
@@ -463,7 +497,7 @@ export class ReactiveCommandRunner {
         }
       }, 1_000);
       active.killTimer.unref();
-    }, timeoutSeconds * 1_000);
+    }, timeoutMs);
     active.timeoutTimer.unref();
   }
 
@@ -583,11 +617,6 @@ function normalizeTimeoutSeconds(value: number | undefined): number | undefined 
   return value;
 }
 
-export function isProgressAwareWatchCommand(command: string): boolean {
-  const trimmed = command.trim();
-  if (/^gh\s+run\s+watch\b/.test(trimmed)) return true;
-  return /^gh\s+pr\s+checks\b.*(?:^|\s)--watch(?:\s|$)/.test(trimmed);
-}
 
 function normalizeEventType(value: string | undefined): string {
   const eventType = value?.trim() || "process.exited";
