@@ -419,30 +419,42 @@ test("Codex non-interactive commands become durable behind exec_command", async 
     name: "exec_command",
     arguments: {
       workspace_id: workspaceId,
-      cmd: "node -e \"setTimeout(()=>console.log('durable-finished'),3200)\"",
+      cmd: "node -e \"setTimeout(()=>console.log('durable-finished'),1200)\"",
     },
   }));
   assert.equal(started.running, true);
-  assert.equal(started.retry_after_ms, 5_000);
+  assert.equal(started.retry_after_ms, 15_000);
+  assert.equal(started.next_action, "end_turn");
   assert.match(started.session_id as string, /^proc_[a-f0-9]{32}$/);
-  assert.match(started.result as string, /Wait about 5s before checking again/);
+  assert.match(started.result as string, /Wait about 15s before checking again/);
   assert.match(started.result as string, /end this assistant turn now instead of waiting again/);
   assert.match(started.result as string, /Resume this same session_id with write_stdin in a later turn/);
   assert.match(started.result as string, /background_task auto_run/);
   assert.match(started.result as string, new RegExp(String(started.session_id)));
   assert.doesNotMatch(started.result as string, /job_/);
 
-  let finished = started;
-  for (let attempt = 0; attempt < 4 && finished.running; attempt += 1) {
-    finished = structuredContent(await context.client.callTool({
-      name: "write_stdin",
-      arguments: {
-        workspace_id: workspaceId,
-        session_id: started.session_id,
-      },
-    }));
-  }
+  const early = structuredContent(await context.client.callTool({
+    name: "write_stdin",
+    arguments: {
+      workspace_id: workspaceId,
+      session_id: started.session_id,
+    },
+  }));
+  assert.equal(early.running, true);
+  assert.equal(early.poll_suppressed, true);
+  assert.equal(early.next_action, "end_turn");
+  assert.match(String(early.result), /suppressed an early repeat poll/i);
+
+  await new Promise((resolve) => setTimeout(resolve, 900));
+  const finished = structuredContent(await context.client.callTool({
+    name: "write_stdin",
+    arguments: {
+      workspace_id: workspaceId,
+      session_id: started.session_id,
+    },
+  }));
   assert.equal(finished.running, false);
+  assert.equal(finished.next_action, "done");
   assert.equal(finished.exit_code, 0);
   assert.match(finished.result as string, /durable-finished/);
 });
@@ -458,24 +470,32 @@ test("Codex running commands expose bounded progress instead of looking stalled"
     name: "exec_command",
     arguments: {
       workspace_id: workspaceId,
-      cmd: "node -e \"console.log('phase-one-ready');setTimeout(()=>console.log('phase-two-done'),3200)\"",
+      cmd: "node -e \"console.log('phase-one-ready');setTimeout(()=>console.log('phase-two-done'),1200)\"",
     },
   }));
   assert.equal(started.running, true);
+  assert.equal(started.next_action, "end_turn");
   assert.match(String(started.result), /phase-one-ready/);
   assert.ok(String(started.result).length < 1_200);
 
-  let finished = started;
-  for (let attempt = 0; attempt < 4 && finished.running; attempt += 1) {
-    finished = structuredContent(await context.client.callTool({
-      name: "write_stdin",
-      arguments: {
-        workspace_id: workspaceId,
-        session_id: started.session_id,
-      },
-    }));
-  }
+  const early = structuredContent(await context.client.callTool({
+    name: "write_stdin",
+    arguments: {
+      workspace_id: workspaceId,
+      session_id: started.session_id,
+    },
+  }));
+  assert.equal(early.poll_suppressed, true);
+  await new Promise((resolve) => setTimeout(resolve, 900));
+  const finished = structuredContent(await context.client.callTool({
+    name: "write_stdin",
+    arguments: {
+      workspace_id: workspaceId,
+      session_id: started.session_id,
+    },
+  }));
   assert.equal(finished.running, false);
+  assert.equal(finished.next_action, "done");
   assert.match(String(finished.result), /phase-two-done/);
 });
 
@@ -488,7 +508,7 @@ test("Codex exec_command replays a lost response without repeating the process s
 
   const arguments_ = {
     workspace_id: workspaceId,
-    cmd: "node -e \"require('node:fs').appendFileSync('codex-effect.txt','once');setTimeout(()=>console.log('done'),3200)\"",
+    cmd: "node -e \"require('node:fs').appendFileSync('codex-effect.txt','once');setTimeout(()=>console.log('done'),1200)\"",
     operation_id: "op.codex.exec.retry.0001",
   };
   const first = structuredContent(await context.client.callTool({
@@ -508,17 +528,24 @@ test("Codex exec_command replays a lost response without repeating the process s
     "once",
   );
 
-  let finished = first;
-  for (let attempt = 0; attempt < 4 && finished.running; attempt += 1) {
-    finished = structuredContent(await context.client.callTool({
-      name: "write_stdin",
-      arguments: {
-        workspace_id: workspaceId,
-        session_id: first.session_id,
-      },
-    }));
-  }
+  const early = structuredContent(await context.client.callTool({
+    name: "write_stdin",
+    arguments: {
+      workspace_id: workspaceId,
+      session_id: first.session_id,
+    },
+  }));
+  assert.equal(early.poll_suppressed, true);
+  await new Promise((resolve) => setTimeout(resolve, 900));
+  const finished = structuredContent(await context.client.callTool({
+    name: "write_stdin",
+    arguments: {
+      workspace_id: workspaceId,
+      session_id: first.session_id,
+    },
+  }));
   assert.equal(finished.running, false);
+  assert.equal(finished.next_action, "done");
   assert.equal(finished.exit_code, 0);
   assert.match(finished.result as string, /done/);
 });
@@ -539,6 +566,7 @@ test("Codex interactive and non-interactive sessions share one opaque shape", as
     },
   }));
   assert.equal(started.running, true);
+  assert.equal(started.next_action, "continue");
   assert.match(started.session_id as string, /^proc_[a-f0-9]{32}$/);
 
   const finished = structuredContent(await context.client.callTool({
@@ -549,6 +577,7 @@ test("Codex interactive and non-interactive sessions share one opaque shape", as
     },
   }));
   assert.equal(finished.running, false);
+  assert.equal(finished.next_action, "done");
   assert.equal(finished.exit_code, 0);
   assert.match(finished.result as string, /pty-done/);
 });
