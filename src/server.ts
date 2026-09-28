@@ -255,6 +255,7 @@ function registerMcpSurface(
     config,
     workspaces,
     reviewCheckpoints,
+    hostTasks,
     resolveLocalAgentProviders,
   });
 

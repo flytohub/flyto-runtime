@@ -110,11 +110,27 @@ test("a new ChatGPT conversation recovers the latest active durable task for the
     },
   });
 
-  const newWorkspace = structuredContent(
+  const newlyOpened = structuredContent(
     await callOpen(context.client, context.project, "cross-conversation-new"),
-  ).workspace_id;
+  );
+  const recovery = newlyOpened.recovery as {
+    task_id?: string;
+    status?: string;
+    execution_state?: string;
+    checkpoint?: string;
+  } | undefined;
+  const newWorkspace = newlyOpened.workspace_id;
   assert.equal(typeof newWorkspace, "string");
   assert.notEqual(newWorkspace, oldWorkspace);
+  assert.equal(recovery?.task_id, taskId);
+  assert.equal(recovery?.status, "running");
+  assert.equal(recovery?.execution_state, "waiting_for_host");
+  assert.equal(recovery?.checkpoint, "Old-chat checkpoint is ready.");
+  assert.match(
+    String(newlyOpened.instruction),
+    new RegExp(`Recovered unfinished durable task ${taskId}.*waiting_for_host`, "s"),
+  );
+  assert.match(String(newlyOpened.instruction), /Do not ask the user to recreate a handoff/);
 
   const recovered = structuredContent(await context.client.callTool({
     name: "background_task",
@@ -139,6 +155,53 @@ test("a new ChatGPT conversation recovers the latest active durable task for the
   }));
   assert.equal(explicitStatus.task_id, taskId);
   assert.equal(explicitStatus.checkpoint, "Old-chat checkpoint is ready.");
+});
+
+test("a new ChatGPT conversation sees the latest completed durable task without redoing it", async (t) => {
+  const context = await fixture(t, { toolMode: "codex", uiEnabled: false });
+  const oldWorkspace = structuredContent(
+    await callOpen(context.client, context.project, "completed-conversation-old"),
+  ).workspace_id;
+  assert.equal(typeof oldWorkspace, "string");
+
+  const started = structuredContent(await context.client.callTool({
+    name: "background_task",
+    arguments: {
+      action: "start",
+      workspace_id: oldWorkspace,
+      prompt: "Ship the existing verified change.",
+    },
+  }));
+  const taskId = started.task_id;
+  assert.equal(typeof taskId, "string");
+
+  const completed = structuredContent(await context.client.callTool({
+    name: "background_task",
+    arguments: {
+      action: "complete",
+      workspace_id: oldWorkspace,
+      task_id: taskId,
+      prompt: "Verified, pushed, and deployed.",
+    },
+  }));
+  assert.equal(completed.status, "completed");
+
+  const newlyOpened = structuredContent(
+    await callOpen(context.client, context.project, "completed-conversation-new"),
+  );
+  const recovery = newlyOpened.recovery as {
+    task_id?: string;
+    status?: string;
+    execution_state?: string;
+    original_prompt?: string;
+    response?: string;
+  } | undefined;
+  assert.equal(recovery?.task_id, taskId);
+  assert.equal(recovery?.status, "completed");
+  assert.equal(recovery?.execution_state, "completed");
+  assert.equal(recovery?.original_prompt, "Ship the existing verified change.");
+  assert.equal(recovery?.response, "Verified, pushed, and deployed.");
+  assert.match(String(newlyOpened.instruction), /completed\. Do not redo it/);
 });
 
 test("a durable task follows its source repo into a real managed worktree", async (t) => {

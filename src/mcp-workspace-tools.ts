@@ -8,6 +8,7 @@ import type { ReviewCheckpointManager } from "./review-checkpoints.js";
 import { conversationScopeIdFromRequestMeta } from "./request-meta.js";
 import { LEGACY_TASK_COMMAND } from "./mcp-legacy-input.js";
 import { formatPathForPrompt } from "./skills.js";
+import type { HostTaskRecord, HostTaskStore } from "./flyto2/host-tasks.js";
 import {
   buildLocalAgentCatalog,
   type LocalAgentProviderStatus,
@@ -34,6 +35,7 @@ interface WorkspaceToolRegistrationOptions {
   config: ServerConfig;
   workspaces: WorkspaceRegistry;
   reviewCheckpoints: ReviewCheckpointManager;
+  hostTasks: HostTaskStore;
   resolveLocalAgentProviders: () => LocalAgentProviderStatus[];
 }
 
@@ -76,6 +78,19 @@ const workspaceLocalAgentProviderOutputSchema = z.object({
 
 const workspaceAvailableAgentsFileOutputSchema = z.object({
   path: z.string(),
+});
+
+const workspaceRecoveryOutputSchema = z.object({
+  task_id: z.string(),
+  status: z.enum(["running", "completed", "stopped"]),
+  execution_state: z.enum(["waiting_for_host", "running", "completed", "stopped"]),
+  updated_at: z.string(),
+  workspace_id: z.string(),
+  workspace_root: z.string(),
+  repository_root: z.string(),
+  original_prompt: z.string(),
+  checkpoint: z.string().optional(),
+  response: z.string().optional(),
 });
 
 /** Explain the filesystem boundary to hosts that cannot inspect the user's machine directly. */
@@ -150,6 +165,7 @@ function registerOpenWorkspaceTool(options: WorkspaceToolRegistrationOptions): v
             reason: z.string(),
           }),
         ]),
+        recovery: workspaceRecoveryOutputSchema.optional(),
         instruction: z.string(),
       },
       annotations: { readOnlyHint: true },
@@ -181,10 +197,14 @@ async function handleOpenWorkspace(
     workspaceId: workspace.id,
     root: workspace.root,
   });
+  const recovery = context.includeDiscoveryContext
+    ? workspaceRecovery(options.hostTasks, workspace)
+    : undefined;
   const presentation = buildWorkspacePresentation(
     context,
     config,
     resolveLocalAgentProviders,
+    recovery,
   );
 
   logToolCall(config, {
@@ -213,6 +233,7 @@ async function handleOpenWorkspace(
           }
         : undefined,
       review,
+      recovery,
       ...(context.includeDiscoveryContext
         ? {
             agents_files: presentation.loadedAgentsFiles,
@@ -259,6 +280,7 @@ function buildWorkspacePresentation(
   context: WorkspaceContext,
   config: ServerConfig,
   resolveLocalAgentProviders: () => LocalAgentProviderStatus[],
+  recovery: WorkspaceRecovery | undefined,
 ) {
   const { workspace, agentsFiles, availableAgentsFiles } = context;
   // ChatGPT/Codex owns its coding loop. Even if an older user config asks to
@@ -319,6 +341,7 @@ function buildWorkspacePresentation(
     baseInstruction,
     config.toolMode,
     preloadedSubagentInstructions,
+    recovery,
   );
 
   return {
@@ -350,6 +373,7 @@ function workspaceInstruction(
   baseInstruction: string,
   toolMode: ServerConfig["toolMode"],
   preloadedSubagentInstructions: string | undefined,
+  recovery: WorkspaceRecovery | undefined,
 ): string {
   const { workspace } = context;
   const workspaceInstruction = context.workspaceReused
@@ -369,6 +393,7 @@ function workspaceInstruction(
     : undefined;
   const instructionParts = [
     workspaceInstruction,
+    recovery ? recoveryInstruction(recovery) : undefined,
     legacyReactiveInstruction,
     legacyTaskInstruction,
     ...(preloadedSubagentInstructions && context.includeDiscoveryContext
@@ -377,6 +402,76 @@ function workspaceInstruction(
   ].filter((part): part is string => Boolean(part));
 
   return instructionParts.join("\n\n");
+}
+
+interface WorkspaceRecovery {
+  task_id: string;
+  status: "running" | "completed" | "stopped";
+  execution_state: "waiting_for_host" | "running" | "completed" | "stopped";
+  updated_at: string;
+  workspace_id: string;
+  workspace_root: string;
+  repository_root: string;
+  original_prompt: string;
+  checkpoint?: string;
+  response?: string;
+}
+
+const RECOVERY_PROMPT_CHARS = 2_000;
+const RECOVERY_CHECKPOINT_CHARS = 3_000;
+const RECOVERY_RESPONSE_CHARS = 2_000;
+
+function workspaceRecovery(
+  hostTasks: HostTaskStore,
+  workspace: WorkspaceContext["workspace"],
+): WorkspaceRecovery | undefined {
+  const repoRoot = workspace.sourceRoot ?? workspace.root;
+  const record = hostTasks.findLatestActiveByRepoRoot(repoRoot)
+    ?? hostTasks.findLatestByRepoRoot(repoRoot);
+  if (!record) return undefined;
+
+  return {
+    task_id: record.id,
+    status: record.status === "active" ? "running" : record.status,
+    execution_state: recoveryExecutionState(record),
+    updated_at: record.updatedAt,
+    workspace_id: record.workspaceId,
+    workspace_root: record.workspaceRoot,
+    repository_root: record.repoRoot,
+    original_prompt: recoveryPreview(record.prompt, RECOVERY_PROMPT_CHARS) ?? "",
+    checkpoint: recoveryPreview(record.checkpoint, RECOVERY_CHECKPOINT_CHARS),
+    response: recoveryPreview(record.result, RECOVERY_RESPONSE_CHARS),
+  };
+}
+
+function recoveryExecutionState(
+  record: HostTaskRecord,
+): WorkspaceRecovery["execution_state"] {
+  if (record.status === "completed") return "completed";
+  if (record.status === "stopped") return "stopped";
+  if (record.plan?.activeJobId !== undefined || record.plan?.activeSessionId !== undefined) {
+    return "running";
+  }
+  return "waiting_for_host";
+}
+
+function recoveryPreview(value: string | undefined, maxChars: number): string | undefined {
+  if (!value) return undefined;
+  if (value.length <= maxChars) return value;
+  return `${value.slice(0, maxChars)}\n[Recovery preview truncated; full value remains in Runtime state.]`;
+}
+
+function recoveryInstruction(recovery: WorkspaceRecovery): string {
+  if (recovery.status === "completed") {
+    return `Recovered latest durable task ${recovery.task_id}: completed. Do not redo it. Its final response is available in the structured recovery field; start a new durable task only for genuinely new work.`;
+  }
+  if (recovery.status === "stopped") {
+    return `Recovered latest durable task ${recovery.task_id}: stopped. Do not silently restart it; inspect the structured recovery field before deciding whether the user's current request requires new work.`;
+  }
+  if (recovery.execution_state === "running") {
+    return `Recovered unfinished durable task ${recovery.task_id}: Runtime execution is still in flight. Do not rerun the same side effect. Use the structured recovery checkpoint and continue this task when the active execution reaches a resumable point.`;
+  }
+  return `Recovered unfinished durable task ${recovery.task_id}: waiting_for_host. Reconcile the structured recovery original_prompt/checkpoint against the current repository state, then resume only the remaining work before starting unrelated work; do not rerun stages already proven complete. Do not ask the user to recreate a handoff unless the stored recovery information is insufficient; save later progress with background_task continue using this task_id.`;
 }
 
 function workspaceResultText(
