@@ -499,12 +499,12 @@ test("Codex non-interactive commands become durable behind exec_command", async 
     },
   }));
   assert.equal(started.running, true);
-  assert.equal(started.retry_after_ms, 15_000);
+  assert.equal(started.retry_after_ms, undefined);
   assert.equal(started.next_action, "end_turn");
   assert.match(started.session_id as string, /^proc_[a-f0-9]{32}$/);
-  assert.match(started.result as string, /Wait about 15s before checking again/);
-  assert.match(started.result as string, /end this assistant turn now instead of waiting again/);
-  assert.match(started.result as string, /Resume this same session_id with write_stdin in a later turn/);
+  assert.doesNotMatch(started.result as string, /Wait about \d+s before checking again/);
+  assert.match(started.result as string, /End this assistant turn now/);
+  assert.match(started.result as string, /only after a later user turn/);
   assert.match(started.result as string, /background_task auto_run/);
   assert.match(started.result as string, new RegExp(String(started.session_id)));
   assert.doesNotMatch(started.result as string, /job_/);
@@ -519,7 +519,9 @@ test("Codex non-interactive commands become durable behind exec_command", async 
   assert.equal(early.running, true);
   assert.equal(early.poll_suppressed, true);
   assert.equal(early.next_action, "end_turn");
-  assert.match(String(early.result), /suppressed an early repeat poll/i);
+  assert.equal(early.retry_after_ms, undefined);
+  assert.match(String(early.result), /blocked a same-turn repeat poll/i);
+  assert.match(String(early.result), /Do not wait, sleep/);
 
   await new Promise((resolve) => setTimeout(resolve, 900));
   const finished = structuredContent(await context.client.callTool({
@@ -2209,8 +2211,8 @@ test("a client cannot opt a modern exec_command into legacy wording by sending t
     name: "exec_command", arguments: { workspace_id: openedBody.result.structuredContent.workspace_id, cmd: "sleep 5" },
   }, { "x-flyto2-legacy-shell": "1" });
   const responseText = await response.text();
-  assert.match(responseText, /end this assistant turn now instead of waiting again/);
-  assert.match(responseText, /Resume this same session_id with write_stdin in a later turn/);
+  assert.match(responseText, /End this assistant turn now/);
+  assert.match(responseText, /only after a later user turn/);
 });
 
 test("open_workspace names the allowed roots so a host never has to guess or search home", async (t) => {

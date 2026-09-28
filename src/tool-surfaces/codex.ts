@@ -76,12 +76,12 @@ function processStatus(snapshot: CodexProcessSnapshot, legacyShell = false): str
     ? ` Wait about ${Math.max(1, Math.round(snapshot.retryAfterMs / 1_000))}s before checking again; do not poll faster.`
     : "";
   if (snapshot.pollSuppressed) {
-    return `Runtime suppressed an early repeat poll for session ${snapshot.sessionId}; the durable background process is still running. Do not call write_stdin again in this assistant turn. Return control to the user and reuse this same session_id in a later turn if the result is still needed.${retryHint}`;
+    return `Runtime blocked a same-turn repeat poll for session ${snapshot.sessionId}; the durable background process is still running. Do not wait, sleep, call another tool just to burn time, or call write_stdin again in this assistant turn. End the assistant turn now. Reuse this same session_id only after a later user turn if the result is still needed.`;
   }
   return snapshot.running
     ? legacyShell
       ? `Still running (session ${snapshot.sessionId}). Get more output with this same bash tool using command exactly: ${LEGACY_JOB_COMMAND} ${snapshot.sessionId} (append --cancel to stop it). Do not rerun the original command.${retryHint}`
-      : `Process is running durably with session_id=${snapshot.sessionId}. For a non-interactive command, end this assistant turn now instead of waiting again. Resume this same session_id with write_stdin in a later turn; never rerun the original command. Use background_task auto_run for multi-stage deterministic waits such as CI, builds, releases, or deploys.${retryHint}`
+      : `Process is running durably with session_id=${snapshot.sessionId}. End this assistant turn now. Do not wait, sleep, or poll this session again during the current turn. Resume this same session_id with write_stdin only after a later user turn; never rerun the original command. Use background_task auto_run for multi-stage deterministic waits such as CI, builds, releases, or deploys.`
     : snapshot.signal === CODEX_UNCERTAIN_OUTCOME_SIGNAL
       ? "Process outcome is uncertain. Do not rerun the command blindly."
       : snapshot.signal
@@ -515,14 +515,12 @@ async function continueCodexProcess(
   };
   durablePollGates.set(jobId, gate);
   if (now < gate.nextAllowedAt) {
-    const remainingMs = Math.max(1_000, gate.nextAllowedAt - now);
     return {
       sessionId: codexSessionIdForReactiveJob(jobId),
       output: "",
       outputTruncated: false,
       running: true,
       wallTimeMs: Math.max(0, now - Date.parse(current.started_at)),
-      retryAfterMs: remainingMs,
       nextAction: "end_turn",
       pollSuppressed: true,
     };
@@ -548,7 +546,6 @@ async function continueCodexProcess(
   durablePollGates.set(jobId, gate);
   return {
     ...snapshot,
-    retryAfterMs: gate.backoffMs,
     nextAction: "end_turn",
   };
 }
@@ -619,7 +616,6 @@ async function durableProcessSnapshot(
       outputTruncated: evidence.truncated || evidence.text.length > progress.length,
       running: true,
       wallTimeMs,
-      retryAfterMs: DEFAULT_CODEX_RETRY_AFTER_MS,
       nextAction: "end_turn",
     };
   }
