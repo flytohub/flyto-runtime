@@ -12,6 +12,7 @@ type Handler = (input: Record<string, unknown>) => Promise<{
 function fixture() {
   let handler: Handler | undefined;
   const records = new Map<string, HostTaskRecord>();
+  const runningJobs = new Set<string>();
   let sequence = 0;
   const context = {
     config: {
@@ -167,6 +168,11 @@ function fixture() {
         return updated;
       },
     },
+    reactiveCommands: {
+      get: (jobId: string) => runningJobs.has(jobId)
+        ? { status: "running" }
+        : undefined,
+    },
     taskPipelines: {
       start: (id: string) => records.get(id),
     },
@@ -174,7 +180,7 @@ function fixture() {
 
   registerBackgroundTaskTool(context);
   assert.ok(handler);
-  return { handler, records };
+  return { handler, records, runningJobs };
 }
 
 test("background_task records a ChatGPT-owned durable task without delegating", async () => {
@@ -185,7 +191,7 @@ test("background_task records a ChatGPT-owned durable task without delegating", 
     prompt: "Fix the failing tests.",
   });
 
-  assert.equal(response.structuredContent.status, "running");
+  assert.equal(response.structuredContent.status, "active");
   assert.equal(response.structuredContent.execution_state, "waiting_for_host");
   assert.match(String(response.structuredContent.task_id), /^task_/);
   assert.match(String(response.structuredContent.result), /recorded for ChatGPT/);
@@ -212,7 +218,7 @@ test("background_task persists checkpoints and returns them after reconnect", as
     task_id: taskId,
     prompt: "Source edit complete; tests still need to run.",
   });
-  assert.equal(checkpointed.structuredContent.status, "running");
+  assert.equal(checkpointed.structuredContent.status, "active");
 
   const status = await handler({
     action: "status",
@@ -239,7 +245,7 @@ test("background_task wait never implies another model is running", async () => 
     workspace_id: "ws_1",
     task_id: taskId,
   });
-  assert.equal(waited.structuredContent.status, "running");
+  assert.equal(waited.structuredContent.status, "active");
   assert.equal(waited.structuredContent.execution_state, "waiting_for_host");
   assert.match(String(waited.structuredContent.result), /There is no background model to wait for/);
 });
@@ -326,8 +332,8 @@ test("background_task follows one durable task from source checkout into a manag
   assert.equal(records.get(taskId)?.repoRoot, "/repo");
 });
 
-test("background_task never switches execution roots while a durable stage is still in flight", async () => {
-  const { handler, records } = fixture();
+test("background_task never switches execution roots while a verified durable job is still in flight", async () => {
+  const { handler, records, runningJobs } = fixture();
   const started = await handler({
     action: "start",
     workspace_id: "ws_worktree",
@@ -337,9 +343,11 @@ test("background_task never switches execution roots while a durable stage is st
   const taskId = String(started.structuredContent.task_id);
   const current = records.get(taskId);
   assert.ok(current?.plan);
+  const sessionId = "proc_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  runningJobs.add("job_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
   records.set(taskId, {
     ...current,
-    plan: { ...current.plan, activeSessionId: "proc_running" },
+    plan: { ...current.plan, activeSessionId: sessionId },
   });
 
   const recovered = await handler({
@@ -353,6 +361,38 @@ test("background_task never switches execution roots while a durable stage is st
   assert.equal(recovered.structuredContent.repository_root, "/repo");
   assert.equal(records.get(taskId)?.workspaceId, "ws_worktree");
   assert.equal(records.get(taskId)?.workspaceRoot, "/managed/repo-wt");
+});
+
+test("background_task treats a stale execution pointer as waiting_for_host and allows recovery", async () => {
+  const { handler, records } = fixture();
+  const started = await handler({
+    action: "start",
+    workspace_id: "ws_worktree",
+    prompt: "Recover from a stale execution pointer.",
+    plan: ["Long test", "Deploy"],
+  });
+  const taskId = String(started.structuredContent.task_id);
+  const current = records.get(taskId);
+  assert.ok(current?.plan);
+  records.set(taskId, {
+    ...current,
+    plan: {
+      ...current.plan,
+      activeSessionId: "proc_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      activeJobId: "job_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    },
+  });
+
+  const recovered = await handler({
+    action: "status",
+    workspace_id: "ws_worktree_2",
+    task_id: taskId,
+  });
+
+  assert.equal(recovered.structuredContent.status, "active");
+  assert.equal(recovered.structuredContent.execution_state, "waiting_for_host");
+  assert.equal(recovered.structuredContent.workspace_root, "/managed/repo-wt-2");
+  assert.equal(records.get(taskId)?.workspaceId, "ws_worktree_2");
 });
 
 test("background_task can release manual-session pinning before adopting a new worktree", async () => {
@@ -404,7 +444,7 @@ test("background_task adopts an active task into a new ChatGPT workspace for the
   });
 
   assert.equal(recovered.isError, undefined);
-  assert.equal(recovered.structuredContent.status, "running");
+  assert.equal(recovered.structuredContent.status, "active");
   assert.equal(recovered.structuredContent.execution_state, "waiting_for_host");
   assert.equal(records.get(taskId)?.workspaceId, "ws_new");
   assert.equal(
@@ -447,7 +487,9 @@ test("background_task status without task_id recovers the latest active task for
 });
 
 test("background_task preserves a five-stage plan so a new chat knows stages 4 and 5 remain", async () => {
-  const { handler } = fixture();
+  const { handler, runningJobs } = fixture();
+  const sessionId = "proc_cccccccccccccccccccccccccccccccc";
+  runningJobs.add("job_cccccccccccccccccccccccccccccccc");
   const started = await handler({
     action: "start",
     workspace_id: "ws_old",
@@ -463,7 +505,7 @@ test("background_task preserves a five-stage plan so a new chat knows stages 4 a
     current_stage: 3,
     stage_status: "running",
     stage_summary: "Focused tests passed; full suite is still running.",
-    active_session_id: "proc_long_test",
+    active_session_id: sessionId,
     prompt: "Reached stage 3; do not skip deploy or live verify.",
   });
 
@@ -475,7 +517,7 @@ test("background_task preserves a five-stage plan so a new chat knows stages 4 a
   };
   assert.equal(plan.current_stage, 3);
   assert.equal(plan.total_stages, 5);
-  assert.equal(plan.active_session_id, "proc_long_test");
+  assert.equal(plan.active_session_id, sessionId);
   assert.equal(progressed.structuredContent.execution_state, "running");
   assert.deepEqual(plan.stages.map((stage) => stage.status), [
     "done",
@@ -497,7 +539,7 @@ test("background_task preserves a five-stage plan so a new chat knows stages 4 a
   assert.equal(recoveredPlan.stages[3]?.status, "pending");
   assert.equal(recoveredPlan.stages[4]?.title, "Live verify");
   assert.equal(recoveredPlan.stages[4]?.status, "pending");
-  assert.equal(recoveredPlan.active_session_id, "proc_long_test");
+  assert.equal(recoveredPlan.active_session_id, sessionId);
   assert.equal(recovered.structuredContent.execution_state, "running");
   assert.match(String(recovered.structuredContent.result), /Progress 3\/5: Test \(running\)/);
 });

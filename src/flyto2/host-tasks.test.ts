@@ -3,7 +3,55 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { HostTaskStore } from "./host-tasks.js";
+import { hostTaskExecutionState, HostTaskStore } from "./host-tasks.js";
+
+test("hostTaskExecutionState reports running only for a verifiable running reactive job", () => {
+  const base = {
+    id: "task_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    workspaceId: "ws_1",
+    repoRoot: "/repo",
+    workspaceRoot: "/repo",
+    prompt: "Task.",
+    status: "active" as const,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  const stale = {
+    ...base,
+    plan: {
+      currentStage: 1,
+      activeSessionId: "proc_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      activeJobId: "job_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      stages: [{ title: "Test", status: "running" as const }],
+    },
+  };
+
+  assert.equal(hostTaskExecutionState(stale, () => undefined), "waiting_for_host");
+  assert.equal(
+    hostTaskExecutionState(stale, (jobId) =>
+      jobId === "job_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        ? { status: "completed" }
+        : undefined
+    ),
+    "waiting_for_host",
+  );
+  assert.equal(
+    hostTaskExecutionState(stale, (jobId) =>
+      jobId === "job_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        ? { status: "running" }
+        : undefined
+    ),
+    "running",
+  );
+  assert.equal(
+    hostTaskExecutionState({ ...base, status: "completed" }, () => ({ status: "running" })),
+    "completed",
+  );
+  assert.equal(
+    hostTaskExecutionState({ ...base, status: "stopped" }, () => ({ status: "running" })),
+    "stopped",
+  );
+});
 
 test("HostTaskStore persists ChatGPT-owned task state", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "flyto2-host-task-"));

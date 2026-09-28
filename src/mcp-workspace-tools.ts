@@ -8,7 +8,12 @@ import type { ReviewCheckpointManager } from "./review-checkpoints.js";
 import { conversationScopeIdFromRequestMeta } from "./request-meta.js";
 import { LEGACY_TASK_COMMAND } from "./mcp-legacy-input.js";
 import { formatPathForPrompt } from "./skills.js";
-import type { HostTaskRecord, HostTaskStore } from "./flyto2/host-tasks.js";
+import {
+  hostTaskExecutionState,
+  type HostTaskRecord,
+  type HostTaskStore,
+} from "./flyto2/host-tasks.js";
+import type { ReactiveCommandRunner } from "./flyto2/reactive-command.js";
 import {
   buildLocalAgentCatalog,
   type LocalAgentProviderStatus,
@@ -36,6 +41,7 @@ interface WorkspaceToolRegistrationOptions {
   workspaces: WorkspaceRegistry;
   reviewCheckpoints: ReviewCheckpointManager;
   hostTasks: HostTaskStore;
+  reactiveCommands: Pick<ReactiveCommandRunner, "get">;
   resolveLocalAgentProviders: () => LocalAgentProviderStatus[];
 }
 
@@ -82,7 +88,7 @@ const workspaceAvailableAgentsFileOutputSchema = z.object({
 
 const workspaceRecoveryOutputSchema = z.object({
   task_id: z.string(),
-  status: z.enum(["running", "completed", "stopped"]),
+  status: z.enum(["active", "completed", "stopped"]),
   execution_state: z.enum(["waiting_for_host", "running", "completed", "stopped"]),
   updated_at: z.string(),
   workspace_id: z.string(),
@@ -197,7 +203,11 @@ async function handleOpenWorkspace(
     workspaceId: workspace.id,
     root: workspace.root,
   });
-  const recovery = workspaceRecovery(options.hostTasks, workspace);
+  const recovery = workspaceRecovery(
+    options.hostTasks,
+    options.reactiveCommands,
+    workspace,
+  );
   const presentation = buildWorkspacePresentation(
     context,
     config,
@@ -404,7 +414,7 @@ function workspaceInstruction(
 
 interface WorkspaceRecovery {
   task_id: string;
-  status: "running" | "completed" | "stopped";
+  status: "active" | "completed" | "stopped";
   execution_state: "waiting_for_host" | "running" | "completed" | "stopped";
   updated_at: string;
   workspace_id: string;
@@ -421,6 +431,7 @@ const RECOVERY_RESPONSE_CHARS = 2_000;
 
 function workspaceRecovery(
   hostTasks: HostTaskStore,
+  reactiveCommands: Pick<ReactiveCommandRunner, "get">,
   workspace: WorkspaceContext["workspace"],
 ): WorkspaceRecovery | undefined {
   const repoRoot = workspace.sourceRoot ?? workspace.root;
@@ -430,8 +441,11 @@ function workspaceRecovery(
 
   return {
     task_id: record.id,
-    status: record.status === "active" ? "running" : record.status,
-    execution_state: recoveryExecutionState(record),
+    status: record.status,
+    execution_state: hostTaskExecutionState(
+      record,
+      (jobId) => reactiveCommands.get(jobId),
+    ),
     updated_at: record.updatedAt,
     workspace_id: record.workspaceId,
     workspace_root: record.workspaceRoot,
@@ -440,17 +454,6 @@ function workspaceRecovery(
     checkpoint: recoveryPreview(record.checkpoint, RECOVERY_CHECKPOINT_CHARS),
     response: recoveryPreview(record.result, RECOVERY_RESPONSE_CHARS),
   };
-}
-
-function recoveryExecutionState(
-  record: HostTaskRecord,
-): WorkspaceRecovery["execution_state"] {
-  if (record.status === "completed") return "completed";
-  if (record.status === "stopped") return "stopped";
-  if (record.plan?.activeJobId !== undefined || record.plan?.activeSessionId !== undefined) {
-    return "running";
-  }
-  return "waiting_for_host";
 }
 
 function recoveryPreview(value: string | undefined, maxChars: number): string | undefined {

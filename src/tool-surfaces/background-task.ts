@@ -1,9 +1,12 @@
 import * as z from "zod/v4";
 import type {
+  HostTaskExecutionState,
   HostTaskPlan,
   HostTaskPlanStageStatus,
   HostTaskRecord,
+  HostTaskStatus,
 } from "../flyto2/host-tasks.js";
+import { hostTaskExecutionState } from "../flyto2/host-tasks.js";
 import {
   toolNames,
   workspaceIdDescription,
@@ -41,13 +44,8 @@ const BACKGROUND_TASK_ANNOTATIONS = {
   openWorldHint: false,
 };
 
-type BackgroundTaskStatus = "running" | "completed" | "failed" | "stopped";
-type BackgroundTaskExecutionState =
-  | "waiting_for_host"
-  | "running"
-  | "completed"
-  | "failed"
-  | "stopped";
+type BackgroundTaskStatus = HostTaskStatus | "failed";
+type BackgroundTaskExecutionState = HostTaskExecutionState | "failed";
 
 export function registerBackgroundTaskTool(context: ToolRegistrationContext): void {
   context.server.registerTool(
@@ -107,7 +105,7 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
       },
       outputSchema: resultOutputSchema({
         task_id: z.string().optional(),
-        status: z.enum(["running", "completed", "failed", "stopped"]),
+        status: z.enum(["active", "completed", "failed", "stopped"]),
         execution_state: z.enum([
           "waiting_for_host",
           "running",
@@ -172,6 +170,7 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
           ? context.taskPipelines.start(record.id) ?? record
           : record;
         return recordResult(
+          context,
           started,
           include_response === true,
           previewChars,
@@ -198,6 +197,7 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
           ? `Recovered durable task ${recovered.id} for this repo from a previous ChatGPT workspace. ChatGPT can resume from the stored plan/checkpoint.`
           : `Recovered latest durable task ${recovered.id} for this repo; it is already ${recovered.status}.`;
         return recordResult(
+          context,
           recovered,
           include_response === true,
           previewChars,
@@ -220,7 +220,7 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
             ? `Durable task ${current.id} is still active. There is no background model to wait for; ChatGPT should resume it with normal workspace tools.`
             : `Durable task ${current.id} is active and ready for ChatGPT to resume.`
           : undefined;
-        return recordResult(current, include_response === true, previewChars, message);
+        return recordResult(context, current, include_response === true, previewChars, message);
       }
 
       if (action === "continue") {
@@ -262,6 +262,7 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
           updated = context.taskPipelines.start(current.id) ?? updated;
         }
         return recordResult(
+          context,
           updated,
           include_response === true,
           previewChars,
@@ -276,6 +277,7 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
         const completed = context.hostTasks.complete(current.id, prompt);
         if (!completed) return failedResult(`Durable task ${current.id} no longer exists.`, current.id);
         return recordResult(
+          context,
           completed,
           include_response === true,
           previewChars,
@@ -289,6 +291,7 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
       const stopped = context.hostTasks.stop(current.id, prompt);
       if (!stopped) return failedResult(`Durable task ${current.id} no longer exists.`, current.id);
       return recordResult(
+        context,
         stopped,
         include_response === true,
         previewChars,
@@ -327,8 +330,10 @@ function adoptTask(
   if (record.workspaceId === workspaceId && record.workspaceRoot === workspaceRoot) return record;
 
   const executionRootChanged = record.workspaceRoot !== workspaceRoot;
-  const executionInFlight = record.plan?.activeJobId !== undefined
-    || record.plan?.activeSessionId !== undefined;
+  const executionInFlight = hostTaskExecutionState(
+    record,
+    (jobId) => context.reactiveCommands.get(jobId),
+  ) === "running";
   if (executionRootChanged && executionInFlight) {
     return record;
   }
@@ -350,13 +355,17 @@ function adoptTask(
 }
 
 function recordResult(
+  context: ToolRegistrationContext,
   record: HostTaskRecord,
   includeResponse: boolean,
   previewChars: number,
   message?: string,
 ) {
   const status = recordStatus(record);
-  const executionState = recordExecutionState(record);
+  const executionState = hostTaskExecutionState(
+    record,
+    (jobId) => context.reactiveCommands.get(jobId),
+  );
   const originalPrompt = includeResponse ? responsePreview(record.prompt, previewChars) : undefined;
   const checkpoint = includeResponse ? responsePreview(record.checkpoint, previewChars) : undefined;
   const response = includeResponse ? responsePreview(record.result, previewChars) : undefined;
@@ -442,18 +451,7 @@ function appendPlanProgress(message: string, plan: HostTaskPlan | undefined): st
 }
 
 function recordStatus(record: HostTaskRecord): BackgroundTaskStatus {
-  if (record.status === "completed") return "completed";
-  if (record.status === "stopped") return "stopped";
-  return "running";
-}
-
-function recordExecutionState(record: HostTaskRecord): BackgroundTaskExecutionState {
-  if (record.status === "completed") return "completed";
-  if (record.status === "stopped") return "stopped";
-  if (record.plan?.activeJobId !== undefined || record.plan?.activeSessionId !== undefined) {
-    return "running";
-  }
-  return "waiting_for_host";
+  return record.status;
 }
 
 function responsePreview(response: string | undefined, maxChars: number): string | undefined {

@@ -2,6 +2,11 @@ import { randomUUID } from "node:crypto";
 import { openDatabase, type DatabaseHandle } from "../db/client.js";
 
 export type HostTaskStatus = "active" | "completed" | "stopped";
+export type HostTaskExecutionState =
+  | "waiting_for_host"
+  | "running"
+  | "completed"
+  | "stopped";
 export type HostTaskPlanStageStatus = "pending" | "running" | "done" | "blocked";
 
 export interface HostTaskPlanStage {
@@ -34,6 +39,32 @@ export interface HostTaskRecord {
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
+}
+
+export function hostTaskExecutionState(
+  record: HostTaskRecord,
+  getReactiveJob: (jobId: string) => { status: string } | undefined,
+): HostTaskExecutionState {
+  if (record.status === "completed") return "completed";
+  if (record.status === "stopped") return "stopped";
+
+  const jobIds = new Set<string>();
+  if (record.plan?.activeJobId) jobIds.add(record.plan.activeJobId);
+
+  const activeSessionId = record.plan?.activeSessionId;
+  if (activeSessionId) {
+    if (/^job_[a-f0-9]{32}$/.test(activeSessionId)) {
+      jobIds.add(activeSessionId);
+    } else {
+      const match = /^proc_([a-f0-9]{32})$/.exec(activeSessionId);
+      if (match) jobIds.add(`job_${match[1]}`);
+    }
+  }
+
+  for (const jobId of jobIds) {
+    if (getReactiveJob(jobId)?.status === "running") return "running";
+  }
+  return "waiting_for_host";
 }
 
 interface HostTaskRow {

@@ -136,7 +136,7 @@ test("a new ChatGPT conversation recovers the latest active durable task for the
   assert.equal(typeof newWorkspace, "string");
   assert.notEqual(newWorkspace, oldWorkspace);
   assert.equal(recovery?.task_id, taskId);
-  assert.equal(recovery?.status, "running");
+  assert.equal(recovery?.status, "active");
   assert.equal(recovery?.execution_state, "waiting_for_host");
   assert.equal(recovery?.checkpoint, "Old-chat checkpoint is ready.");
   assert.match(
