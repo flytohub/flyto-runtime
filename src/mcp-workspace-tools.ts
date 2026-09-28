@@ -197,9 +197,7 @@ async function handleOpenWorkspace(
     workspaceId: workspace.id,
     root: workspace.root,
   });
-  const recovery = context.includeDiscoveryContext
-    ? workspaceRecovery(options.hostTasks, workspace)
-    : undefined;
+  const recovery = workspaceRecovery(options.hostTasks, workspace);
   const presentation = buildWorkspacePresentation(
     context,
     config,

@@ -110,6 +110,19 @@ test("a new ChatGPT conversation recovers the latest active durable task for the
     },
   });
 
+  const reopened = structuredContent(
+    await callOpen(context.client, context.project, "cross-conversation-old"),
+  );
+  const reopenedRecovery = reopened.recovery as {
+    task_id?: string;
+    execution_state?: string;
+    checkpoint?: string;
+  } | undefined;
+  assert.equal(reopened.workspace_id, oldWorkspace);
+  assert.equal(reopenedRecovery?.task_id, taskId);
+  assert.equal(reopenedRecovery?.execution_state, "waiting_for_host");
+  assert.equal(reopenedRecovery?.checkpoint, "Old-chat checkpoint is ready.");
+
   const newlyOpened = structuredContent(
     await callOpen(context.client, context.project, "cross-conversation-new"),
   );
