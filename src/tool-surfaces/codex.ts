@@ -28,22 +28,14 @@ type CodexSessionId = string;
 
 interface CodexProcessSnapshot extends Omit<ProcessSnapshot, "sessionId"> {
   sessionId?: CodexSessionId;
-  retryAfterMs?: number;
-  nextAction?: "continue" | "end_turn" | "done";
-  pollSuppressed?: boolean;
-}
-
-interface DurablePollGate {
-  nextAllowedAt: number;
-  backoffMs: number;
+  nextAction?: "continue" | "done";
 }
 
 const CODEX_DURABLE_EVENT_TYPE = "codex.exec.exited";
 const CODEX_DURABLE_SESSION_PREFIX = "proc_";
 const DEFAULT_CODEX_YIELD_MS = 750;
 const DEFAULT_CODEX_INTERACTIVE_YIELD_MS = 250;
-const DEFAULT_CODEX_RETRY_AFTER_MS = 15_000;
-const MAX_CODEX_RETRY_AFTER_MS = 60_000;
+const DEFAULT_CODEX_POLL_WAIT_MS = MAX_PROCESS_YIELD_MS;
 const LEGACY_SHELL_WAIT_MS = 750;
 const LEGACY_SHELL_POLL_WAIT_MS = 1_000;
 // Tool output is copied into the host conversation. Keep the default small;
@@ -72,16 +64,10 @@ const CODEX_REGISTRATIONS: readonly CodexRegistration[] = [
 ];
 
 function processStatus(snapshot: CodexProcessSnapshot, legacyShell = false): string {
-  const retryHint = snapshot.retryAfterMs
-    ? ` Wait about ${Math.max(1, Math.round(snapshot.retryAfterMs / 1_000))}s before checking again; do not poll faster.`
-    : "";
-  if (snapshot.pollSuppressed) {
-    return `Runtime blocked a same-turn repeat poll for session ${snapshot.sessionId}; the durable background process is still running. Do not wait, sleep, call another tool just to burn time, or call write_stdin again in this assistant turn. End the assistant turn now. Reuse this same session_id only after a later user turn if the result is still needed.`;
-  }
   return snapshot.running
     ? legacyShell
-      ? `Still running (session ${snapshot.sessionId}). Get more output with this same bash tool using command exactly: ${LEGACY_JOB_COMMAND} ${snapshot.sessionId} (append --cancel to stop it). Do not rerun the original command.${retryHint}`
-      : `Process is running durably with session_id=${snapshot.sessionId}. End this assistant turn now. Do not wait, sleep, or poll this session again during the current turn. Resume this same session_id with write_stdin only after a later user turn; never rerun the original command. Use background_task auto_run for multi-stage deterministic waits such as CI, builds, releases, or deploys.`
+      ? `Still running (session ${snapshot.sessionId}). Get more output with this same bash tool using command exactly: ${LEGACY_JOB_COMMAND} ${snapshot.sessionId} (append --cancel to stop it). Do not rerun the original command.`
+      : `Process is running durably with session_id=${snapshot.sessionId}. This background process does not end the assistant turn. Continue any independent work normally. When the next reasoning step actually depends on this result, call write_stdin with the same session_id; it performs a bounded wait and may still return running=true. Never rerun the original command and do not busy-poll.`
     : snapshot.signal === CODEX_UNCERTAIN_OUTCOME_SIGNAL
       ? "Process outcome is uncertain. Do not rerun the command blindly."
       : snapshot.signal
@@ -104,9 +90,7 @@ function processOutputSchema(): z.ZodRawShape {
     signal: z.string().optional(),
     wall_time_ms: z.number().nonnegative(),
     output_truncated: z.boolean(),
-    retry_after_ms: z.number().int().nonnegative().optional(),
-    next_action: z.enum(["continue", "end_turn", "done"]).optional(),
-    poll_suppressed: z.boolean().optional(),
+    next_action: z.enum(["continue", "done"]).optional(),
   });
 }
 
@@ -126,9 +110,7 @@ function processToolResponse(snapshot: CodexProcessSnapshot, legacyShell = false
       signal: snapshot.signal,
       wall_time_ms: snapshot.wallTimeMs,
       output_truncated: snapshot.outputTruncated,
-      retry_after_ms: snapshot.retryAfterMs,
       next_action: snapshot.nextAction,
-      poll_suppressed: snapshot.pollSuppressed,
     },
   };
 }
@@ -243,12 +225,8 @@ interface WriteStdinInput {
 
 function registerCodexProcessTools(context: ToolRegistrationContext): void {
   const interactiveSessions = new Map<string, number>();
-  const durablePollGates = new Map<string, DurablePollGate>();
-  context.reactiveCommands.onTerminal((job) => {
-    durablePollGates.delete(job.job_id);
-  });
   registerExecCommandTool(context, interactiveSessions);
-  registerWriteStdinTool(context, interactiveSessions, durablePollGates);
+  registerWriteStdinTool(context, interactiveSessions);
 }
 
 function registerExecCommandTool(
@@ -260,7 +238,7 @@ function registerExecCommandTool(
     {
       title: "Execute command",
       description:
-        "Run a workspace command. If a non-interactive command is still running, return control and resume its session_id in a later turn; never rerun it. Use tty only for interactive input.",
+        "Run a workspace command. Long non-interactive commands return a durable session_id without ending the assistant turn; continue other work and resume only when needed. Never rerun it.",
       inputSchema: {
         workspace_id: z.string().describe(workspaceIdDescription),
         cmd: z.string().min(1).describe("Shell command to execute."),
@@ -379,14 +357,13 @@ async function executeCodexCommand(
 function registerWriteStdinTool(
   context: ToolRegistrationContext,
   interactiveSessions: Map<string, number>,
-  durablePollGates: Map<string, DurablePollGate>,
 ): void {
   context.server.registerTool(
     "write_stdin",
     {
       title: "Continue process",
       description:
-        "Resume exec_command by session_id in a later turn. Immediate use is for interactive TTY input; avoid same-turn polling. \\u0003 interrupts.",
+        "Resume a process by session_id. Non-interactive sessions use a bounded wait; if still running, avoid busy-polling. \\u0003 interrupts.",
       inputSchema: {
         workspace_id: z
           .string()
@@ -407,7 +384,6 @@ function registerWriteStdinTool(
     async (input, extra) => handleWriteStdin(
       context,
       interactiveSessions,
-      durablePollGates,
       input,
       extra,
     ),
@@ -417,7 +393,6 @@ function registerWriteStdinTool(
 async function handleWriteStdin(
   context: ToolRegistrationContext,
   interactiveSessions: Map<string, number>,
-  durablePollGates: Map<string, DurablePollGate>,
   input: WriteStdinInput,
   extra: unknown,
 ) {
@@ -431,7 +406,6 @@ async function handleWriteStdin(
     () => continueCodexProcess(
       context,
       interactiveSessions,
-      durablePollGates,
       input,
       legacyShell,
     ),
@@ -444,7 +418,6 @@ async function handleWriteStdin(
 async function continueCodexProcess(
   context: ToolRegistrationContext,
   interactiveSessions: Map<string, number>,
-  durablePollGates: Map<string, DurablePollGate>,
   input: WriteStdinInput,
   legacyShell: boolean,
 ): Promise<CodexProcessSnapshot> {
@@ -470,7 +443,6 @@ async function continueCodexProcess(
     );
   }
   if (input.chars === "\u0003") {
-    durablePollGates.delete(jobId);
     reactiveCommands.signal(jobId, input.workspace_id, "SIGINT");
     return legacyShell
       ? awaitDurableProcess(context, input.workspace_id, jobId, LEGACY_SHELL_POLL_WAIT_MS)
@@ -485,11 +457,9 @@ async function continueCodexProcess(
 
   const current = reactiveCommands.get(jobId);
   if (!current || current.workspace_id !== input.workspace_id) {
-    durablePollGates.delete(jobId);
     throw new Error(`Unknown process session for workspace ${input.workspace_id}.`);
   }
   if (current.status !== "running") {
-    durablePollGates.delete(jobId);
     return durableProcessSnapshot(
       context,
       input.workspace_id,
@@ -508,46 +478,13 @@ async function continueCodexProcess(
     );
   }
 
-  const now = Date.now();
-  const gate = durablePollGates.get(jobId) ?? {
-    nextAllowedAt: Date.parse(current.started_at) + DEFAULT_CODEX_RETRY_AFTER_MS,
-    backoffMs: DEFAULT_CODEX_RETRY_AFTER_MS,
-  };
-  durablePollGates.set(jobId, gate);
-  if (now < gate.nextAllowedAt) {
-    return {
-      sessionId: codexSessionIdForReactiveJob(jobId),
-      output: "",
-      outputTruncated: false,
-      running: true,
-      wallTimeMs: Math.max(0, now - Date.parse(current.started_at)),
-      nextAction: "end_turn",
-      pollSuppressed: true,
-    };
-  }
-
-  const snapshot = await durableProcessSnapshot(
+  return durableProcessSnapshot(
     context,
     input.workspace_id,
     jobId,
-    0,
+    DEFAULT_CODEX_POLL_WAIT_MS,
     DEFAULT_MAX_OUTPUT_TOKENS,
   );
-  if (!snapshot.running) {
-    durablePollGates.delete(jobId);
-    return snapshot;
-  }
-
-  gate.backoffMs = Math.min(
-    MAX_CODEX_RETRY_AFTER_MS,
-    Math.max(DEFAULT_CODEX_RETRY_AFTER_MS, gate.backoffMs * 2),
-  );
-  gate.nextAllowedAt = Date.now() + gate.backoffMs;
-  durablePollGates.set(jobId, gate);
-  return {
-    ...snapshot,
-    nextAction: "end_turn",
-  };
 }
 
 function isLegacyShellCall(extra: unknown): boolean {
@@ -616,7 +553,7 @@ async function durableProcessSnapshot(
       outputTruncated: evidence.truncated || evidence.text.length > progress.length,
       running: true,
       wallTimeMs,
-      nextAction: "end_turn",
+      nextAction: "continue",
     };
   }
 

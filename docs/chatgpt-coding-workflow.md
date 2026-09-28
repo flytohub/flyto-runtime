@@ -186,14 +186,17 @@ DevSpace uses the Codex-style surface by default. It exposes:
 In this mode, `write`, `edit`, and `bash` are not registered. `exec_command`
 returns a process session ID when a command is still running after its bounded
 yield window. ChatGPT/Codex calls yield in under a second initially, and a
-continuation waits only briefly before returning control to the host. While a
+continuation performs a bounded wait before returning control to the host. While a
 command is still running, Runtime returns a small tail preview of available
 process evidence instead of an empty response, so the host can show progress
-without copying the full log into conversation state. A running result still
-includes a conservative `retry_after_ms`; do not poll faster than that hint or
-wrap status checks in shell sleep loops. Cached legacy ChatGPT
-`bash` calls use the same short-yield principle so an older host catalog cannot
-hold a request open for multi-second validation work.
+without copying the full log into conversation state. A running durable process
+does not end or suspend the ChatGPT task. Runtime returns
+`next_action=continue`; ChatGPT should continue independent reasoning or edits,
+and call `write_stdin` with the same session ID only when the next reasoning
+step actually depends on that process result. Do not rerun the original command,
+busy-poll, or wrap status checks in shell sleep loops. Cached legacy ChatGPT
+`bash` calls keep their compatibility polling behavior so an older host catalog
+cannot hold a request open for multi-second validation work.
 If that cached five-tool catalog does not expose `background_task`, Runtime also
 accepts `@flyto2/task start <complete task>` through the cached `bash` tool and
 translates it to the same durable host-task state. ChatGPT must continue the work

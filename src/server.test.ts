@@ -411,9 +411,9 @@ test("Codex process tools keep model-facing controls minimal", async (t) => {
   for (const tool of [exec, stdin]) {
     assert.doesNotMatch(tool?.description ?? "", /runtime_|job_|evidence|reactive/i);
   }
-  assert.match(exec?.description ?? "", /return control/i);
-  assert.match(stdin?.description ?? "", /later turn/i);
-  assert.match(stdin?.description ?? "", /same-turn polling/i);
+  assert.match(exec?.description ?? "", /without ending the assistant turn/i);
+  assert.match(stdin?.description ?? "", /bounded wait/i);
+  assert.match(stdin?.description ?? "", /busy-polling/i);
 });
 
 test("Codex command output is bounded by default", async (t) => {
@@ -499,31 +499,15 @@ test("Codex non-interactive commands become durable behind exec_command", async 
     },
   }));
   assert.equal(started.running, true);
-  assert.equal(started.retry_after_ms, undefined);
-  assert.equal(started.next_action, "end_turn");
+  assert.equal(started.next_action, "continue");
   assert.match(started.session_id as string, /^proc_[a-f0-9]{32}$/);
-  assert.doesNotMatch(started.result as string, /Wait about \d+s before checking again/);
-  assert.match(started.result as string, /End this assistant turn now/);
-  assert.match(started.result as string, /only after a later user turn/);
-  assert.match(started.result as string, /background_task auto_run/);
+  assert.match(started.result as string, /does not end the assistant turn/);
+  assert.match(started.result as string, /Continue any independent work normally/);
+  assert.match(started.result as string, /bounded wait/);
+  assert.doesNotMatch(started.result as string, /end_turn|later user turn|poll_suppressed|retry_after_ms/i);
   assert.match(started.result as string, new RegExp(String(started.session_id)));
   assert.doesNotMatch(started.result as string, /job_/);
 
-  const early = structuredContent(await context.client.callTool({
-    name: "write_stdin",
-    arguments: {
-      workspace_id: workspaceId,
-      session_id: started.session_id,
-    },
-  }));
-  assert.equal(early.running, true);
-  assert.equal(early.poll_suppressed, true);
-  assert.equal(early.next_action, "end_turn");
-  assert.equal(early.retry_after_ms, undefined);
-  assert.match(String(early.result), /blocked a same-turn repeat poll/i);
-  assert.match(String(early.result), /Do not wait, sleep/);
-
-  await new Promise((resolve) => setTimeout(resolve, 900));
   const finished = structuredContent(await context.client.callTool({
     name: "write_stdin",
     arguments: {
@@ -552,19 +536,10 @@ test("Codex running commands expose bounded progress instead of looking stalled"
     },
   }));
   assert.equal(started.running, true);
-  assert.equal(started.next_action, "end_turn");
+  assert.equal(started.next_action, "continue");
   assert.match(String(started.result), /phase-one-ready/);
   assert.ok(String(started.result).length < 1_200);
 
-  const early = structuredContent(await context.client.callTool({
-    name: "write_stdin",
-    arguments: {
-      workspace_id: workspaceId,
-      session_id: started.session_id,
-    },
-  }));
-  assert.equal(early.poll_suppressed, true);
-  await new Promise((resolve) => setTimeout(resolve, 900));
   const finished = structuredContent(await context.client.callTool({
     name: "write_stdin",
     arguments: {
@@ -606,15 +581,6 @@ test("Codex exec_command replays a lost response without repeating the process s
     "once",
   );
 
-  const early = structuredContent(await context.client.callTool({
-    name: "write_stdin",
-    arguments: {
-      workspace_id: workspaceId,
-      session_id: first.session_id,
-    },
-  }));
-  assert.equal(early.poll_suppressed, true);
-  await new Promise((resolve) => setTimeout(resolve, 900));
   const finished = structuredContent(await context.client.callTool({
     name: "write_stdin",
     arguments: {
@@ -2211,8 +2177,9 @@ test("a client cannot opt a modern exec_command into legacy wording by sending t
     name: "exec_command", arguments: { workspace_id: openedBody.result.structuredContent.workspace_id, cmd: "sleep 5" },
   }, { "x-flyto2-legacy-shell": "1" });
   const responseText = await response.text();
-  assert.match(responseText, /End this assistant turn now/);
-  assert.match(responseText, /only after a later user turn/);
+  assert.match(responseText, /does not end the assistant turn/);
+  assert.match(responseText, /Continue any independent work normally/);
+  assert.doesNotMatch(responseText, /end_turn|later user turn/i);
 });
 
 test("open_workspace names the allowed roots so a host never has to guess or search home", async (t) => {
