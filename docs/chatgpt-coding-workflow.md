@@ -218,6 +218,8 @@ stop the conversation or reject later tool calls.
 `background_task` keeps the stored prompt, checkpoint, and final result out of
 the conversation by default. Ask for `include_response=true` only when recovery
 details are needed; the full values remain in Runtime's durable local state.
+Optional plan stages are descriptive recovery metadata only. Runtime never runs,
+chains, or completes those stages on ChatGPT's behalf.
 
 Set `tools.mode` to `claude` in `~/.devspace/config.jsonc` to expose `write`,
 `edit`, and `bash` instead of the Codex mutation and command tools. Dedicated

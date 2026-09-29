@@ -266,10 +266,10 @@ test("a durable task follows its source repo into a real managed worktree", asyn
   );
 });
 
-test("background_task auto_run advances deterministic stages without ChatGPT polling", async (t) => {
+test("background_task plan remains descriptive and never executes commands", async (t) => {
   const context = await fixture(t, { toolMode: "codex", uiEnabled: false });
   const workspace = structuredContent(
-    await callOpen(context.client, context.project, "pipeline-auto-run"),
+    await callOpen(context.client, context.project, "checkpoint-plan"),
   ).workspace_id;
   assert.equal(typeof workspace, "string");
 
@@ -278,52 +278,43 @@ test("background_task auto_run advances deterministic stages without ChatGPT pol
     arguments: {
       action: "start",
       workspace_id: workspace,
-      prompt: "Run two deterministic stages without model polling.",
+      prompt: "Track two stages for recovery only.",
       plan: [
-        {
-          title: "Stage one",
-          command: "node -e \"require('node:fs').appendFileSync('pipeline-proof.txt','1')\"",
-        },
-        {
-          title: "Stage two",
-          command: "node -e \"require('node:fs').appendFileSync('pipeline-proof.txt','2')\"",
-        },
+        { title: "Stage one" },
+        { title: "Stage two" },
       ],
-      auto_run: true,
       include_response: true,
     },
   }));
   const taskId = started.task_id;
   assert.equal(typeof taskId, "string");
+  assert.equal(started.status, "active");
+  assert.equal(started.execution_state, "waiting_for_host");
+  await assert.rejects(readFile(join(context.project, "pipeline-proof.txt"), "utf8"));
 
-  let status = started;
-  for (let attempt = 0; attempt < 40 && status.status !== "completed"; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    status = structuredContent(await context.client.callTool({
-      name: "background_task",
-      arguments: {
-        action: "status",
-        workspace_id: workspace,
-        task_id: taskId,
-        include_response: true,
-      },
-    }));
-  }
-
-  assert.equal(status.status, "completed");
-  assert.equal(await readFile(join(context.project, "pipeline-proof.txt"), "utf8"), "12");
-  const plan = status.plan as {
+  const progressed = structuredContent(await context.client.callTool({
+    name: "background_task",
+    arguments: {
+      action: "continue",
+      workspace_id: workspace,
+      task_id: taskId,
+      current_stage: 2,
+      stage_status: "running",
+      stage_summary: "ChatGPT advanced this checkpoint explicitly.",
+      include_response: true,
+    },
+  }));
+  const plan = progressed.plan as {
     current_stage: number;
     total_stages: number;
-    active_job_id?: string;
-    stages: Array<{ status: string; automated: boolean; evidence_ref?: string }>;
+    stages: Array<{ status: string; summary?: string }>;
   };
   assert.equal(plan.current_stage, 2);
   assert.equal(plan.total_stages, 2);
-  assert.equal(plan.active_job_id, undefined);
-  assert.deepEqual(plan.stages.map((stage) => stage.status), ["done", "done"]);
-  assert.deepEqual(plan.stages.map((stage) => stage.automated), [true, true]);
-  assert.ok(plan.stages.every((stage) => typeof stage.evidence_ref === "string"));
+  assert.deepEqual(plan.stages.map((stage) => stage.status), ["done", "running"]);
+  assert.equal(plan.stages[1]?.summary, "ChatGPT advanced this checkpoint explicitly.");
+  assert.equal(progressed.status, "active");
+  assert.equal(progressed.execution_state, "waiting_for_host");
 });
 
 test("healthz exposes only minimal public liveness", async (t) => {

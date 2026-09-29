@@ -61,6 +61,11 @@ Normal Codex mode should center on:
 
 Runtime does not advertise MCP Apps/result cards. `show_changes` returns a compact review reference/summary; full patches stay in local Git-backed review history and are fetched only when explicitly needed.
 
+`background_task` is recovery state, not a workflow engine. It may store the
+task prompt, checkpoint, descriptive stage progress, and explicit terminal
+state, but Runtime must not execute, chain, advance, or complete task stages for
+the host.
+
 Open a project/worktree once, then reuse its `workspace_id`. Avoid duplicating discovery context, large command output, diffs, logs, or evidence in model responses.
 
 ## Cross-cutting changes

@@ -13,7 +13,6 @@ import {
   type HostTaskRecord,
   type HostTaskStore,
 } from "./flyto2/host-tasks.js";
-import type { ReactiveCommandRunner } from "./flyto2/reactive-command.js";
 import {
   buildLocalAgentCatalog,
   type LocalAgentProviderStatus,
@@ -41,7 +40,6 @@ interface WorkspaceToolRegistrationOptions {
   workspaces: WorkspaceRegistry;
   reviewCheckpoints: ReviewCheckpointManager;
   hostTasks: HostTaskStore;
-  reactiveCommands: Pick<ReactiveCommandRunner, "get">;
   resolveLocalAgentProviders: () => LocalAgentProviderStatus[];
 }
 
@@ -89,7 +87,7 @@ const workspaceAvailableAgentsFileOutputSchema = z.object({
 const workspaceRecoveryOutputSchema = z.object({
   task_id: z.string(),
   status: z.enum(["active", "completed", "stopped"]),
-  execution_state: z.enum(["waiting_for_host", "running", "completed", "stopped"]),
+  execution_state: z.enum(["waiting_for_host", "completed", "stopped"]),
   updated_at: z.string(),
   workspace_id: z.string(),
   workspace_root: z.string(),
@@ -205,7 +203,6 @@ async function handleOpenWorkspace(
   });
   const recovery = workspaceRecovery(
     options.hostTasks,
-    options.reactiveCommands,
     workspace,
   );
   const presentation = buildWorkspacePresentation(
@@ -415,7 +412,7 @@ function workspaceInstruction(
 interface WorkspaceRecovery {
   task_id: string;
   status: "active" | "completed" | "stopped";
-  execution_state: "waiting_for_host" | "running" | "completed" | "stopped";
+  execution_state: "waiting_for_host" | "completed" | "stopped";
   updated_at: string;
   workspace_id: string;
   workspace_root: string;
@@ -431,7 +428,6 @@ const RECOVERY_RESPONSE_CHARS = 2_000;
 
 function workspaceRecovery(
   hostTasks: HostTaskStore,
-  reactiveCommands: Pick<ReactiveCommandRunner, "get">,
   workspace: WorkspaceContext["workspace"],
 ): WorkspaceRecovery | undefined {
   const repoRoot = workspace.sourceRoot ?? workspace.root;
@@ -442,10 +438,7 @@ function workspaceRecovery(
   return {
     task_id: record.id,
     status: record.status,
-    execution_state: hostTaskExecutionState(
-      record,
-      (jobId) => reactiveCommands.get(jobId),
-    ),
+    execution_state: hostTaskExecutionState(record),
     updated_at: record.updatedAt,
     workspace_id: record.workspaceId,
     workspace_root: record.workspaceRoot,
@@ -468,9 +461,6 @@ function recoveryInstruction(recovery: WorkspaceRecovery): string {
   }
   if (recovery.status === "stopped") {
     return `Recovered latest durable task ${recovery.task_id}: stopped. Do not silently restart it; inspect the structured recovery field before deciding whether the user's current request requires new work.`;
-  }
-  if (recovery.execution_state === "running") {
-    return `Recovered unfinished durable task ${recovery.task_id}: Runtime execution is still in flight. Do not rerun the same side effect. Use the structured recovery checkpoint and continue this task when the active execution reaches a resumable point.`;
   }
   return `Recovered unfinished durable task ${recovery.task_id}: waiting_for_host. Reconcile the structured recovery original_prompt/checkpoint against the current repository state, then resume only the remaining work before starting unrelated work; do not rerun stages already proven complete. Do not ask the user to recreate a handoff unless the stored recovery information is insufficient; save later progress with background_task continue using this task_id.`;
 }

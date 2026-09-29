@@ -95,3 +95,28 @@ await assert.rejects(
   ),
   httpCloseError,
 );
+
+let forcedHttpCloseCalled = false;
+const forcedStartedAt = performance.now();
+const forced = await shutdownHttpServer(
+  {
+    close() {
+      // Simulate an HTTP connection that never drains on its own.
+    },
+    closeAllConnections() {
+      forcedHttpCloseCalled = true;
+    },
+  },
+  () => new Promise<void>(() => {
+    // Simulate a tool/application cleanup promise that never settles.
+  }),
+  25,
+);
+assert.equal(forced.forced, true);
+assert.equal(forcedHttpCloseCalled, true);
+assert.equal(forced.http_closed, false);
+assert.equal(forced.application_closed, false);
+assert.ok(
+  performance.now() - forcedStartedAt < 500,
+  "bounded shutdown must return instead of waiting forever",
+);

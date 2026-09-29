@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { hostTaskExecutionState, HostTaskStore } from "./host-tasks.js";
 
-test("hostTaskExecutionState reports running only for a verifiable running reactive job", () => {
+test("hostTaskExecutionState keeps active task lifecycle separate from process execution", () => {
   const base = {
     id: "task_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     workspaceId: "ws_1",
@@ -16,41 +16,9 @@ test("hostTaskExecutionState reports running only for a verifiable running react
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
   };
-  const stale = {
-    ...base,
-    plan: {
-      currentStage: 1,
-      activeSessionId: "proc_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      activeJobId: "job_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      stages: [{ title: "Test", status: "running" as const }],
-    },
-  };
-
-  assert.equal(hostTaskExecutionState(stale, () => undefined), "waiting_for_host");
-  assert.equal(
-    hostTaskExecutionState(stale, (jobId) =>
-      jobId === "job_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-        ? { status: "completed" }
-        : undefined
-    ),
-    "waiting_for_host",
-  );
-  assert.equal(
-    hostTaskExecutionState(stale, (jobId) =>
-      jobId === "job_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-        ? { status: "running" }
-        : undefined
-    ),
-    "running",
-  );
-  assert.equal(
-    hostTaskExecutionState({ ...base, status: "completed" }, () => ({ status: "running" })),
-    "completed",
-  );
-  assert.equal(
-    hostTaskExecutionState({ ...base, status: "stopped" }, () => ({ status: "running" })),
-    "stopped",
-  );
+  assert.equal(hostTaskExecutionState(base), "waiting_for_host");
+  assert.equal(hostTaskExecutionState({ ...base, status: "completed" }), "completed");
+  assert.equal(hostTaskExecutionState({ ...base, status: "stopped" }), "stopped");
 });
 
 test("HostTaskStore persists ChatGPT-owned task state", async (t) => {
@@ -206,20 +174,14 @@ test("HostTaskStore persists compact stage progress", async (t) => {
     currentStage: 2,
     stageStatus: "running",
     stageSummary: "Full suite running.",
-    activeSessionId: "proc_123",
   });
   assert.equal(updated?.plan?.currentStage, 2);
   assert.equal(updated?.plan?.stages[0]?.status, "done");
   assert.equal(updated?.plan?.stages[1]?.summary, "Full suite running.");
-  assert.equal(updated?.plan?.activeSessionId, "proc_123");
 
   const reopened = store.get(created.id);
   assert.deepEqual(reopened?.plan, updated?.plan);
 
-  const released = store.updatePlan(created.id, { activeSessionId: null });
-  assert.equal(released?.plan?.activeSessionId, undefined);
-
   const completed = store.complete(created.id, "Released.");
   assert.deepEqual(completed?.plan?.stages.map((stage) => stage.status), ["done", "done", "done"]);
-  assert.equal(completed?.plan?.activeSessionId, undefined);
 });

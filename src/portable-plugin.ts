@@ -17,7 +17,7 @@ export const DEFAULT_PLUGIN_DESCRIPTION =
   "Connect ChatGPT and Codex to Flyto2 Runtime for workspace-scoped local development and automation.";
 
 export const PORTABLE_TOOL_CATALOG_REVISIONS = {
-  codex: "codex-v3",
+  codex: "codex-v4",
   claude: "claude-v1",
 } as const;
 

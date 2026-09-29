@@ -19,21 +19,11 @@ const CODEX_RESPONSE_PREVIEW_CHARS = 3_000;
 const MAX_PLAN_STAGES = 10;
 const MAX_STAGE_TITLE_CHARS = 80;
 const MAX_STAGE_SUMMARY_CHARS = 240;
-const MAX_STAGE_COMMAND_CHARS = 4_000;
-const DEFAULT_EXTERNAL_WATCH_TIMEOUT_SECONDS = 3_600;
 
 const planStageInputSchema = z.union([
   z.string().min(1).max(MAX_STAGE_TITLE_CHARS),
   z.object({
     title: z.string().min(1).max(MAX_STAGE_TITLE_CHARS),
-    command: z.string().min(1).max(MAX_STAGE_COMMAND_CHARS).optional(),
-    timeout_seconds: z
-      .number()
-      .int()
-      .min(1)
-      .max(3_600)
-      .optional()
-      .describe("Optional no-progress watchdog per observation window. Output resets stall suspicion and a live silent process receives adaptive observation windows before termination; total runtime is not capped. GitHub watch stages default to 3600s when omitted."),
   }),
 ]);
 
@@ -53,7 +43,7 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
     {
       title: "Persist durable ChatGPT task",
       description:
-        "Persist and recover ChatGPT-owned task state across reconnects. Optional deterministic plan commands can auto-run stage-by-stage in Runtime; failures stop for ChatGPT reasoning. Runtime never delegates to another model.",
+        "Persist and recover ChatGPT-owned task state across reconnects. Optional plan stages are descriptive progress only. Runtime never executes stages and never delegates to another model.",
       inputSchema: {
         action: z.enum(["start", "status", "wait", "continue", "complete", "stop"]),
         workspace_id: z.string().describe(workspaceIdDescription),
@@ -71,11 +61,7 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
           .min(1)
           .max(MAX_PLAN_STAGES)
           .optional()
-          .describe("Optional 1-10 stage plan for start. A stage may include a deterministic local command; command text stays local and is not returned by status."),
-        auto_run: z
-          .boolean()
-          .optional()
-          .describe("Start/resume deterministic commands from the current plan stage. Runtime advances successful command stages automatically and stops on failure or a manual stage."),
+          .describe("Optional 1-10 stage progress outline for recovery. Runtime stores it but never executes it."),
         current_stage: z
           .number()
           .int()
@@ -91,13 +77,7 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
           .string()
           .max(MAX_STAGE_SUMMARY_CHARS)
           .optional()
-          .describe("Short current-stage summary; keep detailed output in Runtime evidence."),
-        active_session_id: z
-          .string()
-          .max(128)
-          .nullable()
-          .optional()
-          .describe("Current long-command session_id when resumable; pass null after it finishes to release worktree pinning."),
+          .describe("Short current-stage summary."),
         include_response: z
           .boolean()
           .optional()
@@ -108,7 +88,6 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
         status: z.enum(["active", "completed", "failed", "stopped"]),
         execution_state: z.enum([
           "waiting_for_host",
-          "running",
           "completed",
           "failed",
           "stopped",
@@ -120,16 +99,11 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
         plan: z.object({
           current_stage: z.number().int(),
           total_stages: z.number().int(),
-          auto_run: z.boolean(),
-          active_session_id: z.string().optional(),
-          active_job_id: z.string().optional(),
           stages: z.array(z.object({
             index: z.number().int(),
             title: z.string(),
             status: z.enum(["pending", "running", "done", "blocked"]),
             summary: z.string().optional(),
-            automated: z.boolean(),
-            evidence_ref: z.string().optional(),
           })),
         }).optional(),
         original_prompt: z.string().optional(),
@@ -144,11 +118,9 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
       task_id,
       prompt,
       plan,
-      auto_run,
       current_stage,
       stage_status,
       stage_summary,
-      active_session_id,
       include_response,
     }) => {
       const workspace = await context.workspaces.getWorkspace(workspace_id);
@@ -164,14 +136,11 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
           repoRoot,
           workspaceRoot: workspace.root,
           prompt,
-          plan: plan ? createPlan(plan, auto_run === true) : undefined,
+          plan: plan ? createPlan(plan) : undefined,
         });
-        const started = auto_run === true
-          ? context.taskPipelines.start(record.id) ?? record
-          : record;
         return recordResult(
           context,
-          started,
+          record,
           include_response === true,
           previewChars,
           `Durable task ${record.id} is recorded for ChatGPT. Continue the work with the normal workspace tools. Runtime will preserve this task state across reconnects and will not start another model or local-agent provider.`,
@@ -226,10 +195,9 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
       if (action === "continue") {
         const hasPlanUpdate = current_stage !== undefined
           || stage_status !== undefined
-          || stage_summary !== undefined
-          || active_session_id !== undefined;
-        if (!prompt && !hasPlanUpdate && auto_run !== true) {
-          return invalidInput("prompt, plan progress, or auto_run=true is required for action=continue.");
+          || stage_summary !== undefined;
+        if (!prompt && !hasPlanUpdate) {
+          return invalidInput("prompt or plan progress is required for action=continue.");
         }
         if (current.status !== "active") {
           return failedResult(`Durable task ${current.id} is already ${current.status}.`, current.id);
@@ -251,15 +219,8 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
             currentStage: current_stage,
             stageStatus: stage_status,
             stageSummary: stage_summary,
-            activeSessionId: active_session_id,
           });
           if (!updated) return failedResult(`Durable task ${current.id} no longer exists.`, current.id);
-        }
-        if (updated.plan && auto_run !== undefined) {
-          updated = context.hostTasks.updatePlan(current.id, { autoRun: auto_run }) ?? updated;
-        }
-        if (updated.plan?.autoRun === true) {
-          updated = context.taskPipelines.start(current.id) ?? updated;
         }
         return recordResult(
           context,
@@ -329,15 +290,6 @@ function adoptTask(
   if (record.status !== "active") return record;
   if (record.workspaceId === workspaceId && record.workspaceRoot === workspaceRoot) return record;
 
-  const executionRootChanged = record.workspaceRoot !== workspaceRoot;
-  const executionInFlight = hostTaskExecutionState(
-    record,
-    (jobId) => context.reactiveCommands.get(jobId),
-  ) === "running";
-  if (executionRootChanged && executionInFlight) {
-    return record;
-  }
-
   const adopted = context.hostTasks.adoptActive(
     record.id,
     workspaceId,
@@ -362,10 +314,7 @@ function recordResult(
   message?: string,
 ) {
   const status = recordStatus(record);
-  const executionState = hostTaskExecutionState(
-    record,
-    (jobId) => context.reactiveCommands.get(jobId),
-  );
+  const executionState = hostTaskExecutionState(record);
   const originalPrompt = includeResponse ? responsePreview(record.prompt, previewChars) : undefined;
   const checkpoint = includeResponse ? responsePreview(record.checkpoint, previewChars) : undefined;
   const response = includeResponse ? responsePreview(record.result, previewChars) : undefined;
@@ -374,9 +323,7 @@ function recordResult(
       ? `Durable task ${record.id} completed.`
       : status === "stopped"
         ? `Durable task ${record.id} stopped.`
-        : executionState === "running"
-          ? `Durable task ${record.id} is active with Runtime execution in flight.`
-          : `Durable task ${record.id} is active, but no Runtime execution is in flight; it is waiting for ChatGPT to resume.`);
+        : `Durable task ${record.id} is active and waiting for ChatGPT to resume.`);
   const result = appendPlanProgress(baseResult, record.plan);
 
   return toolResult({
@@ -396,49 +343,29 @@ function recordResult(
 }
 
 function createPlan(
-  entries: Array<string | { title: string; command?: string; timeout_seconds?: number }>,
-  autoRun: boolean,
+  entries: Array<string | { title: string }>,
 ): HostTaskPlan {
   return {
     currentStage: 1,
-    autoRun,
     stages: entries.map((entry, index) => {
       const normalized = typeof entry === "string" ? { title: entry } : entry;
       return {
         title: normalized.title,
         status: index === 0 ? "running" : "pending",
-        command: normalized.command,
-        timeoutSeconds: normalized.timeout_seconds
-          ?? defaultExternalWatchTimeoutSeconds(normalized.command),
       };
     }),
   };
-}
-
-function defaultExternalWatchTimeoutSeconds(command: string | undefined): number | undefined {
-  if (!command) return undefined;
-  const trimmed = command.trim();
-  if (/^gh\s+run\s+watch\b/.test(trimmed)) return DEFAULT_EXTERNAL_WATCH_TIMEOUT_SECONDS;
-  if (/^gh\s+pr\s+checks\b.*(?:^|\s)--watch(?:\s|$)/.test(trimmed)) {
-    return DEFAULT_EXTERNAL_WATCH_TIMEOUT_SECONDS;
-  }
-  return undefined;
 }
 
 function planOutput(plan: HostTaskPlan) {
   return {
     current_stage: plan.currentStage,
     total_stages: plan.stages.length,
-    auto_run: plan.autoRun === true,
-    active_session_id: plan.activeSessionId,
-    active_job_id: plan.activeJobId,
     stages: plan.stages.map((stage, index) => ({
       index: index + 1,
       title: stage.title,
       status: stage.status,
       summary: stage.summary,
-      automated: stage.command !== undefined,
-      evidence_ref: stage.evidenceRef,
     })),
   };
 }
@@ -486,16 +413,11 @@ function toolResult(
     plan?: {
       current_stage: number;
       total_stages: number;
-      auto_run: boolean;
-      active_session_id?: string;
-      active_job_id?: string;
       stages: Array<{
         index: number;
         title: string;
         status: HostTaskPlanStageStatus;
         summary?: string;
-        automated: boolean;
-        evidence_ref?: string;
       }>;
     };
     original_prompt?: string;

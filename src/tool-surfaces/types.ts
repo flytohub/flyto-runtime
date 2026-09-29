@@ -4,7 +4,6 @@ import type { ServerConfig } from "../config.js";
 import type { RuntimeEventStore } from "../flyto2/runtime-events.js";
 import type { ReactiveCommandRunner } from "../flyto2/reactive-command.js";
 import type { HostTaskStore } from "../flyto2/host-tasks.js";
-import type { TaskPipelineRunner } from "../flyto2/task-pipeline.js";
 import type { WorkspaceRegistry } from "../workspaces.js";
 
 export const toolNames = {
@@ -93,7 +92,6 @@ export interface ToolRegistrationContext {
     HostTaskStore,
     "create" | "get" | "findLatestActiveByRoot" | "findLatestByRoot" | "findLatestActiveByRepoRoot" | "findLatestByRepoRoot" | "adoptActive" | "checkpoint" | "updatePlan" | "complete" | "stop"
   >;
-  taskPipelines: Pick<TaskPipelineRunner, "start">;
 }
 
 export interface ToolInstructionContext {

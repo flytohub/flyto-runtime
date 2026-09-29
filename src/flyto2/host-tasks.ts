@@ -4,7 +4,6 @@ import { openDatabase, type DatabaseHandle } from "../db/client.js";
 export type HostTaskStatus = "active" | "completed" | "stopped";
 export type HostTaskExecutionState =
   | "waiting_for_host"
-  | "running"
   | "completed"
   | "stopped";
 export type HostTaskPlanStageStatus = "pending" | "running" | "done" | "blocked";
@@ -13,16 +12,10 @@ export interface HostTaskPlanStage {
   title: string;
   status: HostTaskPlanStageStatus;
   summary?: string;
-  command?: string;
-  timeoutSeconds?: number;
-  evidenceRef?: string;
 }
 
 export interface HostTaskPlan {
   currentStage: number;
-  autoRun?: boolean;
-  activeSessionId?: string;
-  activeJobId?: string;
   stages: HostTaskPlanStage[];
 }
 
@@ -43,27 +36,9 @@ export interface HostTaskRecord {
 
 export function hostTaskExecutionState(
   record: HostTaskRecord,
-  getReactiveJob: (jobId: string) => { status: string } | undefined,
 ): HostTaskExecutionState {
   if (record.status === "completed") return "completed";
   if (record.status === "stopped") return "stopped";
-
-  const jobIds = new Set<string>();
-  if (record.plan?.activeJobId) jobIds.add(record.plan.activeJobId);
-
-  const activeSessionId = record.plan?.activeSessionId;
-  if (activeSessionId) {
-    if (/^job_[a-f0-9]{32}$/.test(activeSessionId)) {
-      jobIds.add(activeSessionId);
-    } else {
-      const match = /^proc_([a-f0-9]{32})$/.exec(activeSessionId);
-      if (match) jobIds.add(`job_${match[1]}`);
-    }
-  }
-
-  for (const jobId of jobIds) {
-    if (getReactiveJob(jobId)?.status === "running") return "running";
-  }
   return "waiting_for_host";
 }
 
@@ -186,21 +161,6 @@ export class HostTaskStore {
     return row ? hostTaskFromRow(row) : undefined;
   }
 
-  listActiveWithPlans(): HostTaskRecord[] {
-    const rows = this.database.sqlite.prepare(
-      `select id, workspace_id, repo_root, workspace_root, prompt, status, plan_json, checkpoint,
-              result, created_at, updated_at, completed_at
-       from host_tasks
-       where status = 'active' and plan_json is not null
-       order by updated_at asc, rowid asc`,
-    ).all() as HostTaskRow[];
-    return rows.map(hostTaskFromRow).filter((record) => record.plan !== undefined);
-  }
-
-  findActiveByJobId(jobId: string): HostTaskRecord | undefined {
-    return this.listActiveWithPlans().find((record) => record.plan?.activeJobId === jobId);
-  }
-
   adoptActive(
     id: string,
     workspaceId: string,
@@ -232,10 +192,6 @@ export class HostTaskStore {
       currentStage?: number;
       stageStatus?: HostTaskPlanStageStatus;
       stageSummary?: string;
-      activeSessionId?: string | null;
-      activeJobId?: string | null;
-      evidenceRef?: string;
-      autoRun?: boolean;
     },
   ): HostTaskRecord | undefined {
     const current = this.get(id);
@@ -257,8 +213,6 @@ export class HostTaskStore {
     const completedPlan = current?.plan
       ? {
           ...current.plan,
-          activeSessionId: undefined,
-          activeJobId: undefined,
           currentStage: current.plan.stages.length,
           stages: current.plan.stages.map((stage) => ({ ...stage, status: "done" as const })),
         }
@@ -310,10 +264,32 @@ function serializePlan(plan: HostTaskPlan | undefined): string | null {
 function parsePlan(value: string | null): HostTaskPlan | undefined {
   if (!value) return undefined;
   try {
-    const parsed = JSON.parse(value) as HostTaskPlan;
+    const parsed = JSON.parse(value) as {
+      currentStage?: unknown;
+      stages?: Array<{
+        title?: unknown;
+        status?: unknown;
+        summary?: unknown;
+      }>;
+    };
     if (!Array.isArray(parsed.stages) || parsed.stages.length === 0) return undefined;
-    if (!Number.isInteger(parsed.currentStage) || parsed.currentStage < 1) return undefined;
-    return parsed;
+    if (!Number.isInteger(parsed.currentStage) || Number(parsed.currentStage) < 1) return undefined;
+    const stages = parsed.stages.flatMap((stage): HostTaskPlanStage[] => {
+      if (typeof stage?.title !== "string" || !stage.title.trim()) return [];
+      const status = ["pending", "running", "done", "blocked"].includes(String(stage.status))
+        ? stage.status as HostTaskPlanStageStatus
+        : "pending";
+      return [{
+        title: stage.title,
+        status,
+        ...(typeof stage.summary === "string" ? { summary: stage.summary } : {}),
+      }];
+    });
+    if (stages.length === 0) return undefined;
+    return {
+      currentStage: Math.min(Number(parsed.currentStage), stages.length),
+      stages,
+    };
   } catch {
     return undefined;
   }
@@ -325,10 +301,6 @@ function updateTaskPlan(
     currentStage?: number;
     stageStatus?: HostTaskPlanStageStatus;
     stageSummary?: string;
-    activeSessionId?: string | null;
-    activeJobId?: string | null;
-    evidenceRef?: string;
-    autoRun?: boolean;
   },
 ): HostTaskPlan {
   const currentStage = input.currentStage ?? current.currentStage;
@@ -344,22 +316,11 @@ function updateTaskPlan(
       ...stage,
       status: input.stageStatus ?? "running",
       ...(input.stageSummary !== undefined ? { summary: input.stageSummary } : {}),
-      ...(input.evidenceRef !== undefined ? { evidenceRef: input.evidenceRef } : {}),
     };
   });
-  const stageStatus = stages[currentStage - 1]?.status;
-  const movedStage = currentStage !== current.currentStage;
-  const shouldClearSession = movedStage || stageStatus === "done" || stageStatus === "blocked";
 
   return {
     currentStage,
-    autoRun: input.autoRun ?? current.autoRun,
     stages,
-    activeSessionId: input.activeSessionId === null
-      ? undefined
-      : input.activeSessionId ?? (shouldClearSession ? undefined : current.activeSessionId),
-    activeJobId: input.activeJobId === null
-      ? undefined
-      : input.activeJobId ?? (shouldClearSession ? undefined : current.activeJobId),
   };
 }

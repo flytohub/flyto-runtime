@@ -12,7 +12,6 @@ type Handler = (input: Record<string, unknown>) => Promise<{
 function fixture() {
   let handler: Handler | undefined;
   const records = new Map<string, HostTaskRecord>();
-  const runningJobs = new Set<string>();
   let sequence = 0;
   const context = {
     config: {
@@ -109,7 +108,6 @@ function fixture() {
           currentStage?: number;
           stageStatus?: "pending" | "running" | "done" | "blocked";
           stageSummary?: string;
-          activeSessionId?: string | null;
         },
       ) => {
         const current = records.get(id);
@@ -132,9 +130,6 @@ function fixture() {
           plan: {
             currentStage: stage,
             stages,
-            activeSessionId: input.activeSessionId === null
-              ? undefined
-              : input.activeSessionId,
           },
           updatedAt: "2026-01-01T00:01:45.000Z",
         };
@@ -168,19 +163,11 @@ function fixture() {
         return updated;
       },
     },
-    reactiveCommands: {
-      get: (jobId: string) => runningJobs.has(jobId)
-        ? { status: "running" }
-        : undefined,
-    },
-    taskPipelines: {
-      start: (id: string) => records.get(id),
-    },
   } as unknown as ToolRegistrationContext;
 
   registerBackgroundTaskTool(context);
   assert.ok(handler);
-  return { handler, records, runningJobs };
+  return { handler, records };
 }
 
 test("background_task records a ChatGPT-owned durable task without delegating", async () => {
@@ -332,90 +319,15 @@ test("background_task follows one durable task from source checkout into a manag
   assert.equal(records.get(taskId)?.repoRoot, "/repo");
 });
 
-test("background_task never switches execution roots while a verified durable job is still in flight", async () => {
-  const { handler, records, runningJobs } = fixture();
-  const started = await handler({
-    action: "start",
-    workspace_id: "ws_worktree",
-    prompt: "Keep the running stage pinned to its worktree.",
-    plan: ["Long test", "Deploy"],
-  });
-  const taskId = String(started.structuredContent.task_id);
-  const current = records.get(taskId);
-  assert.ok(current?.plan);
-  const sessionId = "proc_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-  runningJobs.add("job_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-  records.set(taskId, {
-    ...current,
-    plan: { ...current.plan, activeSessionId: sessionId },
-  });
-
-  const recovered = await handler({
-    action: "status",
-    workspace_id: "ws_worktree_2",
-    task_id: taskId,
-  });
-
-  assert.equal(recovered.isError, undefined);
-  assert.equal(recovered.structuredContent.workspace_root, "/managed/repo-wt");
-  assert.equal(recovered.structuredContent.repository_root, "/repo");
-  assert.equal(records.get(taskId)?.workspaceId, "ws_worktree");
-  assert.equal(records.get(taskId)?.workspaceRoot, "/managed/repo-wt");
-});
-
-test("background_task treats a stale execution pointer as waiting_for_host and allows recovery", async () => {
+test("background_task recovery follows the repo because task state does not own process execution", async () => {
   const { handler, records } = fixture();
   const started = await handler({
     action: "start",
     workspace_id: "ws_worktree",
-    prompt: "Recover from a stale execution pointer.",
-    plan: ["Long test", "Deploy"],
-  });
-  const taskId = String(started.structuredContent.task_id);
-  const current = records.get(taskId);
-  assert.ok(current?.plan);
-  records.set(taskId, {
-    ...current,
-    plan: {
-      ...current.plan,
-      activeSessionId: "proc_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      activeJobId: "job_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    },
-  });
-
-  const recovered = await handler({
-    action: "status",
-    workspace_id: "ws_worktree_2",
-    task_id: taskId,
-  });
-
-  assert.equal(recovered.structuredContent.status, "active");
-  assert.equal(recovered.structuredContent.execution_state, "waiting_for_host");
-  assert.equal(recovered.structuredContent.workspace_root, "/managed/repo-wt-2");
-  assert.equal(records.get(taskId)?.workspaceId, "ws_worktree_2");
-});
-
-test("background_task can release manual-session pinning before adopting a new worktree", async () => {
-  const { handler, records } = fixture();
-  const started = await handler({
-    action: "start",
-    workspace_id: "ws_worktree",
-    prompt: "Move after the manual command finishes.",
+    prompt: "Move this durable checkpoint into the new worktree.",
     plan: ["Validate", "Commit"],
   });
   const taskId = String(started.structuredContent.task_id);
-  await handler({
-    action: "continue",
-    workspace_id: "ws_worktree",
-    task_id: taskId,
-    active_session_id: "proc_finished",
-  });
-  await handler({
-    action: "continue",
-    workspace_id: "ws_worktree",
-    task_id: taskId,
-    active_session_id: null,
-  });
 
   const recovered = await handler({
     action: "status",
@@ -423,6 +335,7 @@ test("background_task can release manual-session pinning before adopting a new w
     task_id: taskId,
   });
   assert.equal(recovered.structuredContent.workspace_root, "/managed/repo-wt-2");
+  assert.equal(recovered.structuredContent.execution_state, "waiting_for_host");
   assert.equal(records.get(taskId)?.workspaceId, "ws_worktree_2");
   assert.equal(records.get(taskId)?.workspaceRoot, "/managed/repo-wt-2");
 });
@@ -487,9 +400,7 @@ test("background_task status without task_id recovers the latest active task for
 });
 
 test("background_task preserves a five-stage plan so a new chat knows stages 4 and 5 remain", async () => {
-  const { handler, runningJobs } = fixture();
-  const sessionId = "proc_cccccccccccccccccccccccccccccccc";
-  runningJobs.add("job_cccccccccccccccccccccccccccccccc");
+  const { handler } = fixture();
   const started = await handler({
     action: "start",
     workspace_id: "ws_old",
@@ -505,20 +416,17 @@ test("background_task preserves a five-stage plan so a new chat knows stages 4 a
     current_stage: 3,
     stage_status: "running",
     stage_summary: "Focused tests passed; full suite is still running.",
-    active_session_id: sessionId,
     prompt: "Reached stage 3; do not skip deploy or live verify.",
   });
 
   const plan = progressed.structuredContent.plan as {
     current_stage: number;
     total_stages: number;
-    active_session_id?: string;
     stages: Array<{ index: number; title: string; status: string; summary?: string }>;
   };
   assert.equal(plan.current_stage, 3);
   assert.equal(plan.total_stages, 5);
-  assert.equal(plan.active_session_id, sessionId);
-  assert.equal(progressed.structuredContent.execution_state, "running");
+  assert.equal(progressed.structuredContent.execution_state, "waiting_for_host");
   assert.deepEqual(plan.stages.map((stage) => stage.status), [
     "done",
     "done",
@@ -539,58 +447,37 @@ test("background_task preserves a five-stage plan so a new chat knows stages 4 a
   assert.equal(recoveredPlan.stages[3]?.status, "pending");
   assert.equal(recoveredPlan.stages[4]?.title, "Live verify");
   assert.equal(recoveredPlan.stages[4]?.status, "pending");
-  assert.equal(recoveredPlan.active_session_id, sessionId);
-  assert.equal(recovered.structuredContent.execution_state, "running");
+  assert.equal(recovered.structuredContent.execution_state, "waiting_for_host");
   assert.match(String(recovered.structuredContent.result), /Progress 3\/5: Test \(running\)/);
 });
 
-test("background_task keeps deterministic commands local while exposing automation state", async () => {
+test("background_task plan is descriptive progress only", async () => {
   const { handler, records } = fixture();
   const response = await handler({
     action: "start",
     workspace_id: "ws_1",
-    prompt: "Validate and deploy.",
+    prompt: "Track validation and deployment progress.",
     plan: [
-      { title: "Test", command: "npm test" },
-      { title: "Build", command: "npm run build", timeout_seconds: 120 },
+      { title: "Test" },
+      { title: "Build" },
       "Review",
     ],
-    auto_run: true,
   });
   const plan = response.structuredContent.plan as {
     stages: Array<Record<string, unknown>>;
   };
-  assert.equal(plan.stages[0]?.automated, true);
-  assert.equal(plan.stages[1]?.automated, true);
-  assert.equal(plan.stages[2]?.automated, false);
   assert.equal("command" in (plan.stages[0] ?? {}), false);
   assert.equal("timeout_seconds" in (plan.stages[1] ?? {}), false);
+  assert.equal("automated" in (plan.stages[0] ?? {}), false);
+  assert.equal("evidence_ref" in (plan.stages[0] ?? {}), false);
 
   const taskId = String(response.structuredContent.task_id);
   const stored = records.get(taskId);
-  assert.equal(stored?.plan?.stages[0]?.timeoutSeconds, undefined);
-  assert.equal(stored?.plan?.stages[1]?.timeoutSeconds, 120);
-});
-
-test("background_task gives GitHub watch stages a one-hour default without changing normal commands", async () => {
-  const { handler, records } = fixture();
-  const response = await handler({
-    action: "start",
-    workspace_id: "ws_1",
-    prompt: "Wait for CI and then build.",
-    plan: [
-      { title: "CI", command: "gh run watch 123 -R flytohub/flyto-runtime --exit-status" },
-      { title: "PR checks", command: "gh pr checks 373 -R flytohub/flyto-cloud --watch" },
-      { title: "Build", command: "npm run build" },
-      { title: "Explicit CI", command: "gh run watch 456 --exit-status", timeout_seconds: 900 },
-    ],
-  });
-  const taskId = String(response.structuredContent.task_id);
-  const stages = records.get(taskId)?.plan?.stages ?? [];
-  assert.equal(stages[0]?.timeoutSeconds, 3_600);
-  assert.equal(stages[1]?.timeoutSeconds, 3_600);
-  assert.equal(stages[2]?.timeoutSeconds, undefined);
-  assert.equal(stages[3]?.timeoutSeconds, 900);
+  assert.deepEqual(stored?.plan?.stages.map((stage) => stage.title), [
+    "Test",
+    "Build",
+    "Review",
+  ]);
 });
 
 test("background_task status without task_id returns the latest completed task when nothing is active", async () => {

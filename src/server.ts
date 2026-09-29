@@ -53,7 +53,6 @@ import { emitDurableToolEvent } from "./flyto2/tool-events.js";
 import { WorkspaceWatchRegistry } from "./flyto2/workspace-watch.js";
 import { WorkspaceRegistry } from "./workspaces.js";
 import { HostTaskStore } from "./flyto2/host-tasks.js";
-import { TaskPipelineRunner } from "./flyto2/task-pipeline.js";
 import {
   getLocalAgentProviderAvailabilitySnapshot,
 } from "./local-agent-availability.js";
@@ -89,6 +88,8 @@ interface RunningServer {
 }
 
 type TrackToolActivity = <T>(operation: () => Promise<T>) => Promise<T>;
+const TOOL_ACTIVITY_DRAIN_TIMEOUT_MS = 2_000;
+const SERVER_SHUTDOWN_TIMEOUT_MS = 5_000;
 
 class ToolActivityTracker {
   private readonly active = new Set<Promise<unknown>>();
@@ -101,10 +102,21 @@ class ToolActivityTracker {
     return promise;
   };
 
-  async waitForIdle(): Promise<void> {
+  async waitForIdle(timeoutMs = TOOL_ACTIVITY_DRAIN_TIMEOUT_MS): Promise<number> {
+    const deadline = Date.now() + timeoutMs;
     while (this.active.size > 0) {
-      await Promise.allSettled(Array.from(this.active));
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) return this.active.size;
+      const snapshot = Array.from(this.active);
+      await Promise.race([
+        Promise.allSettled(snapshot),
+        new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, remainingMs);
+          timer.unref();
+        }),
+      ]);
     }
+    return 0;
   }
 }
 
@@ -130,7 +142,7 @@ function serverInstructions(
     ? ` Diagnostic Runtime internals are explicitly enabled. Use ${toolNames.runtimeEvents}, ${toolNames.runtimeWait}, ${toolNames.runtimeEvidence}, or watch tools only when diagnosing Runtime behavior; normal coding should still use the primary workspace/file/process primitives.`
     : "";
   const backgroundTasks =
-    ` For non-trivial multi-step work, immediately start ${toolNames.backgroundTask} before the first edit or long command so a stalled ChatGPT turn always leaves a durable handoff. Task status is lifecycle state: active does not mean execution is running. Treat execution_state as authoritative for current Runtime activity: only running means a verifiable Runtime job is in flight; waiting_for_host means the task is active but no Runtime execution is currently running. If the work has a clear 2-10 stage plan at task start, persist it; otherwise keep the durable task as checkpoint-only state and let ChatGPT decide later work after recovery instead of turning Runtime into a workflow planner. Durable task identity follows the canonical source repository across managed worktrees while workspace_root remains the current execution checkout; Runtime will not switch execution roots while a verified active job is pinned. When a manually tracked long command finishes, clear active_session_id with null before moving the task to another worktree. Deterministic stages such as tests, build, verify, commit/push, or waiting for GitHub CI may include a local command; set auto_run=true only when that plan is already known at task start. Runtime stops automatic advancement on command failure, orphaned outcome, or a stage without a command; ChatGPT remains the only reasoning/coding owner. When the user's external completion condition is confirmed and no active job/session remains, complete the durable task before the final response instead of leaving a stale active task. open_workspace already surfaces the latest durable task recovery for the repository, including completed results and remaining checkpoints; call background_task status only when an explicit refresh is needed.`;
+    ` Use ${toolNames.backgroundTask} only when durable recovery across reconnects is useful. Runtime stores task identity, checkpoints, optional descriptive stage progress, and explicit completion/stop state; it never executes task stages or advances the plan. An active task has execution_state=waiting_for_host because ChatGPT remains the only task owner. Durable task identity follows the canonical source repository across managed worktrees. Complete or stop the task explicitly when the user's work is actually finished; open_workspace surfaces the latest recovery state automatically.`;
 
   return `${common} ${toolSurface.instructions({ agents, skills })}${execution}${backgroundTasks}${diagnostics}${artifactInstruction}${showChangesInstruction}${selfUpdateInstruction()}`;
 }
@@ -191,10 +203,8 @@ export function createMcpServer(
   reactiveCommands: ReactiveCommandRunner,
   workspaceWatches: WorkspaceWatchRegistry,
   hostTasks: HostTaskStore,
-  taskPipelines?: TaskPipelineRunner,
   trackToolActivity?: TrackToolActivity,
 ): McpServer {
-  const ownedTaskPipelines = taskPipelines ?? new TaskPipelineRunner(hostTasks, reactiveCommands);
   const toolSurface = getToolSurface(config.toolMode);
   const server = new McpServer(
     mcpServerInfo(),
@@ -216,7 +226,6 @@ export function createMcpServer(
     reactiveCommands,
     workspaceWatches,
     hostTasks,
-    ownedTaskPipelines,
     trackToolActivity,
   );
   return server;
@@ -235,7 +244,6 @@ function registerMcpSurface(
   reactiveCommands: ReactiveCommandRunner,
   workspaceWatches: WorkspaceWatchRegistry,
   hostTasks: HostTaskStore,
-  taskPipelines: TaskPipelineRunner,
   trackToolActivity?: TrackToolActivity,
 ): void {
   const trackedTarget = trackToolActivity
@@ -256,7 +264,6 @@ function registerMcpSurface(
     workspaces,
     reviewCheckpoints,
     hostTasks,
-    reactiveCommands,
     resolveLocalAgentProviders,
   });
 
@@ -279,7 +286,6 @@ function registerMcpSurface(
     runtimeEvents,
     reactiveCommands,
     hostTasks,
-    taskPipelines,
   });
 
   if (config.artifactsEnabled && isArtifactDownloadSupportedPlatform()) {
@@ -347,7 +353,6 @@ export function createServer(
   const reactiveCommands = new ReactiveCommandRunner(config.stateDir, runtimeEvents);
   const workspaceWatches = new WorkspaceWatchRegistry(config.stateDir, runtimeEvents);
   const hostTasks = new HostTaskStore(config.stateDir);
-  const taskPipelines = new TaskPipelineRunner(hostTasks, reactiveCommands);
   const workspaces = new WorkspaceRegistry(config, workspaceStore);
   const reviewCheckpoints = createReviewCheckpointManager();
   const processSessions = new ProcessSessionManager();
@@ -377,7 +382,6 @@ export function createServer(
       reactiveCommands,
       workspaceWatches,
       hostTasks,
-      taskPipelines,
       toolActivities.track,
     );
   });
@@ -548,10 +552,15 @@ export function createServer(
             error: error instanceof Error ? error.message : String(error),
           });
         }
-        await toolActivities.waitForIdle();
+        const remainingToolActivities = await toolActivities.waitForIdle();
+        if (remainingToolActivities > 0) {
+          logEvent(config.logging, "warn", "tool_activity_drain_timeout", {
+            remaining: remainingToolActivities,
+            timeoutMs: TOOL_ACTIVITY_DRAIN_TIMEOUT_MS,
+          });
+        }
         processSessions.shutdown();
         workspaceWatches.shutdown();
-        taskPipelines.shutdown();
         reactiveCommands.shutdown();
         oauthProvider.close();
         durableOperations.close();
@@ -598,7 +607,16 @@ if (await isMainModule()) {
   const shutdown = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
-    await shutdownHttpServer(httpServer, close);
+    const result = await shutdownHttpServer(
+      httpServer,
+      close,
+      SERVER_SHUTDOWN_TIMEOUT_MS,
+    );
+    if (result.forced) {
+      console.warn(
+        `Flyto2 Runtime shutdown exceeded ${SERVER_SHUTDOWN_TIMEOUT_MS}ms; forcing process exit.`,
+      );
+    }
     process.exit(0);
   };
   const handleShutdown = () => {

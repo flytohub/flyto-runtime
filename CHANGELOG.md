@@ -3,7 +3,9 @@
 ## Unreleased
 
 - Split durable non-interactive process observation from TTY input: Codex mode now exposes read-only `process_status` snapshots that never wait, while `write_stdin` remains the interactive input surface with a non-blocking compatibility path for cached v2 catalogs.
-- Bump generated ChatGPT Plugin catalog identity to `codex-v3` so hosts rescan the new process surface instead of reusing a cached v2 schema.
+- Remove Runtime-owned task orchestration: `background_task` now stores only durable task identity, checkpoints, optional descriptive plan progress, and explicit terminal state; it no longer runs stage commands, advances plans, or auto-completes work.
+- Bound tool draining and HTTP/application shutdown so a stuck tool promise cannot block a managed service restart indefinitely.
+- Bump generated ChatGPT Plugin catalog identity to `codex-v4` so hosts rescan the simplified task and process surfaces instead of reusing a cached schema.
 
 ## 1.1.2 - 2026-09-29
 

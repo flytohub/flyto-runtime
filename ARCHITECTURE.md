@@ -96,6 +96,11 @@ Flyto2 Runtime owns one durable local event stream for standalone MCP use and op
 
 Evidence is lazy by design: shallow events contain status, digests and evidence references, never full process output. Runtime reads bounded evidence internally when a durable process completes. Runtime restart marks unresolved reactive jobs `orphaned` and explicitly reports the outcome as uncertain rather than replaying the command. Direct manifest/event/evidence/watch MCP tools remain available only when `tools.exposeRuntimeInternals` is explicitly enabled for diagnostics or development.
 
+Durable ChatGPT task recovery is deliberately separate from process execution.
+`background_task` stores identity, checkpoints, optional descriptive plan
+progress, and explicit completion/stop state. It does not run stage commands,
+advance a plan, or infer task completion from local process activity.
+
 Codex-facing command start uses one short event wait so small commands can finish
 inline. Once a command becomes durable, status reads never wait: the host can
 inspect the durable session only when its next reasoning step depends on the
