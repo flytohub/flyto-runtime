@@ -551,6 +551,47 @@ test("Codex running commands keep the durable response bounded across process st
   assert.match(String(finished.result), /phase-two-done/);
 });
 
+test("Codex write_stdin does not hold the host for a long-running command", async (t) => {
+  const context = await fixture(t, { toolMode: "codex", uiEnabled: false });
+  const workspaceId = structuredContent(
+    await callOpen(context.client, context.project, "short-codex-continuation"),
+  ).workspace_id;
+  assert.equal(typeof workspaceId, "string");
+
+  const started = structuredContent(await context.client.callTool({
+    name: "exec_command",
+    arguments: {
+      workspace_id: workspaceId,
+      cmd: "node -e \"setTimeout(()=>console.log('slow-done'),4500)\"",
+    },
+  }));
+  assert.equal(started.running, true);
+
+  const observedAt = performance.now();
+  const observed = structuredContent(await context.client.callTool({
+    name: "write_stdin",
+    arguments: {
+      workspace_id: workspaceId,
+      session_id: started.session_id,
+    },
+  }));
+  const observedMs = performance.now() - observedAt;
+  assert.equal(observed.running, true);
+  assert.equal(observed.next_action, "continue");
+  assert.ok(observedMs < 3_500, `write_stdin held the host for ${Math.round(observedMs)}ms`);
+
+  const finished = structuredContent(await context.client.callTool({
+    name: "write_stdin",
+    arguments: {
+      workspace_id: workspaceId,
+      session_id: started.session_id,
+    },
+  }));
+  assert.equal(finished.running, false);
+  assert.equal(finished.exit_code, 0);
+  assert.match(String(finished.result), /slow-done/);
+});
+
 test("Codex exec_command replays a lost response without repeating the process side effect", async (t) => {
   const context = await fixture(t, { toolMode: "codex", uiEnabled: false });
   const workspaceId = structuredContent(

@@ -35,7 +35,10 @@ const CODEX_DURABLE_EVENT_TYPE = "codex.exec.exited";
 const CODEX_DURABLE_SESSION_PREFIX = "proc_";
 const DEFAULT_CODEX_YIELD_MS = 750;
 const DEFAULT_CODEX_INTERACTIVE_YIELD_MS = 250;
-const DEFAULT_CODEX_POLL_WAIT_MS = MAX_PROCESS_YIELD_MS;
+// A continuation request is model-facing. Keep it short enough that a still
+// running local command never makes ChatGPT look stalled; the process remains
+// durable after this observation window expires.
+const DEFAULT_CODEX_POLL_WAIT_MS = 2_000;
 const LEGACY_SHELL_WAIT_MS = 750;
 const LEGACY_SHELL_POLL_WAIT_MS = 1_000;
 // Tool output is copied into the host conversation. Keep the default small;

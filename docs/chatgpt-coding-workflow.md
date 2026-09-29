@@ -186,7 +186,7 @@ DevSpace uses the Codex-style surface by default. It exposes:
 In this mode, `write`, `edit`, and `bash` are not registered. `exec_command`
 returns a process session ID when a command is still running after its bounded
 yield window. ChatGPT/Codex calls yield in under a second initially, and a
-continuation performs a bounded wait before returning control to the host. While a
+continuation waits for at most about two seconds before returning control to the host. While a
 command is still running, Runtime returns a small tail preview of available
 process evidence instead of an empty response, so the host can show progress
 without copying the full log into conversation state. A running durable process
