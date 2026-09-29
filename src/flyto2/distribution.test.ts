@@ -183,3 +183,24 @@ test("the Runtime candidate workflow attests macOS and Windows packages with exp
   assert.match(workflow, /predicate-path:\s*candidate\/flyto2-runtime-\$\{\{ steps\.source\.outputs\.version \}\}\.cdx\.json/);
   assert.match(workflow, /Validate the merged SBOM/);
 });
+
+test("release gates accept exact-commit manual CI when automation pushes cannot trigger CI", () => {
+  const ci = readFileSync(
+    fileURLToPath(new URL("../../.github/workflows/ci.yml", import.meta.url)),
+    "utf8",
+  );
+  const candidate = readFileSync(
+    fileURLToPath(new URL("../../.github/workflows/macos-app.yml", import.meta.url)),
+    "utf8",
+  );
+  const release = readFileSync(
+    fileURLToPath(new URL("../../.github/workflows/release.yml", import.meta.url)),
+    "utf8",
+  );
+
+  assert.match(ci, /workflow_dispatch:/);
+  for (const workflow of [candidate, release]) {
+    assert.match(workflow, /event == "push" or \.event == "workflow_dispatch"/);
+    assert.doesNotMatch(workflow, /--event push/);
+  }
+});

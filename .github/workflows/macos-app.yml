@@ -247,8 +247,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           for _ in $(seq 1 90); do
-            state="$(gh run list -R "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$GITHUB_SHA" --event push \
-              --limit 1 --json status,conclusion --jq '.[0] | "\(.status):\(.conclusion)"')"
+            state="$(gh run list -R "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$GITHUB_SHA" \
+              --limit 10 --json event,status,conclusion \
+              --jq '[.[] | select(.event == "push" or .event == "workflow_dispatch")][0] | "\(.status):\(.conclusion)"')"
             case "$state" in
               completed:success) echo "CI passed for $GITHUB_SHA."; exit 0 ;;
               completed:*) echo "CI for $GITHUB_SHA finished as ${state#completed:}; no candidate." >&2; exit 1 ;;

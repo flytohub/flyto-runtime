@@ -46,12 +46,11 @@ jobs:
           state="$(gh run list \
             --workflow ci.yml \
             --commit "$GITHUB_SHA" \
-            --event push \
-            --limit 1 \
-            --json status,conclusion \
-            --jq '.[0] | "\(.status):\(.conclusion)"')"
+            --limit 10 \
+            --json event,status,conclusion \
+            --jq '[.[] | select(.event == "push" or .event == "workflow_dispatch")][0] | "\(.status):\(.conclusion)"')"
           if [[ "$state" != "completed:success" ]]; then
-            echo "The exact release commit must have a successful main CI push run; got ${state:-no run}." >&2
+            echo "The exact release commit must have a successful main CI run; got ${state:-no run}." >&2
             exit 1
           fi
 
