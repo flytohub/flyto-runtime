@@ -660,7 +660,8 @@ async function runDoctor(): Promise<void> {
   const packaged = packagedDistribution();
   if (packaged) {
     const update = await checkForAppUpdate(packaged.version);
-    console.log(`App: ${packaged.version} (macOS ${packaged.arch}); ${update
+    const packagedPlatform = packaged.kind === "macos-app" ? "macOS" : "Windows";
+    console.log(`Package: ${packaged.version} (${packagedPlatform} ${packaged.arch}); ${update
       ? `${update.version} is available at ${update.url}`
       : "no newer stable release found"}`);
   }

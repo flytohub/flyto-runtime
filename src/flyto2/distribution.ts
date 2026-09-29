@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { platform } from "node:os";
 import { gt as semverGt, valid as semverValid } from "semver";
 import { flyto2RuntimePackageRoot } from "./macos-launcher.js";
 
@@ -12,7 +13,7 @@ export const DISTRIBUTION_FILE = "distribution.json";
 export const FLYTO2_RUNTIME_DOWNLOADS_URL = "https://github.com/flytohub/flyto2/blob/main/products/runtime/README.md";
 
 export interface PackagedDistribution {
-  kind: "macos-app";
+  kind: "macos-app" | "windows-portable";
   version: string;
   arch: string;
 }
@@ -21,14 +22,21 @@ export function packagedDistribution(packageRoot = flyto2RuntimePackageRoot()): 
   const file = join(packageRoot, DISTRIBUTION_FILE);
   if (!existsSync(file)) return undefined;
   const value = JSON.parse(readFileSync(file, "utf8")) as Partial<PackagedDistribution>;
-  if (value.kind !== "macos-app" || typeof value.version !== "string" || typeof value.arch !== "string") {
+  if (
+    (value.kind !== "macos-app" && value.kind !== "windows-portable")
+    || typeof value.version !== "string"
+    || typeof value.arch !== "string"
+  ) {
     throw new Error(`${file} is not a valid Flyto2 Runtime distribution marker.`);
   }
   return { kind: value.kind, version: value.version, arch: value.arch };
 }
 
-export function bundledCloudflaredPath(packageRoot = flyto2RuntimePackageRoot()): string {
-  return join(packageRoot, "vendor", "cloudflared");
+export function bundledCloudflaredPath(
+  packageRoot = flyto2RuntimePackageRoot(),
+  currentPlatform: NodeJS.Platform = platform(),
+): string {
+  return join(packageRoot, "vendor", currentPlatform === "win32" ? "cloudflared.exe" : "cloudflared");
 }
 
 // The background service and launchers point at this package root, so it must

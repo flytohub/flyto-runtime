@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 1.1.2 - 2026-09-29
+
+- Add a self-contained Windows x64 Runtime ZIP with bundled Node.js, production
+  dependencies, and Cloudflare-signed `cloudflared.exe`; Windows users can
+  extract it and run `Install.cmd` without installing Node or pnpm first.
+- Extend the Runtime release candidate to carry Windows x64 alongside both
+  notarized macOS disk images, with one merged CycloneDX SBOM, SHA-256
+  checksums, build provenance, and SBOM attestations covering every distributed
+  Runtime package.
+- Keep durable non-interactive commands inside the ChatGPT task instead of
+  forcing the assistant turn to end when a command becomes a Runtime session.
+
 ## 1.1.1 - 2026-09-26
 
 - Setup can create a free Cloudflare quick tunnel instead of asking for a URL: it installs `cloudflared` with consent, keeps the tunnel running as a background service, waits until the new hostname exists in DNS, and the Runtime follows the URL whenever the tunnel restarts. `service quick-tunnel start|stop|status` manages it.

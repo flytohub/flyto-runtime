@@ -6,10 +6,14 @@ if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
 set "MODE=%~1"
 if not defined MODE set "MODE=menu"
 
-where node.exe >nul 2>nul
-if errorlevel 1 goto :missing_node
+set "NODE_EXE=%ROOT%\node\node.exe"
+if not exist "%NODE_EXE%" (
+  set "NODE_EXE=node.exe"
+  where node.exe >nul 2>nul
+  if errorlevel 1 goto :missing_node
+)
 
-node -e "const [a,b]=process.versions.node.split('.').map(Number);process.exit((a>22||(a===22&&b>=19))&&a<27?0:1)" >nul 2>nul
+"%NODE_EXE%" -e "const [a,b]=process.versions.node.split('.').map(Number);process.exit((a>22||(a===22&&b>=19))&&a<27?0:1)" >nul 2>nul
 if errorlevel 1 goto :bad_node
 
 rem Native modules are built for one Node ABI; after switching Node they fail
@@ -18,7 +22,7 @@ rem loads its binary only when a database opens, so open one.
 set "REBUILD_NATIVE="
 if exist "%ROOT%\pnpm-lock.yaml" if exist "%ROOT%\node_modules" (
   pushd "%ROOT%" >nul
-  node.exe -e "new (require('better-sqlite3'))(':memory:').close(); try { require.resolve('node-pty') } catch { process.exit(0) } require('node-pty')" >nul 2>nul
+  "%NODE_EXE%" -e "new (require('better-sqlite3'))(':memory:').close(); try { require.resolve('node-pty') } catch { process.exit(0) } require('node-pty')" >nul 2>nul
   if errorlevel 1 set "REBUILD_NATIVE=1"
   popd >nul
 )
@@ -59,22 +63,22 @@ popd >nul
 if not exist "%ROOT%\dist\cli.js" goto :missing_build
 pushd "%ROOT%" >nul
 if /I "%MODE%"=="menu" (
-  node.exe dist\cli.js menu
+  "%NODE_EXE%" dist\cli.js menu
 ) else if /I "%MODE%"=="start" (
-  node.exe dist\cli.js service start
+  "%NODE_EXE%" dist\cli.js service start
 ) else if /I "%MODE%"=="doctor" (
-  node.exe dist\cli.js doctor
+  "%NODE_EXE%" dist\cli.js doctor
 ) else if /I "%MODE%"=="setup" (
-  node.exe dist\cli.js init --force
+  "%NODE_EXE%" dist\cli.js init --force
 ) else if /I "%MODE%"=="launcher-install" (
-  node.exe dist\cli.js launcher install
+  "%NODE_EXE%" dist\cli.js launcher install
 ) else if /I "%MODE%"=="install" (
   rem init is a no-op once configured, so a first run is walked through setup.
-  node.exe dist\cli.js init
-  if not errorlevel 1 node.exe dist\cli.js service install
-  if not errorlevel 1 node.exe dist\cli.js launcher install
+  "%NODE_EXE%" dist\cli.js init
+  if not errorlevel 1 "%NODE_EXE%" dist\cli.js service install
+  if not errorlevel 1 "%NODE_EXE%" dist\cli.js launcher install
 ) else (
-  node.exe dist\cli.js %*
+  "%NODE_EXE%" dist\cli.js %*
 )
 set "RESULT=%ERRORLEVEL%"
 popd >nul
@@ -93,7 +97,7 @@ pause
 exit /b 1
 
 :bad_node
-for /f "delims=" %%V in ('node -v 2^>nul') do set "NODE_VERSION=%%V"
+for /f "delims=" %%V in ('"%NODE_EXE%" -v 2^>nul') do set "NODE_VERSION=%%V"
 echo.
 echo Flyto2 Runtime failed to start: unsupported Node.js version %NODE_VERSION%.
 echo Required: ^>=22.19 ^<27.

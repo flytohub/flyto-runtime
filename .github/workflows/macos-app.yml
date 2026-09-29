@@ -1,10 +1,10 @@
-name: macOS App
+name: Runtime Packages
 
-# Builds "Flyto2 Runtime.app" and its disk image on each Mac architecture,
-# signs and notarizes them when the Apple credentials are configured, and, when
-# dispatched as a candidate, assembles the release candidate that
-# flytohub/flyto2 verifies and publishes: disk images, a CycloneDX SBOM,
-# GitHub artifact attestations, SHA256SUMS and release-manifest.json.
+# Builds the self-contained Runtime distributions: signed/notarized macOS disk
+# images on both Mac architectures and a Windows x64 portable ZIP. When
+# dispatched as a candidate it assembles the release candidate that flytohub/flyto2
+# verifies and publishes: packages, a CycloneDX SBOM, GitHub artifact
+# attestations, SHA256SUMS and release-manifest.json.
 # flyto-runtime never publishes installers itself; flyto2 is the distribution
 # authority (see its docs/DISTRIBUTION.md).
 on:
@@ -21,8 +21,11 @@ on:
     paths:
       - packaging/macos/**
       - scripts/package-macos.sh
+      - scripts/package-windows.ps1
       - src/flyto2/distribution.ts
       - Flyto2 Runtime.command
+      - Flyto2 Runtime.cmd
+      - Install.cmd
       - .github/workflows/macos-app.yml
 
 permissions:
@@ -162,9 +165,72 @@ jobs:
           path: macos-app-out/*
           if-no-files-found: error
 
+  windows:
+    name: Windows package (x64)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.21.0
+
+      - name: Enable corepack pnpm
+        shell: pwsh
+        run: corepack enable; pnpm --version
+
+      - name: Install dependencies
+        shell: pwsh
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        shell: pwsh
+        run: pnpm build
+
+      - name: Package
+        shell: pwsh
+        run: ./scripts/package-windows.ps1 windows-app-out
+
+      - name: Check the packaged Runtime
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem windows-app-out/*.zip | Select-Object -First 1
+          $unpacked = Join-Path $env:RUNNER_TEMP "flyto2-runtime-windows"
+          Expand-Archive -LiteralPath $zip.FullName -DestinationPath $unpacked
+          $runtime = Join-Path $unpacked "Flyto2 Runtime"
+          & (Join-Path $runtime "node\node.exe") (Join-Path $runtime "dist\cli.js") version
+          if ($LASTEXITCODE -ne 0) { throw "Packaged Runtime version check failed." }
+          & cmd.exe /c ('"' + (Join-Path $runtime "Flyto2 Runtime.cmd") + '" version')
+          if ($LASTEXITCODE -ne 0) { throw "Packaged Windows launcher failed." }
+          $cloudflared = Join-Path $runtime "vendor\cloudflared.exe"
+          $signature = Get-AuthenticodeSignature -LiteralPath $cloudflared
+          if ($signature.Status -ne "Valid" -or $signature.SignerCertificate.Subject -notmatch "Cloudflare, Inc\.") {
+            throw "Packaged cloudflared lost its Cloudflare Authenticode signature."
+          }
+          "runtime=$runtime" >> $env:GITHUB_ENV
+
+      - name: SBOM
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          path: ${{ env.runtime }}
+          format: cyclonedx-json
+          output-file: windows-app-out/sbom-windows-x64.cdx.json
+          upload-artifact: false
+          dependency-snapshot: false
+
+      - name: Upload Windows package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: flyto2-runtime-windows-x64
+          path: windows-app-out/*
+          if-no-files-found: error
+
   candidate:
     name: Release candidate
-    needs: app
+    needs: [app, windows]
     if: inputs.candidate
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -195,10 +261,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Collect the disk images and SBOMs
+      - name: Collect the packages and SBOMs
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: flyto2-runtime-macos-*
+          pattern: flyto2-runtime-*
           path: candidate
           merge-multiple: true
 
@@ -260,13 +326,13 @@ jobs:
         id: provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: candidate/*.dmg
+          subject-path: candidate/Flyto2-Runtime-*
 
       - name: Attest the SBOM
         id: sbom
         uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
         with:
-          subject-path: candidate/*.dmg
+          subject-path: candidate/Flyto2-Runtime-*
           predicate-type: https://cyclonedx.org/bom
           predicate-path: candidate/flyto2-runtime-${{ steps.source.outputs.version }}.cdx.json
 

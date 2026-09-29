@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Assembles the release candidate that flytohub/flyto2 ingests: one CycloneDX
-// SBOM for both Mac builds, SHA256SUMS over every distributed file, and a
-// release manifest in the shape of flyto2's schemas/release-manifest.schema.json.
+// SBOM for both Mac builds and the Windows x64 package, SHA256SUMS over every
+// distributed file, and a release manifest in the shape of flyto2's
+// schemas/release-manifest.schema.json.
 //
 //   node scripts/release-candidate.mjs sbom <dir>
 //     Merges <dir>/sbom-*.cdx.json into <dir>/flyto2-runtime-<version>.cdx.json.
@@ -19,6 +20,7 @@ const DISPLAY_NAME = "Flyto2 Runtime";
 const DISTRIBUTION_TAG_PREFIX = "runtime/v";
 const WORKFLOW = ".github/workflows/macos-app.yml";
 const DMG = /^Flyto2-Runtime-(.+)-macos-(arm64|x64)\.dmg$/;
+const WINDOWS_ZIP = /^Flyto2-Runtime-(.+)-windows-(x64)\.zip$/;
 
 const [command, dir] = process.argv.slice(2);
 if (!dir || (command !== "sbom" && command !== "manifest")) {
@@ -62,7 +64,7 @@ function writeSbom() {
         name: "flyto2-runtime",
         version,
         purl: `pkg:github/flytohub/flyto-runtime@v${version}`,
-        description: `${DISPLAY_NAME} macOS app (${inputs.map((name) => name.slice(5, -9)).join(", ")})`,
+        description: `${DISPLAY_NAME} packaged distributions (${inputs.map((name) => name.slice(5, -9)).join(", ")})`,
       },
     },
     components: [...components.values()],
@@ -88,20 +90,51 @@ function writeManifest() {
   const digest = (name) => createHash("sha256").update(readFileSync(join(dir, name))).digest("hex");
   const evidence = (name) => ({ path: name, sha256: digest(name) });
 
-  const artifacts = files.filter((name) => DMG.test(name)).map((name) => {
-    const [, dmgVersion, arch] = DMG.exec(name);
-    if (dmgVersion !== version) throw new Error(`${name} is not version ${version}.`);
-    return {
-      name,
-      platform: "macos",
-      arch,
-      kind: "installer",
-      sha256: digest(name),
-      size: statSync(join(dir, name)).size,
-      native_signature: "apple-developer-id-notarized",
-    };
-  });
-  if (artifacts.length === 0) throw new Error(`No disk images in ${dir}.`);
+  const artifacts = [];
+  for (const name of files) {
+    const dmg = DMG.exec(name);
+    if (dmg) {
+      const [, dmgVersion, arch] = dmg;
+      if (dmgVersion !== version) throw new Error(`${name} is not version ${version}.`);
+      artifacts.push({
+        name,
+        platform: "macos",
+        arch,
+        kind: "installer",
+        sha256: digest(name),
+        size: statSync(join(dir, name)).size,
+        native_signature: "apple-developer-id-notarized",
+      });
+      continue;
+    }
+    const windows = WINDOWS_ZIP.exec(name);
+    if (windows) {
+      const [, archiveVersion, arch] = windows;
+      if (archiveVersion !== version) throw new Error(`${name} is not version ${version}.`);
+      artifacts.push({
+        name,
+        platform: "windows",
+        arch,
+        kind: "archive",
+        sha256: digest(name),
+        size: statSync(join(dir, name)).size,
+      });
+    }
+  }
+  const expectedPackages = new Set([
+    `Flyto2-Runtime-${version}-macos-arm64.dmg`,
+    `Flyto2-Runtime-${version}-macos-x64.dmg`,
+    `Flyto2-Runtime-${version}-windows-x64.zip`,
+  ]);
+  const actualPackages = new Set(artifacts.map(({ name }) => name));
+  if (
+    actualPackages.size !== expectedPackages.size
+    || [...expectedPackages].some((name) => !actualPackages.has(name))
+  ) {
+    throw new Error(
+      `Release candidate must contain both macOS disk images and the Windows x64 ZIP; got ${[...actualPackages].join(", ") || "none"}.`,
+    );
+  }
   for (const required of [sbomName, "provenance.intoto.jsonl", "sbom.intoto.jsonl"]) {
     if (!files.includes(required)) throw new Error(`${required} is missing from ${dir}.`);
   }
