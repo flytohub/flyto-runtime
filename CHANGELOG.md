@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.1.3 - 2026-09-29
+
 - Split durable non-interactive process observation from TTY input: Codex mode now exposes read-only `process_status` snapshots that never wait, while `write_stdin` remains the interactive input surface with a non-blocking compatibility path for cached v2 catalogs.
 - Remove Runtime-owned task orchestration: `background_task` now stores only durable task identity, checkpoints, optional descriptive plan progress, and explicit terminal state; it no longer runs stage commands, advances plans, or auto-completes work.
 - Bound tool draining and HTTP/application shutdown so a stuck tool promise cannot block a managed service restart indefinitely.
