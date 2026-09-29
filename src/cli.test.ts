@@ -150,7 +150,7 @@ try {
   assert.equal(result.ok, true);
   assert.equal(result.mcpUrl, "https://runtime.team.example/mcp");
   assert.equal(result.outputPath, outputPath);
-  assert.equal(result.serverName, "team-runtime-codex-v2");
+  assert.equal(result.serverName, "team-runtime-codex-v3");
 
   const archive = unzipSync(readFileSync(outputPath));
   const plugin = JSON.parse(strFromU8(archive["plugin.json"]!)) as { name?: string };
@@ -159,7 +159,7 @@ try {
   };
   assert.equal(plugin.name, "team-runtime");
   assert.equal(
-    mcp.mcpServers?.["team-runtime-codex-v2"]?.url,
+    mcp.mcpServers?.["team-runtime-codex-v3"]?.url,
     "https://runtime.team.example/mcp",
   );
 

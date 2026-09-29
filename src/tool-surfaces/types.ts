@@ -19,6 +19,7 @@ export const toolNames = {
   runtimeRun: "runtime_run",
   runtimeEvidence: "runtime_evidence",
   runtimeSignal: "runtime_signal",
+  processStatus: "process_status",
   backgroundTask: "background_task",
   runtimeWatch: "runtime_watch",
   runtimeUnwatch: "runtime_unwatch",
@@ -47,6 +48,13 @@ export const SHELL_TOOL_ANNOTATIONS = {
   destructiveHint: true,
   idempotentHint: false,
   openWorldHint: true,
+};
+
+export const READ_ONLY_TOOL_ANNOTATIONS = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
 };
 
 export type ToolContent =

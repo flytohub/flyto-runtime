@@ -2,8 +2,8 @@
 // Translate only the known legacy surface at the transport boundary; published
 // Runtime schemas and durable-operation payloads remain canonical snake_case.
 // Set by the transport on calls it translated from a cached `bash`. A client
-// holding that catalog has no write_stdin, so the Codex process tools wait
-// longer and describe continuation as another `bash` call instead.
+// holding that catalog has no process_status, so @flyto2/job is translated to
+// the canonical immediate snapshot while cancellation remains write_stdin.
 export const LEGACY_SHELL_HEADER = "x-flyto2-legacy-shell";
 export const LEGACY_JOB_COMMAND = "@flyto2/job";
 export const LEGACY_TASK_COMMAND = "@flyto2/task";
@@ -50,7 +50,7 @@ export function normalizeLegacyMcpInput(body: unknown, toolMode?: "claude" | "co
         ...body,
         params: {
           ...params,
-          name: "write_stdin",
+          name: job[2] ? "write_stdin" : "process_status",
           arguments: {
             workspace_id: args.workspace_id,
             session_id: job[1],

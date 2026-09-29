@@ -125,7 +125,7 @@ test("cached ChatGPT @flyto2/job commands continue a Codex process session", () 
     workspaceId: "ws_a", command,
   } } }, "codex") as { params: { name: string; arguments: Record<string, unknown> } };
   assert.deepEqual(poll(`@flyto2/job ${session}`).params, {
-    name: "write_stdin", arguments: { workspace_id: "ws_a", session_id: session },
+    name: "process_status", arguments: { workspace_id: "ws_a", session_id: session },
   });
   assert.deepEqual(poll(`  @flyto2/job ${session} --cancel `).params.arguments, {
     workspace_id: "ws_a", session_id: session, chars: "\u0003",

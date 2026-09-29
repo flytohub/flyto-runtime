@@ -8,6 +8,7 @@ import {
 } from "../process-sessions.js";
 import {
   EDIT_TOOL_ANNOTATIONS,
+  READ_ONLY_TOOL_ANNOTATIONS,
   SHELL_TOOL_ANNOTATIONS,
   toolNames,
   workspaceIdDescription,
@@ -35,12 +36,7 @@ const CODEX_DURABLE_EVENT_TYPE = "codex.exec.exited";
 const CODEX_DURABLE_SESSION_PREFIX = "proc_";
 const DEFAULT_CODEX_YIELD_MS = 750;
 const DEFAULT_CODEX_INTERACTIVE_YIELD_MS = 250;
-// A continuation request is model-facing. Keep it short enough that a still
-// running local command never makes ChatGPT look stalled; the process remains
-// durable after this observation window expires.
-const DEFAULT_CODEX_POLL_WAIT_MS = 2_000;
 const LEGACY_SHELL_WAIT_MS = 750;
-const LEGACY_SHELL_POLL_WAIT_MS = 1_000;
 // Tool output is copied into the host conversation. Keep the default small;
 // full command evidence remains available in the durable Runtime job and a
 // truncated result still preserves both the head and tail for diagnosis.
@@ -70,7 +66,7 @@ function processStatus(snapshot: CodexProcessSnapshot, legacyShell = false): str
   return snapshot.running
     ? legacyShell
       ? `Still running (session ${snapshot.sessionId}). Get more output with this same bash tool using command exactly: ${LEGACY_JOB_COMMAND} ${snapshot.sessionId} (append --cancel to stop it). Do not rerun the original command.`
-      : `Process is running durably with session_id=${snapshot.sessionId}. This background process does not end the assistant turn. Continue any independent work normally. When the next reasoning step actually depends on this result, call write_stdin with the same session_id; it performs a bounded wait and may still return running=true. Never rerun the original command and do not busy-poll.`
+      : `Process is running durably with session_id=${snapshot.sessionId}. This background process does not end the assistant turn. Continue independent work normally. When the result is required, call process_status with the same session_id; it returns an immediate snapshot and never waits. Never rerun the original command and do not busy-poll.`
     : snapshot.signal === CODEX_UNCERTAIN_OUTCOME_SIGNAL
       ? "Process outcome is uncertain. Do not rerun the command blindly."
       : snapshot.signal
@@ -229,6 +225,7 @@ interface WriteStdinInput {
 function registerCodexProcessTools(context: ToolRegistrationContext): void {
   const interactiveSessions = new Map<string, number>();
   registerExecCommandTool(context, interactiveSessions);
+  registerProcessStatusTool(context);
   registerWriteStdinTool(context, interactiveSessions);
 }
 
@@ -241,7 +238,7 @@ function registerExecCommandTool(
     {
       title: "Execute command",
       description:
-        "Run a workspace command. Long non-interactive commands return a durable session_id without ending the assistant turn; continue other work and resume only when needed. Never rerun it.",
+        "Run a workspace command. Long non-interactive commands return a durable session_id; inspect it later with process_status. Never rerun it.",
       inputSchema: {
         workspace_id: z.string().describe(workspaceIdDescription),
         cmd: z.string().min(1).describe("Shell command to execute."),
@@ -357,6 +354,64 @@ async function executeCodexCommand(
   return durableSnapshot;
 }
 
+interface ProcessStatusInput {
+  workspace_id: string;
+  session_id: string;
+}
+
+function registerProcessStatusTool(
+  context: ToolRegistrationContext,
+): void {
+  context.server.registerTool(
+    toolNames.processStatus,
+    {
+      title: "Process status",
+      description:
+        "Read a durable process snapshot immediately. Never waits or changes the process.",
+      inputSchema: {
+        workspace_id: z.string().describe("Workspace that started the process."),
+        session_id: z
+          .string()
+          .min(1)
+          .max(128)
+          .describe("Durable session id from exec_command."),
+      },
+      outputSchema: processOutputSchema(),
+      annotations: READ_ONLY_TOOL_ANNOTATIONS,
+    },
+    async (input, extra) => handleProcessStatus(context, input, extra),
+  );
+}
+
+async function handleProcessStatus(
+  context: ToolRegistrationContext,
+  input: ProcessStatusInput,
+  extra: unknown,
+) {
+  const { config, workspaces } = context;
+  const startedAt = performance.now();
+  const legacyShell = isLegacyShellCall(extra);
+  const snapshot = await runLoggedToolOperation(
+    config,
+    { tool: "process_status", workspaceId: input.workspace_id },
+    startedAt,
+    async () => {
+      await workspaces.getWorkspace(input.workspace_id);
+      const jobId = reactiveJobIdFromCodexSession(input.session_id);
+      return durableProcessSnapshot(
+        context,
+        input.workspace_id,
+        jobId,
+        0,
+        DEFAULT_MAX_OUTPUT_TOKENS,
+      );
+    },
+    processLogFields,
+  );
+
+  return processToolResponse(snapshot, legacyShell);
+}
+
 function registerWriteStdinTool(
   context: ToolRegistrationContext,
   interactiveSessions: Map<string, number>,
@@ -364,9 +419,9 @@ function registerWriteStdinTool(
   context.server.registerTool(
     "write_stdin",
     {
-      title: "Continue process",
+      title: "Write stdin",
       description:
-        "Resume a process by session_id. Non-interactive sessions use a bounded wait; if still running, avoid busy-polling. \\u0003 interrupts.",
+        "Send input to an interactive TTY session. Cached older clients may use it for an immediate non-interactive snapshot. \\u0003 interrupts.",
       inputSchema: {
         workspace_id: z
           .string()
@@ -410,7 +465,6 @@ async function handleWriteStdin(
       context,
       interactiveSessions,
       input,
-      legacyShell,
     ),
     processLogFields,
   );
@@ -422,7 +476,6 @@ async function continueCodexProcess(
   context: ToolRegistrationContext,
   interactiveSessions: Map<string, number>,
   input: WriteStdinInput,
-  legacyShell: boolean,
 ): Promise<CodexProcessSnapshot> {
   const { workspaces, processSessions, reactiveCommands } = context;
   await workspaces.getWorkspace(input.workspace_id);
@@ -447,15 +500,13 @@ async function continueCodexProcess(
   }
   if (input.chars === "\u0003") {
     reactiveCommands.signal(jobId, input.workspace_id, "SIGINT");
-    return legacyShell
-      ? awaitDurableProcess(context, input.workspace_id, jobId, LEGACY_SHELL_POLL_WAIT_MS)
-      : durableProcessSnapshot(
-          context,
-          input.workspace_id,
-          jobId,
-          DEFAULT_CODEX_YIELD_MS,
-          DEFAULT_MAX_OUTPUT_TOKENS,
-        );
+    return durableProcessSnapshot(
+      context,
+      input.workspace_id,
+      jobId,
+      0,
+      DEFAULT_MAX_OUTPUT_TOKENS,
+    );
   }
 
   const current = reactiveCommands.get(jobId);
@@ -472,20 +523,14 @@ async function continueCodexProcess(
     );
   }
 
-  if (legacyShell) {
-    return awaitDurableProcess(
-      context,
-      input.workspace_id,
-      jobId,
-      LEGACY_SHELL_POLL_WAIT_MS,
-    );
-  }
-
+  // Compatibility only: catalog v2 exposed write_stdin as the non-interactive
+  // continuation tool. Preserve that call shape as an immediate snapshot while
+  // catalog v3 uses process_status as the canonical read-only surface.
   return durableProcessSnapshot(
     context,
     input.workspace_id,
     jobId,
-    DEFAULT_CODEX_POLL_WAIT_MS,
+    0,
     DEFAULT_MAX_OUTPUT_TOKENS,
   );
 }

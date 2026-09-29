@@ -37,7 +37,7 @@ test("tool modes expose the expected host-facing tool surface", async (t) => {
     },
     {
       mode: "codex",
-      expected: ["open_workspace", "read", "apply_patch", "exec_command", "write_stdin", "show_changes", "background_task"],
+      expected: ["open_workspace", "read", "apply_patch", "exec_command", "process_status", "write_stdin", "show_changes", "background_task"],
     },
   ];
 
@@ -76,7 +76,7 @@ test("ChatGPT durable task state is exposed without enabling local agents", asyn
   const names = tools.tools.map((tool) => tool.name);
 
   assert.equal(names.filter((name) => name === "background_task").length, 1);
-  assert.equal(names.length, 7);
+  assert.equal(names.length, 8);
   const backgroundTask = tools.tools.find((tool) => tool.name === "background_task");
   assert.match(backgroundTask?.description ?? "", /ChatGPT-owned/);
   assert.match(backgroundTask?.description ?? "", /never delegates to another model/);
@@ -397,6 +397,7 @@ test("Codex process tools keep model-facing controls minimal", async (t) => {
   const context = await fixture(t, { toolMode: "codex", uiEnabled: false });
   const tools = await context.client.listTools();
   const exec = tools.tools.find(({ name }) => name === "exec_command");
+  const status = tools.tools.find(({ name }) => name === "process_status");
   const stdin = tools.tools.find(({ name }) => name === "write_stdin");
 
   assert.deepEqual(
@@ -404,16 +405,21 @@ test("Codex process tools keep model-facing controls minimal", async (t) => {
     ["cmd", "operation_id", "timeout_seconds", "tty", "working_directory", "workspace_id"].sort(),
   );
   assert.deepEqual(
+    Object.keys(status?.inputSchema?.properties ?? {}).sort(),
+    ["session_id", "workspace_id"].sort(),
+  );
+  assert.deepEqual(
     Object.keys(stdin?.inputSchema?.properties ?? {}).sort(),
     ["chars", "operation_id", "session_id", "workspace_id"].sort(),
   );
 
-  for (const tool of [exec, stdin]) {
+  for (const tool of [exec, status, stdin]) {
     assert.doesNotMatch(tool?.description ?? "", /runtime_|job_|evidence|reactive/i);
   }
-  assert.match(exec?.description ?? "", /without ending the assistant turn/i);
-  assert.match(stdin?.description ?? "", /bounded wait/i);
-  assert.match(stdin?.description ?? "", /busy-polling/i);
+  assert.match(exec?.description ?? "", /process_status/i);
+  assert.match(status?.description ?? "", /immediately/i);
+  assert.match(status?.description ?? "", /never waits/i);
+  assert.match(stdin?.description ?? "", /interactive TTY/i);
 });
 
 test("Codex command output is bounded by default", async (t) => {
@@ -495,21 +501,35 @@ test("Codex non-interactive commands become durable behind exec_command", async 
     name: "exec_command",
     arguments: {
       workspace_id: workspaceId,
-      cmd: "node -e \"setTimeout(()=>console.log('durable-finished'),1200)\"",
+      cmd: "node -e \"setTimeout(()=>console.log('durable-finished'),1800)\"",
     },
   }));
   assert.equal(started.running, true);
   assert.equal(started.next_action, "continue");
   assert.match(started.session_id as string, /^proc_[a-f0-9]{32}$/);
   assert.match(started.result as string, /does not end the assistant turn/);
-  assert.match(started.result as string, /Continue any independent work normally/);
-  assert.match(started.result as string, /bounded wait/);
+  assert.match(started.result as string, /Continue independent work normally/);
+  assert.match(started.result as string, /process_status/);
+  assert.match(started.result as string, /never waits/);
   assert.doesNotMatch(started.result as string, /end_turn|later user turn|poll_suppressed|retry_after_ms/i);
   assert.match(started.result as string, new RegExp(String(started.session_id)));
   assert.doesNotMatch(started.result as string, /job_/);
 
+  const observedAt = performance.now();
+  const observed = structuredContent(await context.client.callTool({
+    name: "process_status",
+    arguments: {
+      workspace_id: workspaceId,
+      session_id: started.session_id,
+    },
+  }));
+  assert.equal(observed.running, true);
+  assert.equal(observed.next_action, "continue");
+  assert.ok(performance.now() - observedAt < 1_000, "process_status must not wait for the process");
+
+  await new Promise((resolve) => setTimeout(resolve, 1_200));
   const finished = structuredContent(await context.client.callTool({
-    name: "write_stdin",
+    name: "process_status",
     arguments: {
       workspace_id: workspaceId,
       session_id: started.session_id,
@@ -521,7 +541,7 @@ test("Codex non-interactive commands become durable behind exec_command", async 
   assert.match(finished.result as string, /durable-finished/);
 });
 
-test("Codex running commands keep the durable response bounded across process startup timing", async (t) => {
+test("Codex process_status exposes running progress without waiting", async (t) => {
   const context = await fixture(t, { toolMode: "codex", uiEnabled: false });
   const workspaceId = structuredContent(
     await callOpen(context.client, context.project, "durable-codex-progress"),
@@ -532,15 +552,28 @@ test("Codex running commands keep the durable response bounded across process st
     name: "exec_command",
     arguments: {
       workspace_id: workspaceId,
-      cmd: "node -e \"console.log('phase-one-ready');setTimeout(()=>console.log('phase-two-done'),1200)\"",
+      cmd: "node -e \"console.log('phase-one-ready');setTimeout(()=>console.log('phase-two-done'),1800)\"",
     },
   }));
   assert.equal(started.running, true);
   assert.equal(started.next_action, "continue");
   assert.ok(String(started.result).length < 1_200);
 
+  const observedAt = performance.now();
+  const observed = structuredContent(await context.client.callTool({
+    name: "process_status",
+    arguments: {
+      workspace_id: workspaceId,
+      session_id: started.session_id,
+    },
+  }));
+  assert.equal(observed.running, true);
+  assert.match(String(observed.result), /phase-one-ready/);
+  assert.ok(performance.now() - observedAt < 1_000, "process_status must be an immediate snapshot");
+
+  await new Promise((resolve) => setTimeout(resolve, 1_200));
   const finished = structuredContent(await context.client.callTool({
-    name: "write_stdin",
+    name: "process_status",
     arguments: {
       workspace_id: workspaceId,
       session_id: started.session_id,
@@ -551,7 +584,7 @@ test("Codex running commands keep the durable response bounded across process st
   assert.match(String(finished.result), /phase-two-done/);
 });
 
-test("Codex write_stdin does not hold the host for a long-running command", async (t) => {
+test("Codex v2 write_stdin compatibility snapshot never waits", async (t) => {
   const context = await fixture(t, { toolMode: "codex", uiEnabled: false });
   const workspaceId = structuredContent(
     await callOpen(context.client, context.project, "short-codex-continuation"),
@@ -562,26 +595,40 @@ test("Codex write_stdin does not hold the host for a long-running command", asyn
     name: "exec_command",
     arguments: {
       workspace_id: workspaceId,
-      cmd: "node -e \"setTimeout(()=>console.log('slow-done'),4500)\"",
+      cmd: "node -e \"setTimeout(()=>console.log('slow-done'),2500)\"",
     },
   }));
   assert.equal(started.running, true);
 
-  const observedAt = performance.now();
-  const observed = structuredContent(await context.client.callTool({
+  const statusAt = performance.now();
+  const status = structuredContent(await context.client.callTool({
+    name: "process_status",
+    arguments: {
+      workspace_id: workspaceId,
+      session_id: started.session_id,
+    },
+  }));
+  assert.equal(status.running, true);
+  assert.ok(performance.now() - statusAt < 1_000, "process_status must not wait");
+
+  const compatibilityAt = performance.now();
+  const compatibility = structuredContent(await context.client.callTool({
     name: "write_stdin",
     arguments: {
       workspace_id: workspaceId,
       session_id: started.session_id,
     },
   }));
-  const observedMs = performance.now() - observedAt;
-  assert.equal(observed.running, true);
-  assert.equal(observed.next_action, "continue");
-  assert.ok(observedMs < 3_500, `write_stdin held the host for ${Math.round(observedMs)}ms`);
+  assert.equal(compatibility.running, true);
+  assert.equal(compatibility.next_action, "continue");
+  assert.ok(
+    performance.now() - compatibilityAt < 1_000,
+    "catalog v2 write_stdin compatibility must not wait",
+  );
 
+  await new Promise((resolve) => setTimeout(resolve, 2_000));
   const finished = structuredContent(await context.client.callTool({
-    name: "write_stdin",
+    name: "process_status",
     arguments: {
       workspace_id: workspaceId,
       session_id: started.session_id,
@@ -621,8 +668,9 @@ test("Codex exec_command replays a lost response without repeating the process s
     "once",
   );
 
+  await new Promise((resolve) => setTimeout(resolve, 600));
   const finished = structuredContent(await context.client.callTool({
-    name: "write_stdin",
+    name: "process_status",
     arguments: {
       workspace_id: workspaceId,
       session_id: first.session_id,
@@ -2181,14 +2229,21 @@ test("a cached ChatGPT bash call yields quickly and polls via @flyto2/job", asyn
   const legacySessionId = /proc_[a-f0-9]{32}/.exec(waitedText)?.[0];
   assert.ok(legacySessionId);
 
-  let resumedText = "";
-  for (let attempt = 0; attempt < 3 && !/legacy-waited/.test(resumedText); attempt += 1) {
-    const resumed = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
-      name: "bash", arguments: { workspaceId, command: `@flyto2/job ${legacySessionId}` },
-    });
-    assert.equal(resumed.status, 200, await resumed.clone().text());
-    resumedText = await resumed.text();
-  }
+  const snapshotAt = performance.now();
+  const snapshot = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
+    name: "bash", arguments: { workspaceId, command: `@flyto2/job ${legacySessionId}` },
+  });
+  assert.equal(snapshot.status, 200, await snapshot.clone().text());
+  const snapshotText = await snapshot.text();
+  assert.match(snapshotText, /Still running/);
+  assert.ok(performance.now() - snapshotAt < 1_000, "legacy process snapshot must not wait");
+
+  await new Promise((resolve) => setTimeout(resolve, 1_700));
+  const resumed = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
+    name: "bash", arguments: { workspaceId, command: `@flyto2/job ${legacySessionId}` },
+  });
+  assert.equal(resumed.status, 200, await resumed.clone().text());
+  const resumedText = await resumed.text();
   assert.match(resumedText, /legacy-waited/);
 
   const started = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
@@ -2196,14 +2251,18 @@ test("a cached ChatGPT bash call yields quickly and polls via @flyto2/job", asyn
   });
   const startedBody = await started.json() as { result: { structuredContent: { session_id: string; running: boolean } } };
   assert.equal(startedBody.result.structuredContent.running, true);
-  let polledText = "";
-  for (let attempt = 0; attempt < 5 && !/polled-later/.test(polledText); attempt += 1) {
-    const polled = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
-      name: "bash", arguments: { workspaceId, command: `@flyto2/job ${startedBody.result.structuredContent.session_id}` },
-    });
-    assert.equal(polled.status, 200, await polled.clone().text());
-    polledText = await polled.text();
-  }
+  const early = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
+    name: "bash", arguments: { workspaceId, command: `@flyto2/job ${startedBody.result.structuredContent.session_id}` },
+  });
+  assert.equal(early.status, 200, await early.clone().text());
+  assert.match(await early.text(), /Still running/);
+
+  await new Promise((resolve) => setTimeout(resolve, 3_400));
+  const polled = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
+    name: "bash", arguments: { workspaceId, command: `@flyto2/job ${startedBody.result.structuredContent.session_id}` },
+  });
+  assert.equal(polled.status, 200, await polled.clone().text());
+  const polledText = await polled.text();
   assert.match(polledText, /polled-later/);
 });
 
@@ -2218,7 +2277,7 @@ test("a client cannot opt a modern exec_command into legacy wording by sending t
   }, { "x-flyto2-legacy-shell": "1" });
   const responseText = await response.text();
   assert.match(responseText, /does not end the assistant turn/);
-  assert.match(responseText, /Continue any independent work normally/);
+  assert.match(responseText, /Continue independent work normally/);
   assert.doesNotMatch(responseText, /end_turn|later user turn/i);
 });
 

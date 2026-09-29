@@ -55,6 +55,7 @@ Normal Codex mode should center on:
 - `read`
 - `apply_patch`
 - `exec_command`
+- `process_status`
 - `write_stdin`
 - `show_changes`
 

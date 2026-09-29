@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Split durable non-interactive process observation from TTY input: Codex mode now exposes read-only `process_status` snapshots that never wait, while `write_stdin` remains the interactive input surface with a non-blocking compatibility path for cached v2 catalogs.
+- Bump generated ChatGPT Plugin catalog identity to `codex-v3` so hosts rescan the new process surface instead of reusing a cached v2 schema.
+
 ## 1.1.2 - 2026-09-29
 
 - Add a self-contained Windows x64 Runtime ZIP with bundled Node.js, production

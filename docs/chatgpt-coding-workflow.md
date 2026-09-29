@@ -180,23 +180,25 @@ DevSpace uses the Codex-style surface by default. It exposes:
 - `background_task` (durable ChatGPT-owned task state)
 - `apply_patch`
 - `exec_command`
+- `process_status`
 - `write_stdin`
 - `show_changes`
 
 In this mode, `write`, `edit`, and `bash` are not registered. `exec_command`
 returns a process session ID when a command is still running after its bounded
-yield window. ChatGPT/Codex calls yield in under a second initially, and a
-continuation waits for at most about two seconds before returning control to the host. While a
+yield window. ChatGPT/Codex calls yield in under a second initially. While a
 command is still running, Runtime returns a small tail preview of available
 process evidence instead of an empty response, so the host can show progress
 without copying the full log into conversation state. A running durable process
 does not end or suspend the ChatGPT task. Runtime returns
 `next_action=continue`; ChatGPT should continue independent reasoning or edits,
-and call `write_stdin` with the same session ID only when the next reasoning
-step actually depends on that process result. Do not rerun the original command,
-busy-poll, or wrap status checks in shell sleep loops. Cached legacy ChatGPT
-`bash` calls keep their compatibility polling behavior so an older host catalog
-cannot hold a request open for multi-second validation work.
+and call `process_status` with the same session ID only when the next reasoning
+step actually depends on that process result. `process_status` is a read-only
+snapshot and never waits. `write_stdin` is for interactive TTY input; catalog
+v2 clients may still use it without `chars` as an immediate compatibility
+snapshot. Do not rerun the original command, busy-poll, or wrap status checks in
+shell sleep loops. Cached legacy ChatGPT `bash` calls translate
+`@flyto2/job <session>` to the same immediate snapshot.
 If that cached five-tool catalog does not expose `background_task`, Runtime also
 accepts `@flyto2/task start <complete task>` through the cached `bash` tool and
 translates it to the same durable host-task state. ChatGPT must continue the work
