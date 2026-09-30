@@ -2284,12 +2284,17 @@ test("a cached ChatGPT bash call yields quickly and polls via @flyto2/job", asyn
   assert.equal(early.status, 200, await early.clone().text());
   assert.match(await early.text(), /Still running/);
 
-  await new Promise((resolve) => setTimeout(resolve, 3_400));
-  const polled = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
-    name: "bash", arguments: { workspaceId, command: `@flyto2/job ${startedBody.result.structuredContent.session_id}` },
-  });
-  assert.equal(polled.status, 200, await polled.clone().text());
-  const polledText = await polled.text();
+  const deadline = Date.now() + 8_000;
+  let polledText = "";
+  do {
+    const polled = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
+      name: "bash", arguments: { workspaceId, command: `@flyto2/job ${startedBody.result.structuredContent.session_id}` },
+    });
+    assert.equal(polled.status, 200, await polled.clone().text());
+    polledText = await polled.text();
+    if (/polled-later/.test(polledText)) break;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  } while (Date.now() < deadline);
   assert.match(polledText, /polled-later/);
 });
 
