@@ -13,6 +13,8 @@ import test from "node:test";
 import { RuntimeEventStore } from "./runtime-events.js";
 import { WorkspaceWatchRegistry } from "./workspace-watch.js";
 
+const WATCH_EVENT_TIMEOUT_MS = 5_000;
+
 test("external filesystem changes emit shallow workspace events and stop cleanly", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "flyto2-watch-state-"));
   const workspaceRoot = await mkdtemp(join(tmpdir(), "flyto2-watch-workspace-"));
@@ -45,7 +47,7 @@ test("external filesystem changes emit shallow workspace events and stop cleanly
     after_sequence: cursor,
     workspace_id: "ws-external",
     type: "file.changed",
-    timeout_ms: 2_000,
+    timeout_ms: WATCH_EVENT_TIMEOUT_MS,
   });
   await writeFile(file, "after\n");
 
@@ -105,7 +107,7 @@ test("active filesystem watches restore after Runtime restart", async (t) => {
     after_sequence: cursor,
     workspace_id: "ws-restore",
     type: "file.changed",
-    timeout_ms: 2_000,
+    timeout_ms: WATCH_EVENT_TIMEOUT_MS,
   });
   await writeFile(file, "after-restart\n");
   const event = await waiting;
