@@ -156,6 +156,29 @@ Host header, preventing the public MCP/tunnel URL from becoming a direct machine
 execution endpoint. Core therefore communicates over the wire contract rather
 than importing Runtime providers, state stores, or TypeScript types.
 
+### Runtime operational model
+
+`src/flyto2/operational-model.ts` is the canonical vocabulary for Runtime
+operational state. It defines task execution projection, process/operation/
+callback state families, allowed Host Task terminal transitions, stable reason
+codes, coarse diagnostic phases, suggested actions, confidence values, and the
+cross-subsystem correlation envelope. Storage implementations still own their
+durable records; this model does not create another state store or workflow
+engine.
+
+Task, process, durable operation, and callback delivery deliberately remain
+different state machines. They are correlated rather than collapsed into one
+ambiguous `running` flag. New Runtime events carry a canonical correlation
+envelope (`task_id`, `workspace_id`, `process_session_id`, `operation_id`,
+`invocation_id`, `event_id`). Older persisted events are projected into the same
+envelope from their established top-level/payload identifiers, so upgrades do
+not invalidate recovery history.
+
+`task-diagnostics.ts` is the canonical read projection over those durable
+states and events. It consumes the operational model instead of redefining
+state/reason/phase rules and returns the bounded diagnosis used by
+`background_task status` and `open_workspace` recovery.
+
 ### Event-driven long-task continuation
 
 Long-running processes are not kept alive by a ChatGPT response stream. Runtime

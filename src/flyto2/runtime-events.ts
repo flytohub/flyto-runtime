@@ -5,6 +5,11 @@ import {
   flyto2EvidenceRefSchema,
   type Flyto2EvidenceRef,
 } from "./protocol.js";
+import {
+  mergeCorrelationsIntoPayload,
+  operationalCorrelationFromEvent,
+  type OperationalCorrelation,
+} from "./operational-model.js";
 
 const DEFAULT_EVENT_HISTORY = 2_000;
 const MAX_EVENT_PAYLOAD_BYTES = 64 * 1024;
@@ -18,6 +23,7 @@ export interface RuntimeEvent {
   source: string;
   workspace_id?: string;
   correlation_id?: string;
+  correlations?: OperationalCorrelation;
   summary: string;
   payload: Record<string, unknown>;
   evidence: Flyto2EvidenceRef[];
@@ -30,6 +36,7 @@ export interface AppendRuntimeEventInput {
   source: string;
   workspace_id?: string;
   correlation_id?: string;
+  correlations?: OperationalCorrelation;
   summary?: string;
   payload?: Record<string, unknown>;
   evidence?: Flyto2EvidenceRef[];
@@ -274,7 +281,7 @@ function normalizeEventInput(input: AppendRuntimeEventInput): Required<
     throw new Error(`Runtime event summary exceeds ${MAX_EVENT_SUMMARY_LENGTH} characters.`);
   }
 
-  const payload = input.payload ?? {};
+  const payload = mergeCorrelationsIntoPayload(input.payload ?? {}, input.correlations);
   const payloadJson = JSON.stringify(payload);
   if (Buffer.byteLength(payloadJson, "utf8") > MAX_EVENT_PAYLOAD_BYTES) {
     throw new Error(`Runtime event payload exceeds ${MAX_EVENT_PAYLOAD_BYTES} bytes.`);
@@ -312,6 +319,14 @@ function matchesNormalizedEvent(
 }
 
 function runtimeEventFromRow(row: RuntimeEventRow): RuntimeEvent {
+  const payload = JSON.parse(row.payload_json) as Record<string, unknown>;
+  const eventBase = {
+    event_id: row.event_id,
+    type: row.type,
+    workspace_id: row.workspace_id ?? undefined,
+    correlation_id: row.correlation_id ?? undefined,
+    payload,
+  };
   return {
     sequence: Number(row.sequence),
     event_id: row.event_id,
@@ -319,8 +334,9 @@ function runtimeEventFromRow(row: RuntimeEventRow): RuntimeEvent {
     source: row.source,
     workspace_id: row.workspace_id ?? undefined,
     correlation_id: row.correlation_id ?? undefined,
+    correlations: operationalCorrelationFromEvent(eventBase),
     summary: row.summary,
-    payload: JSON.parse(row.payload_json) as Record<string, unknown>,
+    payload,
     evidence: JSON.parse(row.evidence_json) as Flyto2EvidenceRef[],
     occurred_at: row.occurred_at,
   };

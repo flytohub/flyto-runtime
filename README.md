@@ -220,6 +220,13 @@ and a recent task timeline. The projection is derived from durable Runtime
 state and shallow events; raw source text and full command output remain in
 local evidence instead of being copied into the timeline.
 
+Those states are interpreted by one Runtime operational model rather than
+tool-specific state rules. Host Tasks, processes, durable operations, and MCP
+callback deliveries retain separate state families, while shallow events share
+one correlation envelope across task/workspace/process/operation/invocation/
+event IDs. Existing event history is reconstructed into the same envelope so
+upgrades keep old recovery evidence useful.
+
 Reason codes distinguish an actually running process, suspected stall,
 non-zero exit, signal/orphan recovery, host continuation, and MCP event callback
 delivery problems. This makes it possible to tell whether time was spent in a

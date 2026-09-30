@@ -1,8 +1,13 @@
 import type { HostTaskRecord, HostTaskStore } from "./host-tasks.js";
-import type { ReactiveCommandRunner, ReactiveJobRecord } from "./reactive-command.js";
+import {
+  reactiveJobSessionId,
+  type ReactiveCommandRunner,
+  type ReactiveJobRecord,
+} from "./reactive-command.js";
 import type { RuntimeEventStore } from "./runtime-events.js";
 import type { RuntimeEvent } from "./runtime-events.js";
 import type { WorkspaceRegistry } from "../workspaces.js";
+import { reasonCodeForProcess } from "./operational-model.js";
 
 /**
  * Keeps ChatGPT-owned durable task state aligned with terminal Runtime processes.
@@ -106,6 +111,11 @@ function markTaskAttention(
     source: "task-process-closure",
     workspace_id: job.workspace_id,
     correlation_id: task.id,
+    correlations: {
+      task_id: task.id,
+      workspace_id: job.workspace_id,
+      process_session_id: reactiveJobSessionId(job.job_id),
+    },
     summary: "Durable task needs host attention after a process failure.",
     payload: {
       task_id: task.id,
@@ -114,7 +124,7 @@ function markTaskAttention(
       event_type: job.event_type,
       exit_code: job.exit_code,
       signal: job.signal,
-      reason_code: diagnosticReasonCode(job),
+      reason_code: reasonCodeForProcess(job),
       reason,
     },
     evidence: [{ kind: "process.log", ref: job.evidence_ref }],
@@ -133,6 +143,11 @@ function appendTaskProcessEvent(
     source: "task-process-closure",
     workspace_id: job.workspace_id,
     correlation_id: task.id,
+    correlations: {
+      task_id: task.id,
+      workspace_id: job.workspace_id,
+      process_session_id: reactiveJobSessionId(job.job_id),
+    },
     summary: `Task process ${suffix}.`,
     payload: {
       task_id: task.id,
@@ -148,22 +163,11 @@ function appendTaskProcessEvent(
       signal: job.signal,
       reason_code: event.type === "process.stalled"
         ? "PROCESS_STALLED"
-        : diagnosticReasonCode(job),
+        : reasonCodeForProcess(job),
     },
     evidence: event.evidence,
     occurred_at: event.occurred_at,
   });
-}
-
-function diagnosticReasonCode(job: ReactiveJobRecord): string {
-  if (job.status === "orphaned") return "PROCESS_ORPHANED";
-  if (job.signal) return "PROCESS_SIGNALLED";
-  if (job.status === "failed" && job.exit_code !== undefined && job.exit_code !== 0) {
-    return "PROCESS_EXIT_NONZERO";
-  }
-  if (job.suspected_stall) return "PROCESS_STALLED";
-  if (job.status === "completed") return "PROCESS_COMPLETED";
-  return "PROCESS_RUNNING";
 }
 
 function isProcessLifecycleEvent(type: string): boolean {

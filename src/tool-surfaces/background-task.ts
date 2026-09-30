@@ -372,6 +372,10 @@ function appendTaskLifecycleEvent(
       source: "background-task",
       workspace_id: record.workspaceId,
       correlation_id: record.id,
+      correlations: {
+        task_id: record.id,
+        workspace_id: record.workspaceId,
+      },
       summary,
       payload: {
         task_id: record.id,

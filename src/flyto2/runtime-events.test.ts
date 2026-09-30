@@ -144,3 +144,43 @@ test("runtime event payloads are bounded", async (t) => {
     /payload exceeds/i,
   );
 });
+
+test("runtime events expose one canonical correlation envelope without a schema migration", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "flyto2-events-correlation-"));
+  const store = new RuntimeEventStore(stateDir);
+  t.after(async () => {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  });
+
+  const event = store.append({
+    event_id: "evt-correlation",
+    type: "task.process.completed",
+    source: "test",
+    workspace_id: "ws_correlation",
+    correlation_id: "task_correlation",
+    correlations: {
+      task_id: "task_correlation",
+      workspace_id: "ws_correlation",
+      process_session_id: "proc_correlation",
+      operation_id: "operation_correlation",
+      invocation_id: "invocation_correlation",
+    },
+    payload: { job_id: "job_correlation" },
+  });
+
+  assert.deepEqual(event.correlations, {
+    task_id: "task_correlation",
+    workspace_id: "ws_correlation",
+    process_session_id: "proc_correlation",
+    operation_id: "operation_correlation",
+    invocation_id: "invocation_correlation",
+    event_id: "evt-correlation",
+  });
+  assert.equal(event.payload.task_id, "task_correlation");
+  assert.equal(event.payload.process_session_id, "proc_correlation");
+
+  const reopened = new RuntimeEventStore(stateDir);
+  t.after(() => reopened.close());
+  assert.deepEqual(reopened.list({ correlation_id: "task_correlation" })[0]?.correlations, event.correlations);
+});

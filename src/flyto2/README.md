@@ -11,6 +11,7 @@ This directory contains the Flyto2-specific TypeScript surface layered onto the 
 - `agent-capabilities.ts`: optional delegated-agent adapter over the existing local-agent daemon/session lifecycle.
 - `local-capability-bridge.ts`: localhost-only same-user cross-process transport for Core or other non-TypeScript consumers.
 - `mcp-events.ts`: persistent ChatGPT MCP Events subscriptions and signed webhook delivery for meaningful durable process/task state changes.
+- `operational-model.ts`: canonical Runtime state/reason/phase/transition/correlation vocabulary shared by task, process, operation, callback, event, and diagnosis surfaces.
 - `task-process-closure.ts`: aligns failed/orphaned process terminals with ChatGPT-owned Host Task `needs_attention` state.
 - `task-diagnostics.ts`: bounded task timeline/reason/correlation projection derived from durable task, process, and event state.
 - `read-only-capabilities.ts`: first provider adapters for checkout workspace open, source read, Git inspect, and non-advancing review diff.
@@ -62,12 +63,17 @@ authoritative when delivery is unavailable: process snapshots include elapsed
 time, evidence bytes, last activity, idle duration, and a stall heuristic;
 `open_workspace` recovers Host Tasks and identifies `needs_attention` explicitly.
 
-`task-diagnostics.ts` turns that durable state into a debugging projection used
-by task status/recovery surfaces. It reports a stable reason code, coarse phase,
-current process health, correlation chain, and bounded timeline while leaving
-full logs in evidence storage. MCP callback delivery outcomes are also recorded
-as shallow diagnostics so a completed process can be distinguished from a
-failed ChatGPT continuation callback.
+`operational-model.ts` is the single interpretation layer for task execution
+state, process/operation/callback state vocabularies, reason codes, phases,
+allowed Host Task terminal transitions, and correlation IDs. `runtime-events`
+persists correlations inside the existing bounded payload so no new state store
+or migration is required; old events are reconstructed from their established
+identifiers. `task-diagnostics.ts` consumes that model to produce the debugging
+projection used by task status/recovery surfaces. It reports current process
+health and a bounded timeline while leaving full logs in evidence storage. MCP
+callback delivery outcomes are also recorded as shallow diagnostics so a
+completed process can be distinguished from a failed ChatGPT continuation
+callback.
 
 Capability registration is grouped into explicit bundles: `read`, `execution`, `mutation`, `observability`, and optional `agent`. The standalone server uses the core standalone profile and adds the agent bundle only when subagents are enabled. Embedded/composed callers may select a smaller profile without importing or initializing unrelated execution/mutation/agent state. The live manifest still advertises capabilities, not bundle implementation details.
 

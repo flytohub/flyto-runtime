@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { openDatabase, type DatabaseHandle } from "../db/client.js";
+import type { DurableOperationOperationalState } from "./operational-model.js";
 
-export type DurableOperationStatus = "running" | "completed" | "failed";
+export type DurableOperationStatus = DurableOperationOperationalState;
 
 export interface DurableOperationRecord {
   operationId: string;

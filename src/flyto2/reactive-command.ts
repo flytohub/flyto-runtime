@@ -15,6 +15,7 @@ import { openDatabase, type DatabaseHandle } from "../db/client.js";
 import { resolveShellCommand, terminateProcessTree } from "../process-platform.js";
 import type { Flyto2EvidenceRef } from "./protocol.js";
 import { RuntimeEventStore } from "./runtime-events.js";
+import type { ProcessOperationalState } from "./operational-model.js";
 
 const MAX_EVIDENCE_BYTES = 10 * 1024 * 1024;
 const MAX_EVIDENCE_READ_CHARACTERS = 64 * 1024;
@@ -45,7 +46,7 @@ export interface ReactiveJobRecord {
   workspace_id: string;
   command_digest: string;
   event_type: string;
-  status: "running" | "completed" | "failed" | "orphaned";
+  status: ProcessOperationalState;
   evidence_ref: string;
   started_at: string;
   completed_at?: string;
@@ -223,6 +224,10 @@ export class ReactiveCommandRunner {
       source: "reactive-runner",
       workspace_id: input.workspace_id,
       correlation_id: jobId,
+      correlations: {
+        workspace_id: input.workspace_id,
+        process_session_id: reactiveJobSessionId(jobId),
+      },
       summary: "Reactive command started.",
       payload: {
         job_id: jobId,
@@ -473,6 +478,10 @@ export class ReactiveCommandRunner {
       source: "reactive-runner",
       workspace_id: workspaceId,
       correlation_id: jobId,
+      correlations: {
+        workspace_id: workspaceId,
+        process_session_id: reactiveJobSessionId(jobId),
+      },
       summary: success
         ? "Reactive command completed successfully."
         : "Reactive command exited unsuccessfully.",
@@ -495,6 +504,10 @@ export class ReactiveCommandRunner {
         source: "reactive-runner",
         workspace_id: workspaceId,
         correlation_id: jobId,
+        correlations: {
+          workspace_id: workspaceId,
+          process_session_id: reactiveJobSessionId(jobId),
+        },
         summary: success
           ? "Reactive command completed successfully."
           : "Reactive command exited unsuccessfully.",
@@ -636,6 +649,10 @@ export class ReactiveCommandRunner {
       source: "reactive-runner",
       workspace_id: workspaceId,
       correlation_id: jobId,
+      correlations: {
+        workspace_id: workspaceId,
+        process_session_id: reactiveJobSessionId(jobId),
+      },
       summary: "Reactive command failed to start.",
       payload: {
         job_id: jobId,
@@ -676,6 +693,10 @@ export class ReactiveCommandRunner {
         source: "reactive-runner",
         workspace_id: row.workspace_id,
         correlation_id: row.id,
+        correlations: {
+          workspace_id: row.workspace_id,
+          process_session_id: reactiveJobSessionId(row.id),
+        },
         summary: "Reactive command was running when the Runtime restarted; outcome is uncertain.",
         payload: {
           job_id: row.id,

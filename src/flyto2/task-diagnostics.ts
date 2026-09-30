@@ -1,45 +1,27 @@
 import * as z from "zod/v4";
 import type { HostTaskRecord } from "./host-tasks.js";
-import { hostTaskExecutionState } from "./host-tasks.js";
 import {
   reactiveJobSessionId,
   type ReactiveCommandRunner,
   type ReactiveJobRecord,
 } from "./reactive-command.js";
 import type { RuntimeEvent, RuntimeEventStore } from "./runtime-events.js";
+import {
+  operationalConfidenceSchema,
+  operationalPhaseSchema,
+  operationalReasonCodeSchema,
+  operationalSuggestedActionSchema,
+  phaseForEventType,
+  reasonCodeForEvent,
+  reasonCodeForProcess,
+  taskDiagnosisState,
+} from "./operational-model.js";
 
 const MAX_TIMELINE_EVENTS = 24;
 const MAX_WORKSPACE_EVENTS = 120;
 
-export const taskDiagnosticReasonCodeSchema = z.enum([
-  "TASK_COMPLETED",
-  "TASK_STOPPED",
-  "HOST_RESUME_REQUIRED",
-  "PROCESS_RUNNING",
-  "PROCESS_STALLED",
-  "PROCESS_EXIT_NONZERO",
-  "PROCESS_SIGNALLED",
-  "PROCESS_ORPHANED",
-  "PROCESS_COMPLETED",
-  "EVENT_CALLBACK_FAILED",
-  "EVENT_CALLBACK_REJECTED",
-  "UNKNOWN",
-]);
-
-export const taskDiagnosticPhaseSchema = z.enum([
-  "host",
-  "edit",
-  "command",
-  "test",
-  "build",
-  "ci_wait",
-  "git",
-  "agent",
-  "callback_wait",
-  "completed",
-  "stopped",
-  "unknown",
-]);
+export const taskDiagnosticReasonCodeSchema = operationalReasonCodeSchema;
+export const taskDiagnosticPhaseSchema = operationalPhaseSchema;
 
 export const taskTimelineEntrySchema = z.object({
   sequence: z.number().int().nonnegative(),
@@ -59,15 +41,9 @@ export const taskDiagnosisSchema = z.object({
   state: z.enum(["active", "needs_attention", "completed", "stopped"]),
   phase: taskDiagnosticPhaseSchema,
   reason_code: taskDiagnosticReasonCodeSchema,
-  confidence: z.enum(["high", "medium", "low"]),
+  confidence: operationalConfidenceSchema,
   summary: z.string(),
-  suggested_action: z.enum([
-    "continue_host_work",
-    "inspect_existing_process",
-    "resume_from_checkpoint",
-    "inspect_callback_delivery",
-    "none",
-  ]),
+  suggested_action: operationalSuggestedActionSchema,
   current_process: z.object({
     session_id: z.string(),
     status: z.enum(["running", "completed", "failed", "orphaned"]),
@@ -162,9 +138,10 @@ function taskTimelineEntry(event: RuntimeEvent) {
     phase: phaseForEvent(event),
     summary: event.summary,
     reason_code: reasonForEvent(event),
-    process_session_id: jobId ? safeProcessSession(jobId) : undefined,
-    operation_id: stringPayload(event, "operation_id"),
-    invocation_id: stringPayload(event, "invocation_id")
+    process_session_id: event.correlations?.process_session_id
+      ?? (jobId ? safeProcessSession(jobId) : undefined),
+    operation_id: event.correlations?.operation_id ?? stringPayload(event, "operation_id"),
+    invocation_id: event.correlations?.invocation_id ?? stringPayload(event, "invocation_id")
       ?? (event.type.startsWith("capability.") ? event.correlation_id : undefined),
     exit_code: numberPayload(event, "exit_code"),
   };
@@ -248,9 +225,7 @@ function diagnose(
 }
 
 function diagnosticState(task: HostTaskRecord): TaskDiagnosis["state"] {
-  if (task.status === "completed") return "completed";
-  if (task.status === "stopped") return "stopped";
-  return hostTaskExecutionState(task) === "needs_attention" ? "needs_attention" : "active";
+  return taskDiagnosisState(task);
 }
 
 function processProjection(process: ReactiveJobRecord) {
@@ -273,15 +248,19 @@ function correlationProjection(task: HostTaskRecord, events: RuntimeEvent[]) {
   const operationIds = new Set<string>();
   const invocationIds = new Set<string>();
   for (const event of events) {
-    const jobId = stringPayload(event, "job_id")
-      ?? (event.type.startsWith("process.") ? event.correlation_id : undefined);
-    if (jobId) {
-      const session = safeProcessSession(jobId);
-      if (session) processSessionIds.add(session);
+    const explicitProcessSession = event.correlations?.process_session_id;
+    if (explicitProcessSession) processSessionIds.add(explicitProcessSession);
+    else {
+      const jobId = stringPayload(event, "job_id")
+        ?? (event.type.startsWith("process.") ? event.correlation_id : undefined);
+      if (jobId) {
+        const session = safeProcessSession(jobId);
+        if (session) processSessionIds.add(session);
+      }
     }
-    const operationId = stringPayload(event, "operation_id");
+    const operationId = event.correlations?.operation_id ?? stringPayload(event, "operation_id");
     if (operationId) operationIds.add(operationId);
-    const invocationId = stringPayload(event, "invocation_id")
+    const invocationId = event.correlations?.invocation_id ?? stringPayload(event, "invocation_id")
       ?? (event.type.startsWith("capability.") ? event.correlation_id : undefined);
     if (invocationId) invocationIds.add(invocationId);
   }
@@ -296,64 +275,21 @@ function correlationProjection(task: HostTaskRecord, events: RuntimeEvent[]) {
 }
 
 function phaseForProcess(process: ReactiveJobRecord): TaskDiagnosticPhase {
-  return phaseForToken(process.event_type);
+  return phaseForEventType(process.event_type);
 }
 
 function phaseForEvent(event: RuntimeEvent): TaskDiagnosticPhase {
-  if (event.type.startsWith("mcp.event.")) return "callback_wait";
-  if (event.type === "task.completed") return "completed";
-  if (event.type === "task.stopped") return "stopped";
   const capability = stringPayload(event, "capability");
   const eventType = stringPayload(event, "event_type");
-  return phaseForToken(capability ?? eventType ?? event.type);
-}
-
-function phaseForToken(token: string): TaskDiagnosticPhase {
-  const value = token.toLowerCase();
-  if (value.includes("test")) return "test";
-  if (value.includes("build")) return "build";
-  if (value.includes("workflow") || value.includes("ci") || value.includes("watch")) return "ci_wait";
-  if (value.includes("git")) return "git";
-  if (value.includes("agent")) return "agent";
-  if (value.includes("edit") || value.includes("patch") || value.includes("write")) return "edit";
-  if (value.includes("process") || value.includes("exec") || value.includes("command")) return "command";
-  return "unknown";
+  return phaseForEventType(capability ?? eventType ?? event.type);
 }
 
 function processReason(process: ReactiveJobRecord | undefined): TaskDiagnosticReasonCode {
-  if (!process) return "UNKNOWN";
-  if (process.status === "orphaned") return "PROCESS_ORPHANED";
-  if (process.signal) return "PROCESS_SIGNALLED";
-  if (process.status === "failed" && process.exit_code !== undefined && process.exit_code !== 0) {
-    return "PROCESS_EXIT_NONZERO";
-  }
-  if (process.suspected_stall) return "PROCESS_STALLED";
-  if (process.status === "completed") return "PROCESS_COMPLETED";
-  return process.status === "running" ? "PROCESS_RUNNING" : "UNKNOWN";
+  return reasonCodeForProcess(process);
 }
 
 function reasonForEvent(event: RuntimeEvent): TaskDiagnosticReasonCode | undefined {
-  const declared = stringPayload(event, "reason_code");
-  if (declared) {
-    const parsed = taskDiagnosticReasonCodeSchema.safeParse(declared);
-    if (parsed.success) return parsed.data;
-  }
-  switch (event.type) {
-    case "process.stalled": return "PROCESS_STALLED";
-    case "process.orphaned": return "PROCESS_ORPHANED";
-    case "process.completed": return "PROCESS_COMPLETED";
-    case "process.failed":
-      return stringPayload(event, "signal")
-        ? "PROCESS_SIGNALLED"
-        : numberPayload(event, "exit_code") !== undefined
-          ? "PROCESS_EXIT_NONZERO"
-          : "UNKNOWN";
-    case "mcp.event.delivery_failed": return "EVENT_CALLBACK_FAILED";
-    case "mcp.event.delivery_rejected": return "EVENT_CALLBACK_REJECTED";
-    case "task.completed": return "TASK_COMPLETED";
-    case "task.stopped": return "TASK_STOPPED";
-    default: return undefined;
-  }
+  return reasonCodeForEvent(event.type, event.payload);
 }
 
 function isDiagnosticEvent(type: string): boolean {

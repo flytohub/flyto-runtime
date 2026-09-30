@@ -1,12 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { openDatabase, type DatabaseHandle } from "../db/client.js";
+import {
+  canTransitionHostTaskStatus,
+  taskExecutionState,
+  type HostTaskStatus as OperationalHostTaskStatus,
+  type TaskExecutionState,
+} from "./operational-model.js";
 
-export type HostTaskStatus = "active" | "completed" | "stopped";
-export type HostTaskExecutionState =
-  | "waiting_for_host"
-  | "needs_attention"
-  | "completed"
-  | "stopped";
+export type HostTaskStatus = OperationalHostTaskStatus;
+export type HostTaskExecutionState = TaskExecutionState;
 export type HostTaskPlanStageStatus = "pending" | "running" | "done" | "blocked";
 
 export interface HostTaskPlanStage {
@@ -40,10 +42,7 @@ export interface HostTaskRecord {
 export function hostTaskExecutionState(
   record: HostTaskRecord,
 ): HostTaskExecutionState {
-  if (record.status === "completed") return "completed";
-  if (record.status === "stopped") return "stopped";
-  if (record.attentionReason) return "needs_attention";
-  return "waiting_for_host";
+  return taskExecutionState(record);
 }
 
 interface HostTaskRow {
@@ -285,6 +284,7 @@ export class HostTaskStore {
   complete(id: string, result?: string): HostTaskRecord | undefined {
     const now = new Date().toISOString();
     const current = this.get(id);
+    if (current && !canTransitionHostTaskStatus(current.status, "completed")) return current;
     const completedPlan = current?.plan
       ? {
           ...current.plan,
@@ -303,6 +303,8 @@ export class HostTaskStore {
 
   stop(id: string, reason?: string): HostTaskRecord | undefined {
     const now = new Date().toISOString();
+    const current = this.get(id);
+    if (current && !canTransitionHostTaskStatus(current.status, "stopped")) return current;
     this.database.sqlite.prepare(
       `update host_tasks
        set status = 'stopped', result = ?, attention_reason = null, attention_at = null,

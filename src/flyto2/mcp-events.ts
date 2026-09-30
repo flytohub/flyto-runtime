@@ -5,6 +5,7 @@ import { isIP } from "node:net";
 import type { Request } from "express";
 import { openDatabase, type DatabaseHandle } from "../db/client.js";
 import type { RuntimeEvent, RuntimeEventStore } from "./runtime-events.js";
+import type { CallbackDeliveryState } from "./operational-model.js";
 
 const MCP_EVENTS_VERSION = "2026-07-28";
 const DEFAULT_SUBSCRIPTION_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
@@ -242,7 +243,7 @@ export class McpEventService {
   private appendDeliveryDiagnostic(
     subscription: McpEventSubscription,
     event: RuntimeEvent,
-    outcome: "accepted" | "gone" | "rejected" | "failed",
+    outcome: CallbackDeliveryState,
   ): void {
     const type = outcome === "accepted"
       ? "mcp.event.delivered"
@@ -257,6 +258,13 @@ export class McpEventService {
         source: "mcp-events",
         workspace_id: event.workspace_id,
         correlation_id: event.correlation_id,
+        correlations: {
+          task_id: event.correlations?.task_id,
+          workspace_id: event.correlations?.workspace_id ?? event.workspace_id,
+          process_session_id: event.correlations?.process_session_id,
+          operation_id: event.correlations?.operation_id,
+          invocation_id: event.correlations?.invocation_id,
+        },
         summary: outcome === "accepted"
           ? "MCP event callback accepted the Runtime event."
           : `MCP event callback delivery ${outcome}.`,
@@ -306,6 +314,18 @@ function eventDefinitions() {
         source: { type: "string" },
         workspace_id: { type: "string" },
         correlation_id: { type: "string" },
+        correlations: {
+          type: "object",
+          properties: {
+            task_id: { type: "string" },
+            workspace_id: { type: "string" },
+            process_session_id: { type: "string" },
+            operation_id: { type: "string" },
+            invocation_id: { type: "string" },
+            event_id: { type: "string" },
+          },
+          additionalProperties: false,
+        },
         summary: { type: "string" },
         payload: { type: "object" },
         evidence: { type: "array", items: { type: "object" } },
@@ -456,7 +476,7 @@ async function deliverWithRetry(
   subscription: McpEventSubscription,
   event: RuntimeEvent,
   webhookPost: McpEventWebhookPost,
-): Promise<"accepted" | "gone" | "rejected" | "failed"> {
+): Promise<CallbackDeliveryState> {
   const body = JSON.stringify({
     eventId: event.event_id,
     name: subscription.name,
