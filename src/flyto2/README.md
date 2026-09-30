@@ -9,6 +9,7 @@ This directory contains the Flyto2-specific TypeScript surface layered onto the 
 - `capability-runtime.ts`: Runtime-owned registry composition root.
 - `read-only-capabilities.ts`: first provider adapters for checkout workspace open, source read, Git inspect, and non-advancing review diff.
 - `execution-capabilities.ts`: policy-gated package test/build providers plus read-only durable process status.
+- `mutation-capabilities.ts`: optional policy-gated source patching and local Git stage/commit providers. It deliberately excludes push/reset/clean/checkout.
 - `manifest.ts`: standalone Runtime identity and capability manifest.
 - `cloud-bridge.ts`: optional outbound Flyto2 Cloud pairing/job transport.
 - `connected-runtime.ts`: dependency-injected claim/lease/progress/completion loop.
@@ -27,3 +28,5 @@ Capability implementations are intentionally migrated behind `capability-provide
 The provider registry does not replace durable side-effect admission. Providers that mutate files, Git, processes, or external systems must continue to use Runtime's existing `operation_id`/`DurableOperationStore` boundary underneath the provider seam.
 
 Long-running capabilities return `status=accepted` with an opaque operation handle instead of claiming the work completed. `test.run` and `build.run` currently execute only the project's declared `test`/`build` package scripts, reuse `ReactiveCommandRunner`, and journal process admission with `DurableOperationStore`. `process.status` reads the resulting durable process without starting a second command. This keeps Core/Cloud composition asynchronous without adding a second workflow or polling engine.
+
+Capability modules are independently composable. A registry may be read-only, add durable execution, add local mutation, or include both. Mutation providers reuse Runtime's existing workspace confinement, `applyPatch`, Git helpers, review snapshots, and `DurableOperationStore`. `git.mutate` is intentionally local-only in this layer: it can stage the current workspace and commit only when every staged path is inside that workspace. Commits respect the repository's normal Git hooks/signing configuration and are bounded by a non-interactive timeout. Network publication and destructive Git operations are not part of this capability.

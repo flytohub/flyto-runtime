@@ -106,6 +106,12 @@ This makes the boundary extractable in either direction:
 - **Flyto2 Runtime** remains independently installable and keeps machine-local
   authority, credentials, process lifecycle, and filesystem admission.
 
+The Runtime composition root also keeps provider modules optional. Read-only,
+durable execution, and local mutation modules may be enabled independently.
+Core or Cloud integration never changes which lower-level Runtime modules are
+required to boot; it only consumes capabilities that the manifest/registry says
+are actually registered.
+
 ## Standalone surfaces
 
 - MCP server: `src/server.ts`
@@ -201,3 +207,5 @@ External filesystem changes use persistent native watches rather than polling. W
 12. Capability migration is incremental; the provider registry must not become a second hidden workflow engine.
 13. Side-effecting capability providers retain exactly-once `operation_id` admission/replay below the provider seam.
 14. Long-running capabilities report `accepted` separately from terminal success/failure and reuse Runtime durable process state.
+15. Mutation capability modules are optional; Runtime can boot and operate read-only without them.
+16. `git.mutate` remains local-only at this boundary and must not grow implicit push/reset/clean/checkout behavior.

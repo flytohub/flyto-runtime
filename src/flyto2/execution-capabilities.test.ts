@@ -51,8 +51,7 @@ test("test.run uses a declared package script once and exposes durable process s
     workspaces,
     reviewCheckpoints,
     runtimeEvents,
-    reactiveCommands,
-    durableOperations,
+    execution: { reactiveCommands, durableOperations },
   });
   t.after(async () => {
     reactiveCommands.shutdown();
@@ -130,8 +129,7 @@ test("test.run refuses projects without a declared test script", async (t) => {
     workspaces,
     reviewCheckpoints,
     runtimeEvents,
-    reactiveCommands,
-    durableOperations,
+    execution: { reactiveCommands, durableOperations },
   });
   t.after(async () => {
     reactiveCommands.shutdown();

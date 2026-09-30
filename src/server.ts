@@ -363,8 +363,13 @@ export function createServer(
     workspaces,
     reviewCheckpoints,
     runtimeEvents,
-    reactiveCommands,
-    durableOperations,
+    execution: {
+      reactiveCommands,
+      durableOperations,
+    },
+    mutation: {
+      durableOperations,
+    },
   });
   const processSessions = new ProcessSessionManager();
   const toolActivities = new ToolActivityTracker();
