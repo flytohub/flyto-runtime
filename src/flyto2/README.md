@@ -9,6 +9,7 @@ This directory contains the Flyto2-specific TypeScript surface layered onto the 
 - `capability-runtime.ts`: Runtime-owned registry composition root.
 - `capability-bundles.ts`: explicit standalone/read-only/custom capability profiles for selective composition.
 - `agent-capabilities.ts`: optional delegated-agent adapter over the existing local-agent daemon/session lifecycle.
+- `local-capability-bridge.ts`: localhost-only same-user cross-process transport for Core or other non-TypeScript consumers.
 - `read-only-capabilities.ts`: first provider adapters for checkout workspace open, source read, Git inspect, and non-advancing review diff.
 - `execution-capabilities.ts`: policy-gated package test/build providers plus read-only durable process status.
 - `mutation-capabilities.ts`: optional policy-gated source patching and local Git stage/commit providers. It deliberately excludes push/reset/clean/checkout.
@@ -43,6 +44,13 @@ Accepted durable operations are self-describing. A provider may return `operatio
 `capability-transport.ts` is the composition seam for other Flyto2 products. Core can consume the provider-neutral `manifest()` / `invoke()` contract without importing workspace/process/Git implementations. The optional Cloud assignment adapter consumes that same contract; when a capability returns `accepted`, it performs bounded one-shot `event.wait` follow-ups and then replays the original `operation_id`, relying on Runtime durability rather than launching the side effect twice. The Cloud adapter is not wired into standalone Runtime startup by default.
 
 The same `flyto2.execution.v1` envelopes are published as generated draft-2020-12 JSON Schemas under `schema/flyto2.execution.v1/`. This is the cross-language boundary for Python Core, TypeScript Runtime, Cloud services, or another future implementation. CI verifies the checked-in schemas against the Zod source and parses the provider-neutral fixtures so no consumer has to depend on Runtime's TypeScript classes.
+
+For same-machine composition, the running Runtime exposes a deliberately small
+localhost bridge: live manifest plus invocation. It reuses the same capability
+transport as in-process composition, accepts the same wire envelopes, and
+requires a persistent same-user bridge token. It is not an MCP surface, not a
+workflow engine, and is rejected unless both the socket peer and Host header are
+loopback.
 
 Capability registration is grouped into explicit bundles: `read`, `execution`, `mutation`, `observability`, and optional `agent`. The standalone server uses the core standalone profile and adds the agent bundle only when subagents are enabled. Embedded/composed callers may select a smaller profile without importing or initializing unrelated execution/mutation/agent state. The live manifest still advertises capabilities, not bundle implementation details.
 

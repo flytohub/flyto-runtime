@@ -59,6 +59,8 @@ import { WorkspaceWatchRegistry } from "./flyto2/workspace-watch.js";
 import { WorkspaceRegistry } from "./workspaces.js";
 import { HostTaskStore } from "./flyto2/host-tasks.js";
 import { createLocalAgentClient } from "./local-agent-client.js";
+import { registerLocalCapabilityBridge } from "./flyto2/local-capability-bridge.js";
+import { registryCapabilityTransport } from "./flyto2/capability-transport.js";
 import {
   getLocalAgentProviderAvailabilitySnapshot,
 } from "./local-agent-availability.js";
@@ -404,6 +406,12 @@ export function createServer(
   });
   const processSessions = new ProcessSessionManager();
   const toolActivities = new ToolActivityTracker();
+  registerLocalCapabilityBridge(
+    app,
+    config,
+    registryCapabilityTransport(config, capabilityRegistry),
+    toolActivities.track,
+  );
   const localAgentProviders = buildLocalAgentProviderStatuses(
     config.subagents,
     getLocalAgentProviderAvailabilitySnapshot(process.env, config.subagents),

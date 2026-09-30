@@ -183,6 +183,15 @@ consumers should use the generated JSON Schemas under
 [`schema/flyto2.execution.v1/`](schema/flyto2.execution.v1/) instead of importing
 Runtime's TypeScript implementation types.
 
+When Core or another same-machine process needs to invoke those capabilities,
+Runtime exposes a localhost-only bridge at
+`http://127.0.0.1:<runtime-port>/flyto2/capabilities/v1`. `GET /manifest` returns
+the live capability manifest and `POST /invoke` accepts one
+`flyto2.execution.v1` invocation envelope. The bridge requires the persistent
+same-user token stored at `<stateDir>/capability-bridge.token` (0600 on POSIX)
+in the `x-flyto2-capability-token` header. Both the TCP peer and Host header must
+be loopback, so the public MCP/tunnel URL cannot be used as an execution bridge.
+
 ## Desktop and background service
 
 Flyto2 Runtime is designed to stay available after setup.

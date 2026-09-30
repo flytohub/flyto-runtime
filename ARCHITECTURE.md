@@ -147,6 +147,15 @@ are explicit-approval side effects protected by `operation_id`; observation is
 workspace-scoped through `agent.inspect` / bounded `agent.wait`. The agent
 adapter does not plan multi-step work and is not a second workflow engine.
 
+Cross-process local composition uses the Runtime-owned localhost capability
+bridge. The bridge exposes only the live capability manifest and
+`flyto2.execution.v1` invocation/result envelopes and delegates directly to the
+same `Flyto2CapabilityTransport` used in-process. It is authenticated with a
+persistent same-user token and requires both a loopback socket peer and loopback
+Host header, preventing the public MCP/tunnel URL from becoming a direct machine
+execution endpoint. Core therefore communicates over the wire contract rather
+than importing Runtime providers, state stores, or TypeScript types.
+
 The Runtime composition root also keeps provider modules optional. Read-only,
 durable execution, and local mutation modules may be enabled independently.
 Core or Cloud integration never changes which lower-level Runtime modules are
@@ -264,3 +273,4 @@ External filesystem changes use persistent native watches rather than polling. W
 22. Cross-language consumers depend on generated `flyto2.execution.v1` wire schemas/fixtures, not Runtime's TypeScript implementation types.
 23. Standalone Runtime explicitly enables the full production capability profile; composed callers may select bundles without changing the wire contract.
 24. Agent delegation is an optional Runtime bundle over the existing local-agent lifecycle; provider credentials and provider sessions never become cross-product contract state.
+25. Same-machine Core/Runtime composition crosses an authenticated localhost wire bridge; it never imports Runtime implementation or exposes the bridge through the public tunnel host.

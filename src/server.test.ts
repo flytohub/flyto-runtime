@@ -19,6 +19,11 @@ import { RuntimeEventStore } from "./flyto2/runtime-events.js";
 import { ReactiveCommandRunner } from "./flyto2/reactive-command.js";
 import { WorkspaceWatchRegistry } from "./flyto2/workspace-watch.js";
 import { HostTaskStore } from "./flyto2/host-tasks.js";
+import {
+  LOCAL_CAPABILITY_BRIDGE_BASE_PATH,
+  LOCAL_CAPABILITY_BRIDGE_TOKEN_HEADER,
+  localCapabilityBridgeTokenPath,
+} from "./flyto2/local-capability-bridge.js";
 import { createMcpServer, createServer } from "./server.js";
 import { SqliteWorkspaceStore } from "./workspace-store.js";
 import { WorkspaceRegistry } from "./workspaces.js";
@@ -371,6 +376,48 @@ test("healthz exposes only minimal public liveness", async (t) => {
   ]) {
     assert.equal(sensitiveField in health, false, sensitiveField);
   }
+});
+
+test("HTTP server exposes the localhost capability bridge over the execution contract", async (t) => {
+  const context = await httpServerFixture(t, "devspace-capability-bridge-server-");
+  const token = (
+    await readFile(localCapabilityBridgeTokenPath(context.running.config.stateDir), "utf8")
+  ).trim();
+  const headers = { [LOCAL_CAPABILITY_BRIDGE_TOKEN_HEADER]: token };
+
+  const manifest = await fetch(
+    `${context.localBaseUrl}${LOCAL_CAPABILITY_BRIDGE_BASE_PATH}/manifest`,
+    { headers },
+  );
+  assert.equal(manifest.status, 200, await manifest.clone().text());
+  const manifestBody = await manifest.json() as {
+    capabilities?: Array<{ id?: string }>;
+  };
+  assert.ok(manifestBody.capabilities?.some(({ id }) => id === "workspace.open"));
+
+  const invocation = await fetch(
+    `${context.localBaseUrl}${LOCAL_CAPABILITY_BRIDGE_BASE_PATH}/invoke`,
+    {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({
+        schema: "flyto2.execution.v1",
+        invocation_id: "server-bridge-open-1",
+        capability: "workspace.open",
+        revision: 1,
+        operation_id: "server-bridge-operation-1",
+        requested_at: "2026-09-30T00:00:00.000Z",
+        input: { path: context.root },
+      }),
+    },
+  );
+  assert.equal(invocation.status, 200, await invocation.clone().text());
+  const result = await invocation.json() as {
+    status?: string;
+    output?: { workspace_id?: string };
+  };
+  assert.equal(result.status, "success");
+  assert.match(result.output?.workspace_id ?? "", /^ws_/);
 });
 
 test("MCP accepts bounded tool payloads above Express' 100 KB default", async (t) => {
