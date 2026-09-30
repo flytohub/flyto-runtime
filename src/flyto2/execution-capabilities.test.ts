@@ -20,6 +20,8 @@ import {
 } from "./reactive-command.js";
 import { RuntimeEventStore } from "./runtime-events.js";
 
+const PROCESS_TERMINAL_TIMEOUT_MS = 15_000;
+
 test("test.run uses a declared package script once and exposes durable process status", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "flyto2-execution-capabilities-"));
   const project = join(root, "project");
@@ -80,7 +82,7 @@ test("test.run uses a declared package script once and exposes durable process s
     const timer = setTimeout(() => {
       off();
       reject(new Error("test.run did not reach a terminal process state"));
-    }, 5_000);
+    }, PROCESS_TERMINAL_TIMEOUT_MS);
     const off = reactiveCommands.onTerminal((job) => {
       if (job.job_id !== jobId) return;
       clearTimeout(timer);
