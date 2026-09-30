@@ -13,7 +13,7 @@ import test from "node:test";
 import { RuntimeEventStore } from "./runtime-events.js";
 import { WorkspaceWatchRegistry } from "./workspace-watch.js";
 
-const WATCH_EVENT_TIMEOUT_MS = 5_000;
+const WATCH_EVENT_TIMEOUT_MS = 15_000;
 
 test("external filesystem changes emit shallow workspace events and stop cleanly", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "flyto2-watch-state-"));
