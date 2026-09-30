@@ -102,20 +102,23 @@ export class Flyto2CapabilityAssignmentExecutor implements Flyto2AssignmentExecu
       );
       if (waited.status === "failed") return completionFromResult(waited);
       if (waited.status === "accepted") {
-        return failureCompletion(
-          "invalid_wait_capability",
-          wait.capability,
-          "A wait follow-up must return a terminal result.",
-        );
+        // A bounded observer may itself remain accepted while the underlying
+        // operation is still running (for example agent.wait). Follow the
+        // returned operation handle instead of treating that as an error.
+        result = waited;
+        waitCycle += 1;
+        continue;
       }
-      if (waited.output.matched !== true) {
+      if (waited.output.matched === false) {
         waitCycle += 1;
         continue;
       }
 
       // Replaying the original operation_id is intentional. Side-effecting
       // providers reuse DurableOperationStore and therefore inspect the
-      // original durable operation instead of starting it again.
+      // original durable operation instead of starting it again. Wait
+      // capabilities that do not expose a `matched` flag are terminal once
+      // they return success, so the original operation can be reconciled too.
       result = await this.transport.invoke(invocation, context.signal);
       waitCycle += 1;
     }

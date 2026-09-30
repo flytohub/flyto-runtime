@@ -269,7 +269,7 @@ External filesystem changes use persistent native watches rather than polling. W
 18. Durable operation follow-ups are capability contracts, not Runtime-internal API calls or polling loops.
 19. Raw evidence reads are policy-gated and workspace-scoped; shallow events remain the default observation path.
 20. Core/Cloud adapters depend on the capability transport contract; the transport never depends on Core or Cloud implementations.
-21. Accepted Cloud capability assignments resume through contract follow-ups and original `operation_id` replay, never by rerunning the side effect blindly.
+21. Accepted Cloud capability assignments resume through contract follow-ups and original `operation_id` replay, never by rerunning the side effect blindly; wait capabilities may themselves remain `accepted` and return another bounded follow-up handle.
 22. Cross-language consumers depend on generated `flyto2.execution.v1` wire schemas/fixtures, not Runtime's TypeScript implementation types.
 23. Standalone Runtime explicitly enables the full production capability profile; composed callers may select bundles without changing the wire contract.
 24. Agent delegation is an optional Runtime bundle over the existing local-agent lifecycle; provider credentials and provider sessions never become cross-product contract state.
