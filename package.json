@@ -46,6 +46,7 @@
     "postinstall": "node scripts/fix-node-pty-permissions.mjs",
     "prepack": "pnpm build",
     "schema:config": "tsx scripts/generate-config-schema.ts",
+    "schema:flyto2": "tsx scripts/generate-flyto2-protocol-schema.ts",
     "start": "node dist/cli.js serve",
     "test": "tsx --test --test-concurrency=1 \"src/**/*.test.ts\"",
     "test:package-install": "tsx --test --test-concurrency=1 \"test/package-install-smoke.test.ts\"",

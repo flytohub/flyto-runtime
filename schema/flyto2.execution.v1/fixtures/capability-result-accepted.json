@@ -1,0 +1,37 @@
+{
+  "schema": "flyto2.execution.v1",
+  "invocation_id": "invocation-example-1",
+  "capability": "test.run",
+  "revision": 1,
+  "status": "accepted",
+  "started_at": "2026-09-30T00:00:00.000Z",
+  "output": {
+    "session_id": "proc_0123456789abcdef0123456789abcdef"
+  },
+  "evidence": [
+    {
+      "kind": "process.log",
+      "ref": "flyto2://evidence/job_0123456789abcdef0123456789abcdef"
+    }
+  ],
+  "operation": {
+    "kind": "process",
+    "ref": "proc_0123456789abcdef0123456789abcdef",
+    "state": "running",
+    "wait": {
+      "capability": "event.wait",
+      "input": {
+        "workspace_id": "ws_example",
+        "correlation_id": "job_0123456789abcdef0123456789abcdef",
+        "type": "capability.test.exited"
+      }
+    },
+    "inspect": {
+      "capability": "process.status",
+      "input": {
+        "workspace_id": "ws_example",
+        "session_id": "proc_0123456789abcdef0123456789abcdef"
+      }
+    }
+  }
+}

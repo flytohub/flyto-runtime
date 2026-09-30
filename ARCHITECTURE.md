@@ -98,6 +98,12 @@ same original `operation_id` after the terminal event. It does not start a
 second workflow engine and is not enabled merely by booting standalone Runtime.
 Core can consume the same transport contract without using the Cloud adapter.
 
+The wire contract is also published as draft-2020-12 JSON Schema under
+`schema/flyto2.execution.v1/`. Those generated artifacts, not TypeScript source
+imports, are the interoperability boundary for another language or repository.
+Checked-in fixtures are validated against the same Zod source in CI to detect
+schema drift while keeping example payloads free of local paths and secrets.
+
 The first migrated provider set is deliberately read-oriented:
 `workspace.open` (checkout only), `source.read`, `git.inspect`, and
 `review.diff`. `workspace.open` does not create an isolated worktree through
@@ -240,3 +246,4 @@ External filesystem changes use persistent native watches rather than polling. W
 19. Raw evidence reads are policy-gated and workspace-scoped; shallow events remain the default observation path.
 20. Core/Cloud adapters depend on the capability transport contract; the transport never depends on Core or Cloud implementations.
 21. Accepted Cloud capability assignments resume through contract follow-ups and original `operation_id` replay, never by rerunning the side effect blindly.
+22. Cross-language consumers depend on generated `flyto2.execution.v1` wire schemas/fixtures, not Runtime's TypeScript implementation types.

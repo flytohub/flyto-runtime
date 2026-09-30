@@ -1,0 +1,12 @@
+{
+  "schema": "flyto2.execution.v1",
+  "invocation_id": "invocation-example-1",
+  "capability": "test.run",
+  "revision": 1,
+  "operation_id": "operation-example-1",
+  "trace_id": "trace-example-1",
+  "requested_at": "2026-09-30T00:00:00.000Z",
+  "input": {
+    "workspace_id": "ws_example"
+  }
+}

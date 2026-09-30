@@ -1,0 +1,61 @@
+{
+  "$id": "https://raw.githubusercontent.com/flytohub/flyto-runtime/main/schema/flyto2.execution.v1/assignment.schema.json",
+  "title": "Flyto2 Runtime assignment",
+  "description": "Optional Flyto2 Cloud assignment envelope delivered to Runtime.",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "flyto2.execution.v1"
+    },
+    "assignment_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source": {
+      "type": "string",
+      "const": "flyto-cloud"
+    },
+    "workspace_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "trace_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "workflow",
+        "task",
+        "command",
+        "capability"
+      ]
+    },
+    "objective": {
+      "default": "",
+      "type": "string"
+    },
+    "payload": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {}
+    },
+    "received_at": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "assignment_id",
+    "source",
+    "kind",
+    "payload",
+    "received_at"
+  ],
+  "additionalProperties": false
+}

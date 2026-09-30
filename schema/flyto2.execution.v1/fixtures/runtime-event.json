@@ -1,0 +1,17 @@
+{
+  "schema": "flyto2.execution.v1",
+  "event_id": "event-example-1",
+  "runtime_id": "rt_0123456789abcdef0123456789abcdef",
+  "type": "capability.test.exited",
+  "occurred_at": "2026-09-30T00:00:05.000Z",
+  "summary": "Test process completed.",
+  "payload": {
+    "exit_code": 0
+  },
+  "evidence": [
+    {
+      "kind": "process.log",
+      "ref": "flyto2://evidence/job_0123456789abcdef0123456789abcdef"
+    }
+  ]
+}

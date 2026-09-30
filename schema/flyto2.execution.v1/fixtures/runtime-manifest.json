@@ -1,0 +1,33 @@
+{
+  "schema": "flyto2.execution.v1",
+  "product": "Flyto2",
+  "runtime": "flyto-runtime",
+  "runtime_version": "1.1.4",
+  "runtime_id": "rt_0123456789abcdef0123456789abcdef",
+  "display_name": "Example Runtime",
+  "platform": "darwin",
+  "roles": [
+    "executes_jobs"
+  ],
+  "capabilities": [
+    {
+      "id": "source.read",
+      "revision": 1,
+      "risk_level": "low",
+      "approval": "none",
+      "evidence": [
+        "file"
+      ]
+    },
+    {
+      "id": "test.run",
+      "revision": 1,
+      "risk_level": "medium",
+      "approval": "policy",
+      "evidence": [
+        "test",
+        "log"
+      ]
+    }
+  ]
+}

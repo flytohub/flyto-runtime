@@ -1,0 +1,114 @@
+{
+  "$id": "https://raw.githubusercontent.com/flytohub/flyto-runtime/main/schema/flyto2.execution.v1/runtime-manifest.schema.json",
+  "title": "Flyto2 Runtime manifest",
+  "description": "The live capabilities actually exposed by one Flyto2 Runtime instance.",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "flyto2.execution.v1"
+    },
+    "product": {
+      "type": "string",
+      "const": "Flyto2"
+    },
+    "runtime": {
+      "type": "string",
+      "const": "flyto-runtime"
+    },
+    "runtime_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "runtime_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "display_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "platform": {
+      "type": "string",
+      "minLength": 1
+    },
+    "roles": {
+      "default": [
+        "executes_jobs"
+      ],
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "revision": {
+            "default": 1,
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "risk_level": {
+            "default": "medium",
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "dangerous"
+            ]
+          },
+          "approval": {
+            "default": "policy",
+            "type": "string",
+            "enum": [
+              "none",
+              "policy",
+              "explicit"
+            ]
+          },
+          "evidence": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "risk_level",
+          "approval",
+          "evidence"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "product",
+    "runtime",
+    "runtime_version",
+    "runtime_id",
+    "display_name",
+    "platform",
+    "roles",
+    "capabilities"
+  ],
+  "additionalProperties": false
+}

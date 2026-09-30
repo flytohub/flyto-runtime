@@ -1,0 +1,89 @@
+{
+  "$id": "https://raw.githubusercontent.com/flytohub/flyto-runtime/main/schema/flyto2.execution.v1/runtime-event.schema.json",
+  "title": "Flyto2 Runtime event",
+  "description": "Shallow provider-neutral Runtime event with optional evidence references.",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "flyto2.execution.v1"
+    },
+    "event_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "runtime_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "assignment_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "type": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "occurred_at": {
+      "type": "string"
+    },
+    "summary": {
+      "default": "",
+      "type": "string",
+      "maxLength": 1200
+    },
+    "payload": {
+      "default": {},
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {}
+    },
+    "evidence": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "ref": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "kind",
+          "ref"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "event_id",
+    "runtime_id",
+    "type",
+    "occurred_at",
+    "summary",
+    "payload",
+    "evidence"
+  ],
+  "additionalProperties": false
+}
