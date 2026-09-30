@@ -48,7 +48,10 @@ import { DurableOperationStore, runDurableOperation } from "./flyto2/durable-ope
 import { withDurableToolHandlers } from "./flyto2/durable-tools.js";
 import { registerRuntimeTools } from "./flyto2/runtime-tools.js";
 import { RuntimeEventStore } from "./flyto2/runtime-events.js";
-import { createRuntimeCapabilityRegistry } from "./flyto2/capability-runtime.js";
+import {
+  createRuntimeCapabilityRegistry,
+  createStandaloneRuntimeCapabilityRegistry,
+} from "./flyto2/capability-runtime.js";
 import type { RuntimeCapabilityRegistry } from "./flyto2/capability-provider.js";
 import { ReactiveCommandRunner } from "./flyto2/reactive-command.js";
 import { emitDurableToolEvent } from "./flyto2/tool-events.js";
@@ -209,7 +212,7 @@ export function createMcpServer(
   trackToolActivity?: TrackToolActivity,
 ): McpServer {
   const toolSurface = getToolSurface(config.toolMode);
-  const capabilityRegistry = createRuntimeCapabilityRegistry({
+  const capabilityRegistry = createStandaloneRuntimeCapabilityRegistry({
     workspaces,
     reviewCheckpoints,
     runtimeEvents,
@@ -377,7 +380,7 @@ export function createServer(
   const hostTasks = new HostTaskStore(config.stateDir);
   const workspaces = new WorkspaceRegistry(config, workspaceStore);
   const reviewCheckpoints = createReviewCheckpointManager();
-  const capabilityRegistry = createRuntimeCapabilityRegistry({
+  const capabilityRegistry = createStandaloneRuntimeCapabilityRegistry({
     workspaces,
     reviewCheckpoints,
     runtimeEvents,

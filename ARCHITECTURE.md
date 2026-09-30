@@ -132,6 +132,14 @@ This makes the boundary extractable in either direction:
 - **Flyto2 Runtime** remains independently installable and keeps machine-local
   authority, credentials, process lifecycle, and filesystem admission.
 
+Runtime provider registration is grouped into explicit capability bundles:
+`read`, `execution`, `mutation`, and `observability`. The standalone server
+selects the full standalone profile explicitly and therefore fails closed if a
+required production dependency is missing. Core/Cloud composition may select a
+subset profile without initializing unrelated providers. Bundle names are a
+Runtime composition detail; the cross-product wire contract continues to expose
+only concrete capability descriptors.
+
 The Runtime composition root also keeps provider modules optional. Read-only,
 durable execution, and local mutation modules may be enabled independently.
 Core or Cloud integration never changes which lower-level Runtime modules are
@@ -247,3 +255,4 @@ External filesystem changes use persistent native watches rather than polling. W
 20. Core/Cloud adapters depend on the capability transport contract; the transport never depends on Core or Cloud implementations.
 21. Accepted Cloud capability assignments resume through contract follow-ups and original `operation_id` replay, never by rerunning the side effect blindly.
 22. Cross-language consumers depend on generated `flyto2.execution.v1` wire schemas/fixtures, not Runtime's TypeScript implementation types.
+23. Standalone Runtime explicitly enables the full production capability profile; composed callers may select bundles without changing the wire contract.

@@ -7,6 +7,7 @@ This directory contains the Flyto2-specific TypeScript surface layered onto the 
 - `capability-provider.ts`: provider-neutral capability registry/execution seam. It owns no workspace, process, Git, Cloud, or persistence implementation.
 - `capability-audit.ts`: adapter from shallow capability audit records into the existing durable Runtime event stream.
 - `capability-runtime.ts`: Runtime-owned registry composition root.
+- `capability-bundles.ts`: explicit standalone/read-only/custom capability profiles for selective composition.
 - `read-only-capabilities.ts`: first provider adapters for checkout workspace open, source read, Git inspect, and non-advancing review diff.
 - `execution-capabilities.ts`: policy-gated package test/build providers plus read-only durable process status.
 - `mutation-capabilities.ts`: optional policy-gated source patching and local Git stage/commit providers. It deliberately excludes push/reset/clean/checkout.
@@ -41,3 +42,5 @@ Accepted durable operations are self-describing. A provider may return `operatio
 `capability-transport.ts` is the composition seam for other Flyto2 products. Core can consume the provider-neutral `manifest()` / `invoke()` contract without importing workspace/process/Git implementations. The optional Cloud assignment adapter consumes that same contract; when a capability returns `accepted`, it performs bounded one-shot `event.wait` follow-ups and then replays the original `operation_id`, relying on Runtime durability rather than launching the side effect twice. The Cloud adapter is not wired into standalone Runtime startup by default.
 
 The same `flyto2.execution.v1` envelopes are published as generated draft-2020-12 JSON Schemas under `schema/flyto2.execution.v1/`. This is the cross-language boundary for Python Core, TypeScript Runtime, Cloud services, or another future implementation. CI verifies the checked-in schemas against the Zod source and parses the provider-neutral fixtures so no consumer has to depend on Runtime's TypeScript classes.
+
+Capability registration is grouped into explicit bundles: `read`, `execution`, `mutation`, and `observability`. The standalone server uses the `standalone` profile and requires every production bundle dependency to be present. Embedded/composed callers may select a smaller profile, such as read-only, without importing or initializing unrelated execution/mutation state. The live manifest still advertises capabilities, not bundle implementation details.
