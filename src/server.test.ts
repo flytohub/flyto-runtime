@@ -110,6 +110,17 @@ test("a new ChatGPT conversation recovers the latest active durable task for the
     },
   });
 
+  const runningProcess = structuredContent(await context.client.callTool({
+    name: "exec_command",
+    arguments: {
+      workspace_id: oldWorkspace,
+      cmd: "node -e \"console.log('recoverable-process'); setInterval(() => {}, 1000)\"",
+    },
+  }));
+  const runningSessionId = runningProcess.session_id;
+  assert.equal(runningProcess.running, true);
+  assert.equal(typeof runningSessionId, "string");
+
   const reopened = structuredContent(
     await callOpen(context.client, context.project, "cross-conversation-old"),
   );
@@ -131,6 +142,11 @@ test("a new ChatGPT conversation recovers the latest active durable task for the
     status?: string;
     execution_state?: string;
     checkpoint?: string;
+    active_processes?: Array<{
+      session_id?: string;
+      workspace_id?: string;
+      progress?: string;
+    }>;
   } | undefined;
   const newWorkspace = newlyOpened.workspace_id;
   assert.equal(typeof newWorkspace, "string");
@@ -139,11 +155,27 @@ test("a new ChatGPT conversation recovers the latest active durable task for the
   assert.equal(recovery?.status, "active");
   assert.equal(recovery?.execution_state, "waiting_for_host");
   assert.equal(recovery?.checkpoint, "Old-chat checkpoint is ready.");
+  const recoveredProcess = recovery?.active_processes?.find(
+    (process) => process.session_id === runningSessionId,
+  );
+  assert.equal(recoveredProcess?.workspace_id, oldWorkspace);
+  assert.match(recoveredProcess?.progress ?? "", /recoverable-process/);
   assert.match(
     String(newlyOpened.instruction),
     new RegExp(`Recovered unfinished durable task ${taskId}.*waiting_for_host`, "s"),
   );
   assert.match(String(newlyOpened.instruction), /Do not ask the user to recreate a handoff/);
+  assert.match(String(newlyOpened.instruction), /Active durable processes already exist/);
+  assert.match(String(newlyOpened.instruction), /process_status/);
+
+  const recoveredProcessStatus = structuredContent(await context.client.callTool({
+    name: "process_status",
+    arguments: {
+      workspace_id: oldWorkspace,
+      session_id: runningSessionId,
+    },
+  }));
+  assert.equal(recoveredProcessStatus.running, true);
 
   const recovered = structuredContent(await context.client.callTool({
     name: "background_task",

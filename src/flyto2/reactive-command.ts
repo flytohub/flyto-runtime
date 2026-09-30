@@ -60,6 +60,22 @@ export interface ReactiveRunnerHealth {
   orphaned: number;
 }
 
+export function reactiveJobSessionId(jobId: string): string {
+  const match = /^job_([a-f0-9]{32})$/.exec(jobId);
+  if (!match) throw new Error("Runtime returned an invalid process session identifier.");
+  return `proc_${match[1]}`;
+}
+
+export function reactiveJobIdFromSessionId(sessionId: string): string {
+  const opaque = /^proc_([a-f0-9]{32})$/.exec(sessionId);
+  if (opaque) return `job_${opaque[1]}`;
+
+  // Accept sessions issued by older Codex-mode Runtime builds across an upgrade,
+  // but never emit the internal job identifier on the model-facing surface.
+  if (/^job_[a-f0-9]{32}$/.test(sessionId)) return sessionId;
+  throw new Error("Unknown process session identifier.");
+}
+
 export type ReactiveJobTerminalListener = (job: ReactiveJobRecord) => void;
 
 interface ReactiveJobRow {
@@ -221,6 +237,25 @@ export class ReactiveCommandRunner {
       )
       .get(jobId) as ReactiveJobRow | undefined;
     return row ? reactiveJobFromRow(row) : undefined;
+  }
+
+  listRunningForRepository(repoRoot: string, limit = 8): ReactiveJobRecord[] {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 32) {
+      throw new Error("Reactive job recovery limit must be an integer between 1 and 32.");
+    }
+    const rows = this.database.sqlite
+      .prepare(
+        `select jobs.id, jobs.workspace_id, jobs.command_digest, jobs.event_type, jobs.status,
+                jobs.evidence_path, jobs.started_at, jobs.completed_at, jobs.exit_code, jobs.signal
+         from flyto2_reactive_jobs as jobs
+         join workspace_sessions as workspaces on workspaces.id = jobs.workspace_id
+         where jobs.status = 'running'
+           and coalesce(nullif(workspaces.source_root, ''), workspaces.root) = ?
+         order by jobs.started_at desc, jobs.rowid desc
+         limit ?`,
+      )
+      .all(repoRoot, limit) as ReactiveJobRow[];
+    return rows.map(reactiveJobFromRow);
   }
 
   onTerminal(listener: ReactiveJobTerminalListener): () => void {

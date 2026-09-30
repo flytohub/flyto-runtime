@@ -14,6 +14,11 @@ import {
   type HostTaskStore,
 } from "./flyto2/host-tasks.js";
 import {
+  reactiveJobSessionId,
+  type ReactiveCommandRunner,
+  type ReactiveJobRecord,
+} from "./flyto2/reactive-command.js";
+import {
   buildLocalAgentCatalog,
   type LocalAgentProviderStatus,
 } from "./local-agent-catalog.js";
@@ -40,6 +45,7 @@ interface WorkspaceToolRegistrationOptions {
   workspaces: WorkspaceRegistry;
   reviewCheckpoints: ReviewCheckpointManager;
   hostTasks: HostTaskStore;
+  reactiveCommands: ReactiveCommandRunner;
   resolveLocalAgentProviders: () => LocalAgentProviderStatus[];
 }
 
@@ -95,6 +101,14 @@ const workspaceRecoveryOutputSchema = z.object({
   original_prompt: z.string(),
   checkpoint: z.string().optional(),
   response: z.string().optional(),
+  active_processes: z.array(z.object({
+    session_id: z.string(),
+    workspace_id: z.string(),
+    started_at: z.string(),
+    event_type: z.string(),
+    command_digest: z.string(),
+    progress: z.string().optional(),
+  })).optional(),
 });
 
 /** Explain the filesystem boundary to hosts that cannot inspect the user's machine directly. */
@@ -203,6 +217,7 @@ async function handleOpenWorkspace(
   });
   const recovery = workspaceRecovery(
     options.hostTasks,
+    options.reactiveCommands,
     workspace,
   );
   const presentation = buildWorkspacePresentation(
@@ -420,6 +435,16 @@ interface WorkspaceRecovery {
   original_prompt: string;
   checkpoint?: string;
   response?: string;
+  active_processes?: WorkspaceRecoveryProcess[];
+}
+
+interface WorkspaceRecoveryProcess {
+  session_id: string;
+  workspace_id: string;
+  started_at: string;
+  event_type: string;
+  command_digest: string;
+  progress?: string;
 }
 
 const RECOVERY_PROMPT_CHARS = 2_000;
@@ -428,12 +453,19 @@ const RECOVERY_RESPONSE_CHARS = 2_000;
 
 function workspaceRecovery(
   hostTasks: HostTaskStore,
+  reactiveCommands: ReactiveCommandRunner,
   workspace: WorkspaceContext["workspace"],
 ): WorkspaceRecovery | undefined {
   const repoRoot = workspace.sourceRoot ?? workspace.root;
   const record = hostTasks.findLatestActiveByRepoRoot(repoRoot)
     ?? hostTasks.findLatestByRepoRoot(repoRoot);
   if (!record) return undefined;
+
+  const activeProcesses = record.status === "active"
+    ? reactiveCommands
+        .listRunningForRepository(repoRoot)
+        .map((job) => workspaceRecoveryProcess(reactiveCommands, job))
+    : [];
 
   return {
     task_id: record.id,
@@ -446,6 +478,33 @@ function workspaceRecovery(
     original_prompt: recoveryPreview(record.prompt, RECOVERY_PROMPT_CHARS) ?? "",
     checkpoint: recoveryPreview(record.checkpoint, RECOVERY_CHECKPOINT_CHARS),
     response: recoveryPreview(record.result, RECOVERY_RESPONSE_CHARS),
+    active_processes: activeProcesses.length > 0 ? activeProcesses : undefined,
+  };
+}
+
+function workspaceRecoveryProcess(
+  reactiveCommands: ReactiveCommandRunner,
+  job: ReactiveJobRecord,
+): WorkspaceRecoveryProcess {
+  let progress: string | undefined;
+  try {
+    const text = reactiveCommands.readEvidence(job.evidence_ref, 1_024).text.trimEnd();
+    if (text) {
+      const maxChars = 600;
+      progress = text.length <= maxChars ? text : `…${text.slice(-maxChars)}`;
+    }
+  } catch {
+    // Recovery metadata is advisory. A missing evidence file must not make
+    // open_workspace fail or hide the durable task itself.
+  }
+
+  return {
+    session_id: reactiveJobSessionId(job.job_id),
+    workspace_id: job.workspace_id,
+    started_at: job.started_at,
+    event_type: job.event_type,
+    command_digest: job.command_digest,
+    progress,
   };
 }
 
@@ -462,7 +521,10 @@ function recoveryInstruction(recovery: WorkspaceRecovery): string {
   if (recovery.status === "stopped") {
     return `Recovered latest durable task ${recovery.task_id}: stopped. Do not silently restart it; inspect the structured recovery field before deciding whether the user's current request requires new work.`;
   }
-  return `Recovered unfinished durable task ${recovery.task_id}: waiting_for_host. Reconcile the structured recovery original_prompt/checkpoint against the current repository state, then resume only the remaining work before starting unrelated work; do not rerun stages already proven complete. Do not ask the user to recreate a handoff unless the stored recovery information is insufficient; save later progress with background_task continue using this task_id.`;
+  const activeProcessInstruction = recovery.active_processes?.length
+    ? ` Active durable processes already exist for this repository: ${recovery.active_processes.map((process) => `${process.session_id} (workspace ${process.workspace_id})`).join(", ")}. Before launching any command that may duplicate their work, inspect the relevant existing session with process_status using its listed workspace_id and session_id. Do not rerun matching side effects or start another watcher for the same remote operation.`
+    : "";
+  return `Recovered unfinished durable task ${recovery.task_id}: waiting_for_host. Reconcile the structured recovery original_prompt/checkpoint against the current repository state, then resume only the remaining work before starting unrelated work; do not rerun stages already proven complete.${activeProcessInstruction} Do not ask the user to recreate a handoff unless the stored recovery information is insufficient; save later progress with background_task continue using this task_id.`;
 }
 
 function workspaceResultText(

@@ -100,6 +100,13 @@ Durable ChatGPT task recovery is deliberately separate from process execution.
 `background_task` stores identity, checkpoints, optional descriptive plan
 progress, and explicit completion/stop state. It does not run stage commands,
 advance a plan, or infer task completion from local process activity.
+When `open_workspace` recovers an active task, it also reports bounded metadata
+for any durable process sessions still running against the same canonical
+repository. Each recovered process keeps the workspace that originally started
+it, so a fresh ChatGPT conversation can inspect that exact session with
+`process_status` before deciding whether more execution is necessary. This is
+recovery visibility only: Runtime does not attach a process to a task, infer
+task ownership from process activity, or auto-resume commands.
 
 Codex-facing command start uses one short event wait so small commands can finish
 inline. Once a command becomes durable, status reads never wait: the host can

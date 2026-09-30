@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.1.4 - 2026-09-30
+
+- Surface already-running durable process sessions in `open_workspace` recovery, including their originating workspace IDs and bounded progress, so a fresh ChatGPT conversation can inspect an existing CI/build/watch session instead of launching duplicate waiters.
+
 ## 1.1.3 - 2026-09-29
 
 - Split durable non-interactive process observation from TTY input: Codex mode now exposes read-only `process_status` snapshots that never wait, while `write_stdin` remains the interactive input surface with a non-blocking compatibility path for cached v2 catalogs.

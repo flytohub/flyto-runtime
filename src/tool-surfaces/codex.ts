@@ -3,6 +3,10 @@ import * as z from "zod/v4";
 import { applyPatch } from "../apply-patch.js";
 import { LEGACY_JOB_COMMAND, LEGACY_SHELL_HEADER } from "../mcp-legacy-input.js";
 import {
+  reactiveJobIdFromSessionId,
+  reactiveJobSessionId,
+} from "../flyto2/reactive-command.js";
+import {
   MAX_PROCESS_YIELD_MS,
   type ProcessSnapshot,
 } from "../process-sessions.js";
@@ -118,12 +122,6 @@ function newCodexProcessSessionId(): string {
   return `${CODEX_DURABLE_SESSION_PREFIX}${randomUUID().replaceAll("-", "")}`;
 }
 
-function codexSessionIdForReactiveJob(jobId: string): string {
-  const match = /^job_([a-f0-9]{32})$/.exec(jobId);
-  if (!match) throw new Error("Runtime returned an invalid process session identifier.");
-  return `${CODEX_DURABLE_SESSION_PREFIX}${match[1]}`;
-}
-
 function codexInteractiveSnapshot(
   snapshot: ProcessSnapshot,
   exposedSessionId?: string,
@@ -136,16 +134,6 @@ function codexInteractiveSnapshot(
       : undefined,
     nextAction: snapshot.running ? "continue" : "done",
   };
-}
-
-function reactiveJobIdFromCodexSession(sessionId: string): string {
-  const opaque = /^proc_([a-f0-9]{32})$/.exec(sessionId);
-  if (opaque) return `job_${opaque[1]}`;
-
-  // Accept sessions issued by older Codex-mode Runtime builds across an upgrade,
-  // but never emit the internal job identifier on the model-facing surface.
-  if (/^job_[a-f0-9]{32}$/.test(sessionId)) return sessionId;
-  throw new Error("Unknown process session identifier.");
 }
 
 function registerApplyPatchTool(context: ToolRegistrationContext): void {
@@ -397,7 +385,7 @@ async function handleProcessStatus(
     startedAt,
     async () => {
       await workspaces.getWorkspace(input.workspace_id);
-      const jobId = reactiveJobIdFromCodexSession(input.session_id);
+      const jobId = reactiveJobIdFromSessionId(input.session_id);
       return durableProcessSnapshot(
         context,
         input.workspace_id,
@@ -492,7 +480,7 @@ async function continueCodexProcess(
     return codexInteractiveSnapshot(process, input.session_id);
   }
 
-  const jobId = reactiveJobIdFromCodexSession(input.session_id);
+  const jobId = reactiveJobIdFromSessionId(input.session_id);
   if (input.chars && input.chars !== "\u0003") {
     throw new Error(
       "This process session does not accept stdin. Start exec_command with tty=true for an input-driven process.",
@@ -596,7 +584,7 @@ async function durableProcessSnapshot(
     const evidence = reactiveCommands.readEvidence(job.evidence_ref, 1_024);
     const progress = runningProgressPreview(evidence.text);
     return {
-      sessionId: codexSessionIdForReactiveJob(jobId),
+      sessionId: reactiveJobSessionId(jobId),
       output: progress,
       outputTruncated: evidence.truncated || evidence.text.length > progress.length,
       running: true,
