@@ -58,6 +58,7 @@ import { emitDurableToolEvent } from "./flyto2/tool-events.js";
 import { WorkspaceWatchRegistry } from "./flyto2/workspace-watch.js";
 import { WorkspaceRegistry } from "./workspaces.js";
 import { HostTaskStore } from "./flyto2/host-tasks.js";
+import { createLocalAgentClient } from "./local-agent-client.js";
 import {
   getLocalAgentProviderAvailabilitySnapshot,
 } from "./local-agent-availability.js";
@@ -226,6 +227,9 @@ export function createMcpServer(
     observability: {
       reactiveCommands,
     },
+    agent: config.subagents.enabled
+      ? { client: createLocalAgentClient(config), durableOperations }
+      : undefined,
   });
   const server = new McpServer(
     mcpServerInfo(),
@@ -394,6 +398,9 @@ export function createServer(
     observability: {
       reactiveCommands,
     },
+    agent: config.subagents.enabled
+      ? { client: createLocalAgentClient(config), durableOperations }
+      : undefined,
   });
   const processSessions = new ProcessSessionManager();
   const toolActivities = new ToolActivityTracker();

@@ -133,12 +133,19 @@ This makes the boundary extractable in either direction:
   authority, credentials, process lifecycle, and filesystem admission.
 
 Runtime provider registration is grouped into explicit capability bundles:
-`read`, `execution`, `mutation`, and `observability`. The standalone server
-selects the full standalone profile explicitly and therefore fails closed if a
-required production dependency is missing. Core/Cloud composition may select a
-subset profile without initializing unrelated providers. Bundle names are a
-Runtime composition detail; the cross-product wire contract continues to expose
-only concrete capability descriptors.
+`read`, `execution`, `mutation`, `observability`, and optional `agent`. The
+standalone server selects its core profile explicitly and adds `agent` only when
+subagents are configured. Core/Cloud composition may select any subset without
+initializing unrelated providers. Bundle names are a Runtime composition detail;
+the cross-product wire contract continues to expose only concrete capability
+descriptors.
+
+The agent bundle is an adapter over Runtime's existing local-agent daemon and
+durable agent-session store. It never embeds provider SDKs, credentials, or
+provider session identifiers in `flyto2.execution.v1`. Delegation/continuation
+are explicit-approval side effects protected by `operation_id`; observation is
+workspace-scoped through `agent.inspect` / bounded `agent.wait`. The agent
+adapter does not plan multi-step work and is not a second workflow engine.
 
 The Runtime composition root also keeps provider modules optional. Read-only,
 durable execution, and local mutation modules may be enabled independently.
@@ -256,3 +263,4 @@ External filesystem changes use persistent native watches rather than polling. W
 21. Accepted Cloud capability assignments resume through contract follow-ups and original `operation_id` replay, never by rerunning the side effect blindly.
 22. Cross-language consumers depend on generated `flyto2.execution.v1` wire schemas/fixtures, not Runtime's TypeScript implementation types.
 23. Standalone Runtime explicitly enables the full production capability profile; composed callers may select bundles without changing the wire contract.
+24. Agent delegation is an optional Runtime bundle over the existing local-agent lifecycle; provider credentials and provider sessions never become cross-product contract state.

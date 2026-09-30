@@ -159,6 +159,30 @@ files / Git / terminal / tests / builds
 
 Flyto2 Cloud is optional. Flyto2 Runtime works standalone.
 
+### Composable execution capabilities
+
+Runtime also exposes a provider-neutral `flyto2.execution.v1` capability
+contract so another Flyto2 product can compose machine-local execution without
+importing Runtime internals. The standalone service remains the default product:
+it owns workspace admission, filesystem access, processes, Git, durable
+operations, credentials, and local provider configuration.
+
+Capability registration is grouped into Runtime-local bundles defined in
+[`src/flyto2/capability-bundles.ts`](src/flyto2/capability-bundles.ts): `read`,
+`execution`, `mutation`, `observability`, plus the optional `agent` bundle.
+Standalone Runtime explicitly enables its core bundles. The `agent` bundle is
+added only when subagents are configured, and is implemented by
+[`src/flyto2/agent-capabilities.ts`](src/flyto2/agent-capabilities.ts) over the
+existing local-agent daemon rather than embedding provider SDKs into the wire
+contract.
+
+Core, Cloud, or another host may select a smaller bundle set through
+[`src/flyto2/capability-runtime.ts`](src/flyto2/capability-runtime.ts). The live
+manifest publishes only capabilities that are actually registered. Cross-language
+consumers should use the generated JSON Schemas under
+[`schema/flyto2.execution.v1/`](schema/flyto2.execution.v1/) instead of importing
+Runtime's TypeScript implementation types.
+
 ## Desktop and background service
 
 Flyto2 Runtime is designed to stay available after setup.

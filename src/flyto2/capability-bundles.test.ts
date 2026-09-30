@@ -81,6 +81,26 @@ test("standalone profile explicitly registers the full production provider set",
   ]);
 });
 
+test("agent bundle is opt-in and does not change the base standalone profile", async (t) => {
+  const deps = await runtimeDependencies(t);
+  const fakeClient = agentClientStub("running");
+  const registry = createStandaloneRuntimeCapabilityRegistry({
+    workspaces: deps.workspaces,
+    reviewCheckpoints: deps.reviewCheckpoints,
+    runtimeEvents: deps.runtimeEvents,
+    execution: {
+      reactiveCommands: deps.reactiveCommands,
+      durableOperations: deps.durableOperations,
+    },
+    mutation: { durableOperations: deps.durableOperations },
+    observability: { reactiveCommands: deps.reactiveCommands },
+    agent: { client: fakeClient, durableOperations: deps.durableOperations },
+  });
+  assert.ok(capabilityIds(registry).includes("agent.delegate"));
+  assert.ok(capabilityIds(registry).includes("agent.wait"));
+  assert.equal(STANDALONE_RUNTIME_CAPABILITY_PROFILE.bundles.includes("agent"), false);
+});
+
 test("custom profiles compose only the requested provider bundles", async (t) => {
   const deps = await runtimeDependencies(t);
   const registry = createRuntimeCapabilityRegistry({
@@ -134,4 +154,25 @@ async function runtimeDependencies(t: test.TestContext) {
     reactiveCommands,
     durableOperations,
   };
+}
+
+function agentClientStub(status: "running" | "idle") {
+  const record = {
+    id: "agt_bundle",
+    workspaceId: "ws_bundle",
+    workspaceRoot: "/tmp",
+    profileName: "codex",
+    provider: "codex",
+    status,
+    createdAt: "2026-09-30T00:00:00.000Z",
+    updatedAt: "2026-09-30T00:00:00.000Z",
+  } as const;
+  return {
+    async start() { return (await import("better-result")).Result.ok(record); },
+    async continue() { return (await import("better-result")).Result.ok(record); },
+    async get() { return (await import("better-result")).Result.ok(record); },
+    async wait() {
+      return (await import("better-result")).Result.ok([{ id: record.id, status }]);
+    },
+  } as never;
 }

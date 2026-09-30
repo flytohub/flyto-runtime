@@ -1,8 +1,10 @@
 import type { ReviewCheckpointManager } from "../review-checkpoints.js";
 import type { WorkspaceRegistry } from "../workspaces.js";
+import type { LocalAgentClient } from "../local-agent-client.js";
+import { registerAgentRuntimeCapabilities } from "./agent-capabilities.js";
 import { runtimeEventCapabilityAuditSink } from "./capability-audit.js";
 import {
-  STANDALONE_RUNTIME_CAPABILITY_PROFILE,
+  standaloneRuntimeCapabilityProfile,
   type RuntimeCapabilityBundleId,
   type RuntimeCapabilityProfile,
 } from "./capability-bundles.js";
@@ -31,8 +33,16 @@ export interface CreateRuntimeCapabilityRegistryOptions {
   observability?: {
     reactiveCommands: ReactiveCommandRunner;
   };
+  agent?: {
+    client: Pick<LocalAgentClient, "start" | "continue" | "get" | "wait">;
+    durableOperations: DurableOperationStore;
+  };
 }
 
+/**
+ * Composes a Runtime capability registry from explicitly selected provider
+ * bundles. With no profile it preserves the legacy dependency-driven selection.
+ */
 export function createRuntimeCapabilityRegistry(
   options: CreateRuntimeCapabilityRegistryOptions,
 ): RuntimeCapabilityRegistry {
@@ -74,22 +84,34 @@ export function createRuntimeCapabilityRegistry(
       reactiveCommands: options.observability.reactiveCommands,
     });
   }
+  if (bundles.has("agent")) {
+    if (!options.agent) {
+      throw missingBundleDependency("agent");
+    }
+    registerAgentRuntimeCapabilities(registry, {
+      workspaces: options.workspaces,
+      client: options.agent.client,
+      durableOperations: options.agent.durableOperations,
+    });
+  }
   return registry;
 }
 
 export interface CreateStandaloneRuntimeCapabilityRegistryOptions
-  extends Omit<CreateRuntimeCapabilityRegistryOptions, "profile" | "execution" | "mutation" | "observability"> {
+  extends Omit<CreateRuntimeCapabilityRegistryOptions, "profile" | "execution" | "mutation" | "observability" | "agent"> {
   execution: NonNullable<CreateRuntimeCapabilityRegistryOptions["execution"]>;
   mutation: NonNullable<CreateRuntimeCapabilityRegistryOptions["mutation"]>;
   observability: NonNullable<CreateRuntimeCapabilityRegistryOptions["observability"]>;
+  agent?: NonNullable<CreateRuntimeCapabilityRegistryOptions["agent"]>;
 }
 
+/** Creates the standalone registry, enabling agent delegation only when supplied. */
 export function createStandaloneRuntimeCapabilityRegistry(
   options: CreateStandaloneRuntimeCapabilityRegistryOptions,
 ): RuntimeCapabilityRegistry {
   return createRuntimeCapabilityRegistry({
     ...options,
-    profile: STANDALONE_RUNTIME_CAPABILITY_PROFILE,
+    profile: standaloneRuntimeCapabilityProfile({ agent: Boolean(options.agent) }),
   });
 }
 
@@ -101,6 +123,7 @@ function selectedBundles(
   if (options.execution) bundles.push("execution");
   if (options.mutation) bundles.push("mutation");
   if (options.observability) bundles.push("observability");
+  if (options.agent) bundles.push("agent");
   return new Set(bundles);
 }
 
