@@ -204,3 +204,14 @@ test("release gates accept exact-commit manual CI when automation pushes cannot 
     assert.doesNotMatch(workflow, /--event push/);
   }
 });
+
+test("stable release validation supports the first npm publication without weakening downgrade checks", () => {
+  const release = readFileSync(
+    fileURLToPath(new URL("../../.github/workflows/release.yml", import.meta.url)),
+    "utf8",
+  );
+
+  assert.match(release, /dist-tags\.latest 2>\/dev\/null \|\| true/);
+  assert.match(release, /latest && !semver\.valid\(latest\)/);
+  assert.match(release, /latest && semver\.lt\(candidate, latest\)/);
+});
