@@ -213,6 +213,19 @@ durable fallbacks. If a terminal process fails or becomes orphaned, Runtime
 moves the owning ChatGPT task to `needs_attention` rather than leaving it looking
 indefinitely active.
 
+Long-task debugging is structured rather than log-only. `background_task status`
+and `open_workspace` recovery can include a bounded diagnosis projection with a
+stable reason code, current phase, current process snapshot, correlation IDs,
+and a recent task timeline. The projection is derived from durable Runtime
+state and shallow events; raw source text and full command output remain in
+local evidence instead of being copied into the timeline.
+
+Reason codes distinguish an actually running process, suspected stall,
+non-zero exit, signal/orphan recovery, host continuation, and MCP event callback
+delivery problems. This makes it possible to tell whether time was spent in a
+test/build/command, waiting for ChatGPT to resume, or failing to deliver a
+callback without searching unrelated logs.
+
 ## Desktop and background service
 
 Flyto2 Runtime is designed to stay available after setup.

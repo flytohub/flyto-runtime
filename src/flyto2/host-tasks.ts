@@ -167,6 +167,17 @@ export class HostTaskStore {
     return row ? hostTaskFromRow(row) : undefined;
   }
 
+  listActiveByWorkspaceId(workspaceId: string): HostTaskRecord[] {
+    const rows = this.database.sqlite.prepare(
+      `select id, workspace_id, repo_root, workspace_root, prompt, status, plan_json, checkpoint,
+              result, attention_reason, attention_at, created_at, updated_at, completed_at
+       from host_tasks
+       where workspace_id = ? and status = 'active'
+       order by updated_at desc`,
+    ).all(workspaceId) as HostTaskRow[];
+    return rows.map(hostTaskFromRow);
+  }
+
   listActiveByRepoRoot(repoRoot: string): HostTaskRecord[] {
     const rows = this.database.sqlite.prepare(
       `select id, workspace_id, repo_root, workspace_root, prompt, status, plan_json, checkpoint,

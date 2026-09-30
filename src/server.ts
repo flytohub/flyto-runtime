@@ -300,6 +300,7 @@ function registerMcpSurface(
     reviewCheckpoints,
     hostTasks,
     reactiveCommands,
+    runtimeEvents,
     resolveLocalAgentProviders,
   });
 

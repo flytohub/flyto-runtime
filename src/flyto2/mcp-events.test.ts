@@ -159,3 +159,54 @@ test("MCP Events subscriptions survive service restart", async (t) => {
   }
   assert.equal(delivered, 1);
 });
+
+test("MCP Events records callback rejection without leaking delivery secrets", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "flyto2-mcp-events-diagnostics-"));
+  const runtimeEvents = new RuntimeEventStore(stateDir);
+  const secret = `whsec_${Buffer.alloc(32, 5).toString("base64")}`;
+  const webhookPost: McpEventWebhookPost = async (_url, body) => {
+    const parsed = JSON.parse(body) as { type?: string; challenge?: string };
+    if (parsed.type === "verification") {
+      return { status: 200, body: JSON.stringify({ challenge: parsed.challenge }) };
+    }
+    return { status: 400, body: "rejected" };
+  };
+  const service = new McpEventService(stateDir, runtimeEvents, webhookPost);
+  t.after(async () => {
+    service.close();
+    runtimeEvents.close();
+    await rm(stateDir, { recursive: true, force: true });
+  });
+
+  await service.handle({
+    id: 1,
+    method: "events/subscribe",
+    params: {
+      name: "process.failed",
+      arguments: { workspace_id: "ws-diag" },
+      delivery: {
+        mode: "webhook",
+        url: "https://callback.example.test/diag",
+        secret,
+      },
+    },
+  }, "client:diag");
+  const cursor = runtimeEvents.latestSequence();
+  runtimeEvents.append({
+    type: "process.failed",
+    source: "reactive-runner",
+    workspace_id: "ws-diag",
+    correlation_id: "job_diag",
+    summary: "Process failed.",
+  });
+  const diagnostic = await runtimeEvents.wait({
+    after_sequence: cursor,
+    type: "mcp.event.delivery_rejected",
+    correlation_id: "job_diag",
+    timeout_ms: 2_000,
+  });
+  assert.equal(diagnostic?.payload.outcome, "rejected");
+  const serialized = JSON.stringify(diagnostic);
+  assert.doesNotMatch(serialized, /callback\.example\.test/);
+  assert.doesNotMatch(serialized, /whsec_/);
+});

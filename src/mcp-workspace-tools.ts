@@ -17,6 +17,11 @@ import {
   type ReactiveCommandRunner,
   type ReactiveJobRecord,
 } from "./flyto2/reactive-command.js";
+import type { RuntimeEventStore } from "./flyto2/runtime-events.js";
+import {
+  buildTaskDiagnosis,
+  type TaskDiagnosis,
+} from "./flyto2/task-diagnostics.js";
 import {
   buildLocalAgentCatalog,
   type LocalAgentProviderStatus,
@@ -49,6 +54,7 @@ interface WorkspaceToolRegistrationOptions {
   reviewCheckpoints: ReviewCheckpointManager;
   hostTasks: HostTaskStore;
   reactiveCommands: ReactiveCommandRunner;
+  runtimeEvents: RuntimeEventStore;
   resolveLocalAgentProviders: () => LocalAgentProviderStatus[];
 }
 
@@ -101,6 +107,7 @@ const workspaceRecoveryOutputSchema = z.object({
   attention_reason: z.string().optional(),
   attention_at: z.string().optional(),
   response: z.string().optional(),
+  diagnosis: z.record(z.string(), z.unknown()).optional(),
   active_processes: z.array(z.object({
     session_id: z.string(),
     workspace_id: z.string(),
@@ -223,6 +230,7 @@ async function handleOpenWorkspace(
   const recovery = workspaceRecovery(
     options.hostTasks,
     options.reactiveCommands,
+    options.runtimeEvents,
     workspace,
   );
   const presentation = buildWorkspacePresentation(
@@ -442,6 +450,7 @@ interface WorkspaceRecovery {
   attention_reason?: string;
   attention_at?: string;
   response?: string;
+  diagnosis?: TaskDiagnosis;
   active_processes?: WorkspaceRecoveryProcess[];
 }
 
@@ -466,6 +475,7 @@ const RECOVERY_RESPONSE_CHARS = 2_000;
 function workspaceRecovery(
   hostTasks: HostTaskStore,
   reactiveCommands: ReactiveCommandRunner,
+  runtimeEvents: RuntimeEventStore,
   workspace: WorkspaceContext["workspace"],
 ): WorkspaceRecovery | undefined {
   const repoRoot = workspace.sourceRoot ?? workspace.root;
@@ -492,6 +502,7 @@ function workspaceRecovery(
     attention_reason: recoveryPreview(record.attentionReason, 1_000),
     attention_at: record.attentionAt,
     response: recoveryPreview(record.result, RECOVERY_RESPONSE_CHARS),
+    diagnosis: buildTaskDiagnosis(record, reactiveCommands, runtimeEvents),
     active_processes: activeProcesses.length > 0 ? activeProcesses : undefined,
   };
 }

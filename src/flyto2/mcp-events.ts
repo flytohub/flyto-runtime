@@ -90,11 +90,11 @@ export class McpEventService {
 
   constructor(
     stateDir: string,
-    runtimeEvents: RuntimeEventStore,
+    private readonly runtimeEvents: RuntimeEventStore,
     private readonly webhookPost: McpEventWebhookPost = secureWebhookPost,
   ) {
     this.database = openDatabase(stateDir);
-    this.detachRuntimeEvents = runtimeEvents.onEvent((event) => {
+    this.detachRuntimeEvents = this.runtimeEvents.onEvent((event) => {
       if (!isSupportedEventName(event.type)) return;
       void this.deliverRuntimeEvent(event).catch(() => {
         // Event state remains durable in Runtime. Webhook delivery is retried
@@ -230,11 +230,45 @@ export class McpEventService {
       const subscription = subscriptionFromRow(row);
       if (!matchesSubscription(subscription, event)) continue;
       const outcome = await deliverWithRetry(subscription, event, this.webhookPost);
+      this.appendDeliveryDiagnostic(subscription, event, outcome);
       if (outcome === "gone") {
         this.database.sqlite.prepare(
           "delete from flyto2_mcp_event_subscriptions where id = ?",
         ).run(subscription.id);
       }
+    }
+  }
+
+  private appendDeliveryDiagnostic(
+    subscription: McpEventSubscription,
+    event: RuntimeEvent,
+    outcome: "accepted" | "gone" | "rejected" | "failed",
+  ): void {
+    const type = outcome === "accepted"
+      ? "mcp.event.delivered"
+      : outcome === "failed"
+        ? "mcp.event.delivery_failed"
+        : outcome === "rejected"
+          ? "mcp.event.delivery_rejected"
+          : "mcp.event.subscription_gone";
+    try {
+      this.runtimeEvents.append({
+        type,
+        source: "mcp-events",
+        workspace_id: event.workspace_id,
+        correlation_id: event.correlation_id,
+        summary: outcome === "accepted"
+          ? "MCP event callback accepted the Runtime event."
+          : `MCP event callback delivery ${outcome}.`,
+        payload: {
+          subscription_id: subscription.id,
+          source_event_id: event.event_id,
+          source_event_type: event.type,
+          outcome,
+        },
+      });
+    } catch {
+      // Delivery diagnostics must never interfere with the delivery itself.
     }
   }
 }

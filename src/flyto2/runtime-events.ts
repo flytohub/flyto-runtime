@@ -156,6 +156,40 @@ export class RuntimeEventStore {
     return rows.map(runtimeEventFromRow);
   }
 
+  listRecent(query: RuntimeEventQuery = {}): RuntimeEvent[] {
+    const after = normalizeSequence(query.after_sequence);
+    const limit = normalizeLimit(query.limit);
+    const clauses = ["sequence > ?"];
+    const params: Array<string | number> = [after];
+
+    if (query.workspace_id) {
+      clauses.push("workspace_id = ?");
+      params.push(query.workspace_id);
+    }
+    if (query.type) {
+      clauses.push("type = ?");
+      params.push(query.type);
+    }
+    if (query.correlation_id) {
+      clauses.push("correlation_id = ?");
+      params.push(query.correlation_id);
+    }
+
+    params.push(limit);
+    const rows = this.database.sqlite
+      .prepare(
+        `select sequence, event_id, type, source, workspace_id, correlation_id,
+                summary, payload_json, evidence_json, occurred_at
+         from flyto2_runtime_events
+         where ${clauses.join(" and ")}
+         order by sequence desc
+         limit ?`,
+      )
+      .all(...params) as RuntimeEventRow[];
+
+    return rows.reverse().map(runtimeEventFromRow);
+  }
+
   latestSequence(): number {
     const row = this.database.sqlite
       .prepare("select coalesce(max(sequence), 0) as sequence from flyto2_runtime_events")

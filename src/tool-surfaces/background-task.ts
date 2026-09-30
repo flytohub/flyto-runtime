@@ -8,6 +8,10 @@ import type {
 } from "../flyto2/host-tasks.js";
 import { hostTaskExecutionState } from "../flyto2/host-tasks.js";
 import {
+  buildTaskDiagnosis,
+  type TaskDiagnosis,
+} from "../flyto2/task-diagnostics.js";
+import {
   toolNames,
   workspaceIdDescription,
   type ToolRegistrationContext,
@@ -111,6 +115,7 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
         checkpoint: z.string().optional(),
         attention_reason: z.string().optional(),
         attention_at: z.string().optional(),
+        diagnosis: z.record(z.string(), z.unknown()).optional(),
         response: z.string().optional(),
       }),
       annotations: BACKGROUND_TASK_ANNOTATIONS,
@@ -141,6 +146,7 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
           prompt,
           plan: plan ? createPlan(plan) : undefined,
         });
+        appendTaskLifecycleEvent(context, record, "task.started", "Durable task started.");
         return recordResult(
           context,
           record,
@@ -225,6 +231,7 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
           });
           if (!updated) return failedResult(`Durable task ${current.id} no longer exists.`, current.id);
         }
+        appendTaskLifecycleEvent(context, updated, "task.checkpointed", "Durable task checkpoint updated.");
         return recordResult(
           context,
           updated,
@@ -240,6 +247,7 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
         }
         const completed = context.hostTasks.complete(current.id, prompt);
         if (!completed) return failedResult(`Durable task ${current.id} no longer exists.`, current.id);
+        appendTaskLifecycleEvent(context, completed, "task.completed", "Durable task completed.");
         return recordResult(
           context,
           completed,
@@ -254,6 +262,7 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
       }
       const stopped = context.hostTasks.stop(current.id, prompt);
       if (!stopped) return failedResult(`Durable task ${current.id} no longer exists.`, current.id);
+      appendTaskLifecycleEvent(context, stopped, "task.stopped", "Durable task stopped.");
       return recordResult(
         context,
         stopped,
@@ -321,6 +330,9 @@ function recordResult(
   const originalPrompt = includeResponse ? responsePreview(record.prompt, previewChars) : undefined;
   const checkpoint = includeResponse ? responsePreview(record.checkpoint, previewChars) : undefined;
   const response = includeResponse ? responsePreview(record.result, previewChars) : undefined;
+  const diagnosis = context.runtimeEvents && context.reactiveCommands
+    ? buildTaskDiagnosis(record, context.reactiveCommands, context.runtimeEvents)
+    : undefined;
   const baseResult = message
     ?? (status === "completed"
       ? `Durable task ${record.id} completed.`
@@ -343,8 +355,35 @@ function recordResult(
     checkpoint,
     attention_reason: record.attentionReason,
     attention_at: record.attentionAt,
+    diagnosis,
     response,
   });
+}
+
+function appendTaskLifecycleEvent(
+  context: ToolRegistrationContext,
+  record: HostTaskRecord,
+  type: "task.started" | "task.checkpointed" | "task.completed" | "task.stopped",
+  summary: string,
+): void {
+  try {
+    context.runtimeEvents?.append({
+      type,
+      source: "background-task",
+      workspace_id: record.workspaceId,
+      correlation_id: record.id,
+      summary,
+      payload: {
+        task_id: record.id,
+        status: record.status,
+        execution_state: hostTaskExecutionState(record),
+        current_stage: record.plan?.currentStage,
+        total_stages: record.plan?.stages.length,
+      },
+    });
+  } catch {
+    // Task persistence is authoritative; diagnostics are advisory.
+  }
 }
 
 function createPlan(
@@ -429,6 +468,7 @@ function toolResult(
     checkpoint?: string;
     attention_reason?: string;
     attention_at?: string;
+    diagnosis?: TaskDiagnosis;
     response?: string;
   },
   isError = false,

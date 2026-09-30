@@ -180,6 +180,26 @@ active tasks whose latest owning process already failed. If an event callback is
 missed, `open_workspace` exposes the attention reason and process recovery data
 so ChatGPT can resume from evidence rather than rerunning the failed command.
 
+### Long-task diagnostic projection
+
+`src/flyto2/task-diagnostics.ts` projects existing durable state into a bounded
+debugging view; it is not another execution or workflow engine. The projection
+combines the Host Task, latest owning process, shallow Runtime events, MCP event
+delivery diagnostics, and correlation identifiers into:
+
+- a stable reason code;
+- a coarse execution phase such as test/build/git/command/callback wait;
+- the latest process activity snapshot;
+- a bounded chronological timeline;
+- task/workspace/process/operation/invocation/event correlation IDs;
+- one recovery-oriented suggested action.
+
+Task lifecycle updates and process lifecycle projections are emitted as shallow
+events without prompt text, source content, command output, callback URLs, or
+signing secrets. Full evidence remains local and lazy. Diagnostics therefore
+answer where continuation broke while keeping the event stream suitable for
+audit and recovery.
+
 The Runtime composition root also keeps provider modules optional. Read-only,
 durable execution, and local mutation modules may be enabled independently.
 Core or Cloud integration never changes which lower-level Runtime modules are
