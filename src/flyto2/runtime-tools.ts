@@ -8,6 +8,7 @@ import {
   workspaceIdDescription,
 } from "../tool-surfaces/types.js";
 import { runtimeManifest } from "./manifest.js";
+import type { RuntimeCapabilityRegistry } from "./capability-provider.js";
 import type { RuntimeEventStore } from "./runtime-events.js";
 import type { ReactiveCommandRunner } from "./reactive-command.js";
 import type { WorkspaceWatchRegistry } from "./workspace-watch.js";
@@ -19,6 +20,7 @@ export interface RuntimeToolRegistrationContext {
   runtimeEvents: RuntimeEventStore;
   reactiveCommands: ReactiveCommandRunner;
   workspaceWatches: WorkspaceWatchRegistry;
+  capabilityRegistry: RuntimeCapabilityRegistry;
 }
 
 /** Register optional diagnostic Runtime internals as small, independently testable tools. */
@@ -39,6 +41,7 @@ export function registerRuntimeTools(
 function registerRuntimeManifestTool({
   server,
   config,
+  capabilityRegistry,
 }: RuntimeToolRegistrationContext): void {
   server.registerTool(
     toolNames.runtimeManifest,
@@ -67,7 +70,10 @@ function registerRuntimeManifestTool({
       annotations: { readOnlyHint: true },
     },
     async () => {
-      const manifest = runtimeManifest(config);
+      const manifest = runtimeManifest(
+        config,
+        capabilityRegistry.registeredCapabilities(),
+      );
       return {
         content: [textBlock(JSON.stringify(manifest, null, 2))],
         structuredContent: manifest,

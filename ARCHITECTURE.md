@@ -112,6 +112,12 @@ Core or Cloud integration never changes which lower-level Runtime modules are
 required to boot; it only consumes capabilities that the manifest/registry says
 are actually registered.
 
+The catalog and live manifest have intentionally different meanings. The
+catalog is the build-time vocabulary of capabilities Runtime understands; the
+live manifest is generated from the registry's actually registered providers.
+Never advertise a catalog capability in a running instance when its provider
+module is not loaded.
+
 ## Standalone surfaces
 
 - MCP server: `src/server.ts`
@@ -209,3 +215,4 @@ External filesystem changes use persistent native watches rather than polling. W
 14. Long-running capabilities report `accepted` separately from terminal success/failure and reuse Runtime durable process state.
 15. Mutation capability modules are optional; Runtime can boot and operate read-only without them.
 16. `git.mutate` remains local-only at this boundary and must not grow implicit push/reset/clean/checkout behavior.
+17. A live Runtime manifest advertises registered providers, never the entire catalog by default.

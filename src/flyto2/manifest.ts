@@ -8,12 +8,16 @@ import { runtimeCapabilityCatalog } from "./capability-catalog.js";
 import {
   FLYTO2_EXECUTION_PROTOCOL_VERSION,
   flyto2RuntimeManifestSchema,
+  type Flyto2Capability,
   type Flyto2RuntimeManifest,
 } from "./protocol.js";
 
 const RUNTIME_ID_FILE = "flyto2-runtime-id";
 
-export function runtimeManifest(config: ServerConfig): Flyto2RuntimeManifest {
+export function runtimeManifest(
+  config: ServerConfig,
+  capabilities: readonly Flyto2Capability[] = runtimeCapabilityCatalog(),
+): Flyto2RuntimeManifest {
   return flyto2RuntimeManifestSchema.parse({
     schema: FLYTO2_EXECUTION_PROTOCOL_VERSION,
     product: "Flyto2",
@@ -23,7 +27,7 @@ export function runtimeManifest(config: ServerConfig): Flyto2RuntimeManifest {
     display_name: hostname() || "Flyto2 Runtime",
     platform: platform(),
     roles: ["executes_jobs"],
-    capabilities: runtimeCapabilityCatalog(),
+    capabilities,
   });
 }
 

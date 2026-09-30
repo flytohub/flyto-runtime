@@ -209,6 +209,18 @@ export function createMcpServer(
   trackToolActivity?: TrackToolActivity,
 ): McpServer {
   const toolSurface = getToolSurface(config.toolMode);
+  const capabilityRegistry = createRuntimeCapabilityRegistry({
+    workspaces,
+    reviewCheckpoints,
+    runtimeEvents,
+    execution: {
+      reactiveCommands,
+      durableOperations,
+    },
+    mutation: {
+      durableOperations,
+    },
+  });
   const server = new McpServer(
     mcpServerInfo(),
     {
@@ -229,6 +241,7 @@ export function createMcpServer(
     reactiveCommands,
     workspaceWatches,
     hostTasks,
+    capabilityRegistry,
     trackToolActivity,
   );
   return server;
@@ -247,6 +260,7 @@ function registerMcpSurface(
   reactiveCommands: ReactiveCommandRunner,
   workspaceWatches: WorkspaceWatchRegistry,
   hostTasks: HostTaskStore,
+  capabilityRegistry: RuntimeCapabilityRegistry,
   trackToolActivity?: TrackToolActivity,
 ): void {
   const trackedTarget = trackToolActivity
@@ -279,6 +293,7 @@ function registerMcpSurface(
       runtimeEvents,
       reactiveCommands,
       workspaceWatches,
+      capabilityRegistry,
     });
   }
 
@@ -398,6 +413,7 @@ export function createServer(
       reactiveCommands,
       workspaceWatches,
       hostTasks,
+      capabilityRegistry,
       toolActivities.track,
     );
   });
