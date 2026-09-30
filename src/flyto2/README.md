@@ -3,6 +3,9 @@
 This directory contains the Flyto2-specific TypeScript surface layered onto the upstream DevSpace fork.
 
 - `protocol.ts`: provider-neutral `flyto2.execution.v1` schemas.
+- `capability-catalog.ts`: canonical Runtime capability declarations used by the manifest and provider admission.
+- `capability-provider.ts`: provider-neutral capability registry/execution seam. It owns no workspace, process, Git, Cloud, or persistence implementation.
+- `capability-audit.ts`: adapter from shallow capability audit records into the existing durable Runtime event stream.
 - `manifest.ts`: standalone Runtime identity and capability manifest.
 - `cloud-bridge.ts`: optional outbound Flyto2 Cloud pairing/job transport.
 - `connected-runtime.ts`: dependency-injected claim/lease/progress/completion loop.
@@ -15,3 +18,7 @@ This directory contains the Flyto2-specific TypeScript surface layered onto the 
 - `workspace-watch.ts`: persists native filesystem watches, emits shallow external-change events, restores watches after restart, and fails closed on canonical-root drift.
 
 The Runtime core remains usable when the Cloud bridge is absent. Flyto2 modules must not import Flyto2 Cloud application code.
+
+Capability implementations are intentionally migrated behind `capability-provider.ts` incrementally. Existing MCP tools remain the production path until an implementation has a focused provider adapter and regression coverage. Core and Cloud should consume the versioned contract/manifest, not Runtime workspace/process/database internals.
+
+The provider registry does not replace durable side-effect admission. Providers that mutate files, Git, processes, or external systems must continue to use Runtime's existing `operation_id`/`DurableOperationStore` boundary underneath the provider seam.

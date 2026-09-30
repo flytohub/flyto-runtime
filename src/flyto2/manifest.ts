@@ -4,32 +4,14 @@ import { hostname, platform } from "node:os";
 import { dirname, join } from "node:path";
 import type { ServerConfig } from "../config.js";
 import { DEVSPACE_VERSION } from "../version.js";
+import { runtimeCapabilityCatalog } from "./capability-catalog.js";
 import {
   FLYTO2_EXECUTION_PROTOCOL_VERSION,
   flyto2RuntimeManifestSchema,
-  type Flyto2Capability,
   type Flyto2RuntimeManifest,
 } from "./protocol.js";
 
 const RUNTIME_ID_FILE = "flyto2-runtime-id";
-
-const BASE_CAPABILITIES: readonly Flyto2Capability[] = [
-  capability("workspace.open", "low", "none", ["workspace"]),
-  capability("source.read", "low", "none", ["file"]),
-  capability("source.edit", "high", "policy", ["diff", "file"]),
-  capability("process.run", "high", "policy", ["process", "log"]),
-  capability("git.inspect", "low", "none", ["git"]),
-  capability("git.mutate", "high", "policy", ["git", "diff"]),
-  capability("test.run", "medium", "none", ["test", "log"]),
-  capability("build.run", "medium", "none", ["build", "log"]),
-  capability("review.diff", "low", "none", ["diff"]),
-  capability("agent.delegate", "high", "policy", ["agent", "log"]),
-  capability("event.stream", "low", "none", ["event"]),
-  capability("event.wait", "low", "none", ["event"]),
-  capability("evidence.read", "low", "none", ["log", "evidence"]),
-  capability("process.reactive", "high", "policy", ["process", "event", "log"]),
-  capability("file.watch", "medium", "policy", ["event"]),
-];
 
 export function runtimeManifest(config: ServerConfig): Flyto2RuntimeManifest {
   return flyto2RuntimeManifestSchema.parse({
@@ -41,7 +23,7 @@ export function runtimeManifest(config: ServerConfig): Flyto2RuntimeManifest {
     display_name: hostname() || "Flyto2 Runtime",
     platform: platform(),
     roles: ["executes_jobs"],
-    capabilities: BASE_CAPABILITIES,
+    capabilities: runtimeCapabilityCatalog(),
   });
 }
 
@@ -58,19 +40,4 @@ export function runtimeId(stateDir: string): string {
   writeFileSync(file, value + "\n", { mode: 0o600, flag: "wx" });
   chmodSync(file, 0o600);
   return value;
-}
-
-function capability(
-  id: string,
-  riskLevel: Flyto2Capability["risk_level"],
-  approval: Flyto2Capability["approval"],
-  evidence: string[],
-): Flyto2Capability {
-  return {
-    id,
-    revision: 1,
-    risk_level: riskLevel,
-    approval,
-    evidence,
-  };
 }

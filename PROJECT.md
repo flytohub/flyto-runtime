@@ -11,6 +11,8 @@ Flyto2 Runtime is a standalone local execution runtime for coding and other mach
 - local-agent delegation
 - durable operation replay
 - runtime capability self-description
+- canonical capability catalog and provider execution seam
+- shallow auditable capability lifecycle records
 - optional Flyto2 Cloud bridge
 - durable Runtime event stream and one-shot event waits
 - reactive background commands with lazy local evidence
@@ -36,3 +38,5 @@ internals.
 ## Composition
 
 Standalone is the default product boundary. Flyto2 Cloud integration is optional and uses the versioned Flyto2 execution protocol plus existing paired-device job APIs.
+
+Flyto2 Core may compose Runtime-provided machine/coding capabilities through the same versioned capability invocation/result contract. Core owns workflow composition/replay/evidence semantics; Runtime owns machine-local workspace, file, process, Git, agent, and service execution. Neither package imports the other's implementation internals.

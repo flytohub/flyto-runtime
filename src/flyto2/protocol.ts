@@ -49,6 +49,58 @@ export const flyto2EvidenceRefSchema = z.object({
 
 export type Flyto2EvidenceRef = z.infer<typeof flyto2EvidenceRefSchema>;
 
+export const flyto2CapabilityInvocationSchema = z.object({
+  schema: z.literal(FLYTO2_EXECUTION_PROTOCOL_VERSION),
+  invocation_id: z.string().trim().min(1).max(128),
+  capability: z.string().trim().min(1).max(128),
+  revision: z.number().int().positive().default(1),
+  operation_id: z.string().trim().min(1).max(128),
+  workspace_id: z.string().trim().min(1).optional(),
+  trace_id: z.string().trim().min(1).optional(),
+  requested_at: z.string().trim().min(1),
+  input: z.record(z.string(), z.unknown()).default({}),
+}).strict();
+
+export type Flyto2CapabilityInvocation = z.infer<typeof flyto2CapabilityInvocationSchema>;
+
+export const flyto2CapabilityFailureSchema = z.object({
+  code: z.string().trim().min(1).max(128),
+  retryable: z.boolean().default(false),
+  detail: z.string().max(1200).optional(),
+}).strict();
+
+export type Flyto2CapabilityFailure = z.infer<typeof flyto2CapabilityFailureSchema>;
+
+export const flyto2CapabilityResultSchema = z.object({
+  schema: z.literal(FLYTO2_EXECUTION_PROTOCOL_VERSION),
+  invocation_id: z.string().trim().min(1).max(128),
+  capability: z.string().trim().min(1).max(128),
+  revision: z.number().int().positive(),
+  status: z.enum(["success", "failed"]),
+  started_at: z.string().trim().min(1),
+  completed_at: z.string().trim().min(1),
+  output: z.record(z.string(), z.unknown()).default({}),
+  evidence: z.array(flyto2EvidenceRefSchema).default([]),
+  failure: flyto2CapabilityFailureSchema.optional(),
+}).strict().superRefine((value, ctx) => {
+  if (value.status === "failed" && !value.failure) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["failure"],
+      message: "failed capability results require failure metadata",
+    });
+  }
+  if (value.status === "success" && value.failure) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["failure"],
+      message: "successful capability results cannot include failure metadata",
+    });
+  }
+});
+
+export type Flyto2CapabilityResult = z.infer<typeof flyto2CapabilityResultSchema>;
+
 export const flyto2RuntimeEventSchema = z.object({
   schema: z.literal(FLYTO2_EXECUTION_PROTOCOL_VERSION),
   event_id: z.string().trim().min(1),

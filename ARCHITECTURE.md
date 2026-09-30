@@ -37,6 +37,57 @@ Flyto2 Cloud MUST NOT depend on Runtime implementation details such as Codex, Cl
 
 The wire contract is provider-neutral. Runtime adapters decide how an assignment is executed.
 
+### Capability provider boundary
+
+Runtime capabilities have three deliberately separate layers:
+
+```text
+flyto2.execution.v1 contract
+          |
+          v
+capability catalog + provider registry
+          |
+          v
+workspace / file / process / Git / agent adapters
+```
+
+`src/flyto2/capability-catalog.ts` is the canonical declaration surface for
+Runtime capability ids, revisions, risk levels, approval requirements, and
+expected evidence kinds. The Runtime manifest is generated from that catalog.
+
+`src/flyto2/capability-provider.ts` is the stable execution seam. A provider
+must match an existing catalog descriptor exactly before it can register. The
+registry accepts provider-neutral invocation envelopes and returns
+provider-neutral result envelopes; it does not expose local path resolution,
+process-session ids, Git implementation details, or SQLite state.
+
+`src/flyto2/capability-audit.ts` maps shallow invocation lifecycle metadata to
+the existing durable Runtime event stream. Capability audit events contain
+identity, operation, timing, failure, and evidence references, but deliberately
+exclude raw invocation input and output so credentials/source content do not
+become audit-log payloads by default.
+
+Existing MCP tools remain the production execution path while adapters are
+migrated capability-by-capability. Do not perform a flag-day rewrite. A
+capability moves behind the registry only after its existing behavior has a
+focused adapter and regression coverage.
+
+Side-effecting providers must preserve Runtime's existing `operation_id`
+admission/replay guarantee before they are exposed through this seam. The
+provider registry is not a replacement for `DurableOperationStore`; it is the
+stable capability boundary above that durability layer. This keeps retries
+auditable without creating a second execution engine.
+
+This makes the boundary extractable in either direction:
+
+- **Flyto2 Core** may compose a Runtime capability through the versioned
+  invocation/result contract without importing Runtime implementation code.
+- **Flyto2 Cloud** may discover/route Runtime capability ids through the
+  manifest and paired-device assignment boundary without knowing local
+  workspace/process/database internals.
+- **Flyto2 Runtime** remains independently installable and keeps machine-local
+  authority, credentials, process lifecycle, and filesystem admission.
+
 ## Standalone surfaces
 
 - MCP server: `src/server.ts`
@@ -126,3 +177,8 @@ External filesystem changes use persistent native watches rather than polling. W
 6. Side-effect retries are idempotent through `operation_id`.
 7. Cloud orchestration never turns Runtime into a hidden remote shell.
 8. Background maintenance never gates listener readiness and never overlaps itself.
+9. Capability ids/revisions/risk/approval/evidence metadata have one canonical catalog.
+10. Core and Cloud compose Runtime through versioned contracts, never by importing Runtime internals.
+11. Capability audit records are shallow by default; source text, command output, and secrets stay in bounded evidence stores or the local execution surface.
+12. Capability migration is incremental; the provider registry must not become a second hidden workflow engine.
+13. Side-effecting capability providers retain exactly-once `operation_id` admission/replay below the provider seam.

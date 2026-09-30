@@ -29,6 +29,21 @@ for (const file of walk(flyto2Dir)) {
   }
 }
 
+const contractImportRules = new Map<string, readonly string[]>([
+  ["src/flyto2/protocol.ts", ["zod/v4"]],
+  ["src/flyto2/capability-catalog.ts", ["./protocol.js"]],
+  ["src/flyto2/capability-provider.ts", ["./protocol.js"]],
+]);
+for (const [relativePath, allowed] of contractImportRules) {
+  const file = join(rootPath, relativePath);
+  const content = readFileSync(file, "utf8");
+  for (const specifier of importSpecifiers(content)) {
+    if (!allowed.includes(specifier)) {
+      failures.push(`${relativePath} crosses the stable capability-contract boundary via import: ${specifier}`);
+    }
+  }
+}
+
 const packageJson = JSON.parse(readFileSync(join(rootPath, "package.json"), "utf8")) as {
   name?: string;
   license?: string;
