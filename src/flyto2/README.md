@@ -8,6 +8,7 @@ This directory contains the Flyto2-specific TypeScript surface layered onto the 
 - `capability-audit.ts`: adapter from shallow capability audit records into the existing durable Runtime event stream.
 - `capability-runtime.ts`: Runtime-owned registry composition root.
 - `read-only-capabilities.ts`: first provider adapters for checkout workspace open, source read, Git inspect, and non-advancing review diff.
+- `execution-capabilities.ts`: policy-gated package test/build providers plus read-only durable process status.
 - `manifest.ts`: standalone Runtime identity and capability manifest.
 - `cloud-bridge.ts`: optional outbound Flyto2 Cloud pairing/job transport.
 - `connected-runtime.ts`: dependency-injected claim/lease/progress/completion loop.
@@ -24,3 +25,5 @@ The Runtime core remains usable when the Cloud bridge is absent. Flyto2 modules 
 Capability implementations are intentionally migrated behind `capability-provider.ts` incrementally. Existing MCP tools remain the production path until an implementation has a focused provider adapter and regression coverage. Core and Cloud should consume the versioned contract/manifest, not Runtime workspace/process/database internals.
 
 The provider registry does not replace durable side-effect admission. Providers that mutate files, Git, processes, or external systems must continue to use Runtime's existing `operation_id`/`DurableOperationStore` boundary underneath the provider seam.
+
+Long-running capabilities return `status=accepted` with an opaque operation handle instead of claiming the work completed. `test.run` and `build.run` currently execute only the project's declared `test`/`build` package scripts, reuse `ReactiveCommandRunner`, and journal process admission with `DurableOperationStore`. `process.status` reads the resulting durable process without starting a second command. This keeps Core/Cloud composition asynchronous without adding a second workflow or polling engine.

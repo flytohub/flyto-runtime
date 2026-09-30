@@ -54,7 +54,7 @@ export const flyto2CapabilityInvocationSchema = z.object({
   invocation_id: z.string().trim().min(1).max(128),
   capability: z.string().trim().min(1).max(128),
   revision: z.number().int().positive().default(1),
-  operation_id: z.string().trim().min(1).max(128),
+  operation_id: z.string().trim().regex(/^[A-Za-z0-9._:-]{8,128}$/),
   workspace_id: z.string().trim().min(1).optional(),
   trace_id: z.string().trim().min(1).optional(),
   requested_at: z.string().trim().min(1),
@@ -71,18 +71,65 @@ export const flyto2CapabilityFailureSchema = z.object({
 
 export type Flyto2CapabilityFailure = z.infer<typeof flyto2CapabilityFailureSchema>;
 
+export const flyto2CapabilityOperationSchema = z.object({
+  kind: z.string().trim().min(1).max(128),
+  ref: z.string().trim().min(1).max(256),
+  state: z.enum(["pending", "running"]),
+}).strict();
+
+export type Flyto2CapabilityOperation = z.infer<typeof flyto2CapabilityOperationSchema>;
+
 export const flyto2CapabilityResultSchema = z.object({
   schema: z.literal(FLYTO2_EXECUTION_PROTOCOL_VERSION),
   invocation_id: z.string().trim().min(1).max(128),
   capability: z.string().trim().min(1).max(128),
   revision: z.number().int().positive(),
-  status: z.enum(["success", "failed"]),
+  status: z.enum(["accepted", "success", "failed"]),
   started_at: z.string().trim().min(1),
-  completed_at: z.string().trim().min(1),
+  completed_at: z.string().trim().min(1).optional(),
   output: z.record(z.string(), z.unknown()).default({}),
   evidence: z.array(flyto2EvidenceRefSchema).default([]),
+  operation: flyto2CapabilityOperationSchema.optional(),
   failure: flyto2CapabilityFailureSchema.optional(),
 }).strict().superRefine((value, ctx) => {
+  if (value.status === "accepted") {
+    if (!value.operation) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["operation"],
+        message: "accepted capability results require an operation handle",
+      });
+    }
+    if (value.completed_at) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["completed_at"],
+        message: "accepted capability results cannot be terminal",
+      });
+    }
+    if (value.failure) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["failure"],
+        message: "accepted capability results cannot include failure metadata",
+      });
+    }
+    return;
+  }
+  if (!value.completed_at) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["completed_at"],
+      message: "terminal capability results require completed_at",
+    });
+  }
+  if (value.operation) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["operation"],
+      message: "terminal capability results cannot include a running operation handle",
+    });
+  }
   if (value.status === "failed" && !value.failure) {
     ctx.addIssue({
       code: "custom",

@@ -72,6 +72,12 @@ migrated capability-by-capability. Do not perform a flag-day rewrite. A
 capability moves behind the registry only after its existing behavior has a
 focused adapter and regression coverage.
 
+Long-running capability admission is distinct from terminal success. An
+accepted invocation returns an opaque operation handle and shallow evidence;
+the caller may inspect that handle through a read-only status capability or the
+Runtime event stream. The provider registry never waits on behalf of Core or
+Cloud and never interprets `accepted` as successful task completion.
+
 The first migrated provider set is deliberately read-oriented:
 `workspace.open` (checkout only), `source.read`, `git.inspect`, and
 `review.diff`. `workspace.open` does not create an isolated worktree through
@@ -194,3 +200,4 @@ External filesystem changes use persistent native watches rather than polling. W
 11. Capability audit records are shallow by default; source text, command output, and secrets stay in bounded evidence stores or the local execution surface.
 12. Capability migration is incremental; the provider registry must not become a second hidden workflow engine.
 13. Side-effecting capability providers retain exactly-once `operation_id` admission/replay below the provider seam.
+14. Long-running capabilities report `accepted` separately from terminal success/failure and reuse Runtime durable process state.

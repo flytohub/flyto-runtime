@@ -6,11 +6,18 @@ import {
   type Flyto2Capability,
   type Flyto2CapabilityFailure,
   type Flyto2CapabilityInvocation,
+  type Flyto2CapabilityOperation,
   type Flyto2CapabilityResult,
   type Flyto2EvidenceRef,
 } from "./protocol.js";
 
 export type RuntimeCapabilityProviderOutcome =
+  | {
+      status: "accepted";
+      operation: Flyto2CapabilityOperation;
+      output?: Record<string, unknown>;
+      evidence?: Flyto2EvidenceRef[];
+    }
   | {
       status: "success";
       output?: Record<string, unknown>;
@@ -38,6 +45,7 @@ export interface RuntimeCapabilityProvider {
 
 export type RuntimeCapabilityAuditType =
   | "capability.started"
+  | "capability.accepted"
   | "capability.completed"
   | "capability.failed";
 
@@ -52,6 +60,7 @@ export interface RuntimeCapabilityAuditRecord {
   occurred_at: string;
   duration_ms?: number;
   evidence?: Flyto2EvidenceRef[];
+  operation?: Flyto2CapabilityOperation;
   failure?: Flyto2CapabilityFailure;
 }
 
@@ -123,7 +132,8 @@ export class RuntimeCapabilityRegistry {
       };
     }
 
-    const completedAt = new Date();
+    const resolvedAt = new Date();
+    const terminal = outcome.status !== "accepted";
     const result = flyto2CapabilityResultSchema.parse({
       schema: FLYTO2_EXECUTION_PROTOCOL_VERSION,
       invocation_id: invocation.invocation_id,
@@ -131,20 +141,26 @@ export class RuntimeCapabilityRegistry {
       revision: invocation.revision,
       status: outcome.status,
       started_at: startedAt.toISOString(),
-      completed_at: completedAt.toISOString(),
+      completed_at: terminal ? resolvedAt.toISOString() : undefined,
       output: outcome.output ?? {},
       evidence: outcome.evidence ?? [],
+      operation: outcome.status === "accepted" ? outcome.operation : undefined,
       failure: outcome.status === "failed" ? outcome.failure : undefined,
     });
 
     await this.audit?.append({
       ...auditRecord(
-        result.status === "success" ? "capability.completed" : "capability.failed",
+        result.status === "accepted"
+          ? "capability.accepted"
+          : result.status === "success"
+            ? "capability.completed"
+            : "capability.failed",
         invocation,
-        completedAt,
+        resolvedAt,
       ),
-      duration_ms: Math.max(0, completedAt.getTime() - startedAt.getTime()),
+      duration_ms: Math.max(0, resolvedAt.getTime() - startedAt.getTime()),
       evidence: result.evidence,
+      operation: result.operation,
       failure: result.failure,
     });
     return result;
