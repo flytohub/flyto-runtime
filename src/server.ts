@@ -48,6 +48,8 @@ import { DurableOperationStore, runDurableOperation } from "./flyto2/durable-ope
 import { withDurableToolHandlers } from "./flyto2/durable-tools.js";
 import { registerRuntimeTools } from "./flyto2/runtime-tools.js";
 import { RuntimeEventStore } from "./flyto2/runtime-events.js";
+import { createRuntimeCapabilityRegistry } from "./flyto2/capability-runtime.js";
+import type { RuntimeCapabilityRegistry } from "./flyto2/capability-provider.js";
 import { ReactiveCommandRunner } from "./flyto2/reactive-command.js";
 import { emitDurableToolEvent } from "./flyto2/tool-events.js";
 import { WorkspaceWatchRegistry } from "./flyto2/workspace-watch.js";
@@ -84,6 +86,7 @@ interface RunningServer {
   app: ReturnType<typeof express>;
   config: ServerConfig;
   localAgentProviders: LocalAgentProviderStatus[];
+  capabilityRegistry: RuntimeCapabilityRegistry;
   close(): Promise<void>;
 }
 
@@ -356,6 +359,11 @@ export function createServer(
   const hostTasks = new HostTaskStore(config.stateDir);
   const workspaces = new WorkspaceRegistry(config, workspaceStore);
   const reviewCheckpoints = createReviewCheckpointManager();
+  const capabilityRegistry = createRuntimeCapabilityRegistry({
+    workspaces,
+    reviewCheckpoints,
+    runtimeEvents,
+  });
   const processSessions = new ProcessSessionManager();
   const toolActivities = new ToolActivityTracker();
   const localAgentProviders = buildLocalAgentProviderStatuses(
@@ -544,6 +552,7 @@ export function createServer(
     app,
     config,
     localAgentProviders,
+    capabilityRegistry,
     close: () => {
       closePromise ??= (async () => {
         try {

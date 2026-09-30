@@ -13,6 +13,7 @@ Flyto2 Runtime is a standalone local execution runtime for coding and other mach
 - runtime capability self-description
 - canonical capability catalog and provider execution seam
 - shallow auditable capability lifecycle records
+- first read-oriented capability adapters behind a Runtime-owned composition root
 - optional Flyto2 Cloud bridge
 - durable Runtime event stream and one-shot event waits
 - reactive background commands with lazy local evidence

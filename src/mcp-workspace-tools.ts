@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 import * as z from "zod/v4";
 import type { ServerConfig } from "./config.js";
 import { AccessDeniedError } from "./roots.js";
-import { readFileTool } from "./pi-tools.js";
 import type { McpRegistrationTarget } from "./mcp-modern-server.js";
 import type { ReviewCheckpointManager } from "./review-checkpoints.js";
 import { conversationScopeIdFromRequestMeta } from "./request-meta.js";
@@ -34,6 +33,10 @@ import {
   workspaceIdDescription,
 } from "./tool-surfaces/types.js";
 import {
+  DEFAULT_WORKSPACE_READ_LIMIT_LINES,
+  readWorkspaceFile,
+} from "./workspace-read.js";
+import {
   formatAgentsPath,
   type WorkspaceContext,
   type WorkspaceRegistry,
@@ -54,11 +57,6 @@ interface OpenWorkspaceInput {
   mode?: "checkout" | "worktree";
   base_ref?: string;
 }
-
-const DEFAULT_READ_LIMIT_LINES = 240;
-const DEFAULT_READ_MAX_CHARS = 12_000;
-const READ_TRUNCATION_MARKER =
-  "\n... read output truncated; use a smaller line range or a targeted command ...\n";
 
 const workspaceSkillOutputSchema = z.object({
   name: z.string(),
@@ -609,7 +607,7 @@ function registerReadTool(options: WorkspaceToolRegistrationOptions): void {
     {
       title: "Read file",
       description:
-        `Read up to ${DEFAULT_READ_LIMIT_LINES} lines of a workspace file. Continue with offset when needed; also use it for instruction or skill paths returned by open_workspace.`,
+        `Read up to ${DEFAULT_WORKSPACE_READ_LIMIT_LINES} lines of a workspace file. Continue with offset when needed; also use it for instruction or skill paths returned by open_workspace.`,
       inputSchema: {
         workspace_id: z.string().describe(workspaceIdDescription),
         path: z
@@ -630,7 +628,7 @@ function registerReadTool(options: WorkspaceToolRegistrationOptions): void {
           .int()
           .positive()
           .optional()
-          .describe(`Maximum number of lines to read. Defaults to ${DEFAULT_READ_LIMIT_LINES}.`),
+          .describe(`Maximum number of lines to read. Defaults to ${DEFAULT_WORKSPACE_READ_LIMIT_LINES}.`),
       },
       outputSchema: resultOutputSchema(),
       annotations: { readOnlyHint: true },
@@ -638,16 +636,10 @@ function registerReadTool(options: WorkspaceToolRegistrationOptions): void {
     async ({ workspace_id, ...input }) => {
       const startedAt = performance.now();
       const workspaceId = workspace_id;
-      const workspace = await workspaces.getWorkspace(workspaceId);
-      const readPath = await workspaces.resolveReadPath(workspace, input.path);
-      const response = await readFileTool(
-        {
-          ...input,
-          path: readPath.absolutePath,
-          limit: input.limit ?? DEFAULT_READ_LIMIT_LINES,
-        },
-        { cwd: workspace.root },
-      );
+      const { response, result } = await readWorkspaceFile(workspaces, {
+        workspaceId,
+        ...input,
+      });
 
       if (response.isError) {
         logFailedToolResponse(config, {
@@ -666,7 +658,6 @@ function registerReadTool(options: WorkspaceToolRegistrationOptions): void {
         durationMs: Math.round(performance.now() - startedAt),
       });
 
-      const result = truncateReadResult(contentText(response.content));
       const content = config.toolMode === "codex"
         ? [textBlock(`Read ${input.path}; full model-readable text is in structuredContent.result.`)]
         : response.content;
@@ -680,15 +671,6 @@ function registerReadTool(options: WorkspaceToolRegistrationOptions): void {
       };
     },
   );
-}
-
-function truncateReadResult(result: string): string {
-  if (result.length <= DEFAULT_READ_MAX_CHARS) return result;
-
-  const available = DEFAULT_READ_MAX_CHARS - READ_TRUNCATION_MARKER.length;
-  const tailChars = Math.min(1_000, Math.floor(available / 4));
-  const headChars = Math.max(0, available - tailChars);
-  return `${result.slice(0, headChars)}${READ_TRUNCATION_MARKER}${result.slice(-tailChars)}`;
 }
 
 function registerShowChangesTool(options: WorkspaceToolRegistrationOptions): void {

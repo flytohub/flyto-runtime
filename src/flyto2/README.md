@@ -6,6 +6,8 @@ This directory contains the Flyto2-specific TypeScript surface layered onto the 
 - `capability-catalog.ts`: canonical Runtime capability declarations used by the manifest and provider admission.
 - `capability-provider.ts`: provider-neutral capability registry/execution seam. It owns no workspace, process, Git, Cloud, or persistence implementation.
 - `capability-audit.ts`: adapter from shallow capability audit records into the existing durable Runtime event stream.
+- `capability-runtime.ts`: Runtime-owned registry composition root.
+- `read-only-capabilities.ts`: first provider adapters for checkout workspace open, source read, Git inspect, and non-advancing review diff.
 - `manifest.ts`: standalone Runtime identity and capability manifest.
 - `cloud-bridge.ts`: optional outbound Flyto2 Cloud pairing/job transport.
 - `connected-runtime.ts`: dependency-injected claim/lease/progress/completion loop.

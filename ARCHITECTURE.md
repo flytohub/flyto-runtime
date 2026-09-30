@@ -72,6 +72,18 @@ migrated capability-by-capability. Do not perform a flag-day rewrite. A
 capability moves behind the registry only after its existing behavior has a
 focused adapter and regression coverage.
 
+The first migrated provider set is deliberately read-oriented:
+`workspace.open` (checkout only), `source.read`, `git.inspect`, and
+`review.diff`. `workspace.open` does not create an isolated worktree through
+this provider; worktree creation remains a separate future side-effecting
+capability. When a caller supplies a `trace_id`, repeated checkout opens in that
+trace reuse the same Runtime workspace. Opening the workspace establishes an
+internal Git-backed review checkpoint so later diffs are relative to open time,
+but it does not modify the checked-out files or expose local roots. `review.diff`
+never advances the MCP `show_changes` baseline.
+The normal MCP surface remains unchanged and may share lower-level helpers with
+providers so path containment and read semantics have one implementation.
+
 Side-effecting providers must preserve Runtime's existing `operation_id`
 admission/replay guarantee before they are exposed through this seam. The
 provider registry is not a replacement for `DurableOperationStore`; it is the
