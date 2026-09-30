@@ -32,7 +32,7 @@ export const flyto2AssignmentSchema = z.object({
   source: z.literal("flyto-cloud"),
   workspace_id: z.string().trim().min(1).optional(),
   trace_id: z.string().trim().min(1).optional(),
-  kind: z.enum(["workflow", "task", "command"]),
+  kind: z.enum(["workflow", "task", "command", "capability"]),
   objective: z.string().default(""),
   payload: z.record(z.string(), z.unknown()),
   received_at: z.string(),
@@ -71,10 +71,19 @@ export const flyto2CapabilityFailureSchema = z.object({
 
 export type Flyto2CapabilityFailure = z.infer<typeof flyto2CapabilityFailureSchema>;
 
+export const flyto2CapabilityFollowUpSchema = z.object({
+  capability: z.string().trim().min(1).max(128),
+  input: z.record(z.string(), z.unknown()).default({}),
+}).strict();
+
+export type Flyto2CapabilityFollowUp = z.infer<typeof flyto2CapabilityFollowUpSchema>;
+
 export const flyto2CapabilityOperationSchema = z.object({
   kind: z.string().trim().min(1).max(128),
   ref: z.string().trim().min(1).max(256),
   state: z.enum(["pending", "running"]),
+  wait: flyto2CapabilityFollowUpSchema.optional(),
+  inspect: flyto2CapabilityFollowUpSchema.optional(),
 }).strict();
 
 export type Flyto2CapabilityOperation = z.infer<typeof flyto2CapabilityOperationSchema>;
@@ -188,9 +197,23 @@ export function normalizeCloudJob(
 }
 
 function inferAssignmentKind(job: Record<string, unknown>): Flyto2Assignment["kind"] {
+  if (
+    stringField(job, "kind") === "capability"
+    || recordField(job, "capability_invocation") !== undefined
+  ) return "capability";
   if (typeof job.objective === "string" || typeof job.task === "object") return "task";
   if (typeof job.command === "string") return "command";
   return "workflow";
+}
+
+function recordField(
+  value: Record<string, unknown>,
+  key: string,
+): Record<string, unknown> | undefined {
+  const field = value[key];
+  return field && typeof field === "object" && !Array.isArray(field)
+    ? field as Record<string, unknown>
+    : undefined;
 }
 
 function stringField(value: Record<string, unknown>, key: string): string | undefined {

@@ -78,6 +78,26 @@ the caller may inspect that handle through a read-only status capability or the
 Runtime event stream. The provider registry never waits on behalf of Core or
 Cloud and never interprets `accepted` as successful task completion.
 
+Accepted operation handles may include self-describing `wait` and `inspect`
+follow-ups. These are capability names plus provider-neutral input, not direct
+references to Runtime classes or storage. This lets Core/Cloud follow a durable
+operation through `event.wait`, `process.status`, and policy-gated
+`evidence.read` without learning job-table or filesystem details.
+
+### Capability transport seam
+
+`src/flyto2/capability-transport.ts` is deliberately smaller than any product
+integration. It exposes only the live manifest and versioned capability
+invocation/result envelopes. It does not import Flyto2 Cloud, workspace
+implementations, Git, process runners, or storage.
+
+Optional product adapters sit outside that seam. The Cloud capability
+assignment adapter translates a Cloud assignment into a capability invocation,
+uses self-describing wait follow-ups for accepted operations, and replays the
+same original `operation_id` after the terminal event. It does not start a
+second workflow engine and is not enabled merely by booting standalone Runtime.
+Core can consume the same transport contract without using the Cloud adapter.
+
 The first migrated provider set is deliberately read-oriented:
 `workspace.open` (checkout only), `source.read`, `git.inspect`, and
 `review.diff`. `workspace.open` does not create an isolated worktree through
@@ -216,3 +236,7 @@ External filesystem changes use persistent native watches rather than polling. W
 15. Mutation capability modules are optional; Runtime can boot and operate read-only without them.
 16. `git.mutate` remains local-only at this boundary and must not grow implicit push/reset/clean/checkout behavior.
 17. A live Runtime manifest advertises registered providers, never the entire catalog by default.
+18. Durable operation follow-ups are capability contracts, not Runtime-internal API calls or polling loops.
+19. Raw evidence reads are policy-gated and workspace-scoped; shallow events remain the default observation path.
+20. Core/Cloud adapters depend on the capability transport contract; the transport never depends on Core or Cloud implementations.
+21. Accepted Cloud capability assignments resume through contract follow-ups and original `operation_id` replay, never by rerunning the side effect blindly.

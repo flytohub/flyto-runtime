@@ -33,6 +33,7 @@ test("runtime capability catalog has stable unique id and revision pairs", () =>
   assert.ok(keys.includes("process.status@1"));
   assert.equal(catalog.find(({ id }) => id === "test.run")?.approval, "policy");
   assert.equal(catalog.find(({ id }) => id === "build.run")?.approval, "policy");
+  assert.equal(catalog.find(({ id }) => id === "evidence.read")?.approval, "policy");
 });
 
 test("registry admits only catalog-matching providers", () => {

@@ -27,7 +27,7 @@ test("test.run uses a declared package script once and exposes durable process s
   await writeFile(join(project, "package.json"), JSON.stringify({
     packageManager: "npm@11.6.1",
     scripts: {
-      test: "node -e \"setTimeout(() => process.exit(0), 120)\"",
+      test: "node -e \"console.log('capability-test-ok'); setTimeout(() => process.exit(0), 120)\"",
       build: "node -e \"process.exit(0)\"",
     },
   }));
@@ -52,6 +52,7 @@ test("test.run uses a declared package script once and exposes durable process s
     reviewCheckpoints,
     runtimeEvents,
     execution: { reactiveCommands, durableOperations },
+    observability: { reactiveCommands },
   });
   t.after(async () => {
     reactiveCommands.shutdown();
@@ -69,6 +70,8 @@ test("test.run uses a declared package script once and exposes durable process s
   const started = await registry.execute(run);
   assert.equal(started.status, "accepted");
   assert.equal(started.operation?.kind, "process");
+  assert.equal(started.operation?.wait?.capability, "event.wait");
+  assert.equal(started.operation?.inspect?.capability, "process.status");
   const sessionId = String(started.operation?.ref);
   const jobId = reactiveJobIdFromSessionId(sessionId);
   await new Promise<void>((resolve, reject) => {
@@ -93,6 +96,20 @@ test("test.run uses a declared package script once and exposes durable process s
   assert.equal(status.status, "success");
   assert.equal(status.output.status, "completed");
   assert.equal(status.output.exit_code, 0);
+
+  const waitFollowUp = started.operation?.wait;
+  assert.ok(waitFollowUp);
+  const waited = await registry.execute(invocation("wait", waitFollowUp.capability, waitFollowUp.input));
+  assert.equal(waited.status, "success");
+  assert.equal(waited.output.matched, true);
+
+  const evidenceRef = String(started.evidence[0]?.ref);
+  const evidence = await registry.execute(invocation("evidence", "evidence.read", {
+    workspace_id: workspaceId,
+    ref: evidenceRef,
+  }));
+  assert.equal(evidence.status, "success");
+  assert.match(String(evidence.output.text), /capability-test-ok/);
 
   const replay = await registry.execute(run);
   assert.equal(replay.status, "success");

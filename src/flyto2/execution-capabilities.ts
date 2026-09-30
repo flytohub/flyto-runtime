@@ -108,7 +108,13 @@ function packageScriptProvider(
       const job = reactiveCommands.get(durable.value.job_id);
       return job && job.status !== "running"
         ? terminalJobOutcome(job, durable.replayed, project.packageManager, script)
-        : acceptedJobOutcome(durable.value, durable.replayed, project.packageManager, script);
+        : acceptedJobOutcome(
+            durable.value,
+            durable.replayed,
+            project.packageManager,
+            script,
+            input.workspace_id,
+          );
     },
   };
 }
@@ -146,11 +152,31 @@ function acceptedJobOutcome(
   replayed: boolean,
   packageManager: string,
   script: string,
+  workspaceId: string,
 ): RuntimeCapabilityProviderOutcome {
   const sessionId = reactiveJobSessionId(receipt.job_id);
   return {
     status: "accepted",
-    operation: { kind: "process", ref: sessionId, state: "running" },
+    operation: {
+      kind: "process",
+      ref: sessionId,
+      state: "running",
+      wait: {
+        capability: "event.wait",
+        input: {
+          workspace_id: workspaceId,
+          correlation_id: receipt.job_id,
+          type: receipt.event_type,
+        },
+      },
+      inspect: {
+        capability: "process.status",
+        input: {
+          workspace_id: workspaceId,
+          session_id: sessionId,
+        },
+      },
+    },
     output: {
       session_id: sessionId,
       package_manager: packageManager,

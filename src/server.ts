@@ -220,6 +220,9 @@ export function createMcpServer(
     mutation: {
       durableOperations,
     },
+    observability: {
+      reactiveCommands,
+    },
   });
   const server = new McpServer(
     mcpServerInfo(),
@@ -384,6 +387,9 @@ export function createServer(
     },
     mutation: {
       durableOperations,
+    },
+    observability: {
+      reactiveCommands,
     },
   });
   const processSessions = new ProcessSessionManager();

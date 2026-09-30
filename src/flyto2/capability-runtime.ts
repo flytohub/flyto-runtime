@@ -6,6 +6,7 @@ import { RuntimeCapabilityRegistry } from "./capability-provider.js";
 import type { DurableOperationStore } from "./durable-operations.js";
 import { registerExecutionRuntimeCapabilities } from "./execution-capabilities.js";
 import { registerMutationRuntimeCapabilities } from "./mutation-capabilities.js";
+import { registerObservabilityRuntimeCapabilities } from "./observability-capabilities.js";
 import { registerReadOnlyRuntimeCapabilities } from "./read-only-capabilities.js";
 import type { ReactiveCommandRunner } from "./reactive-command.js";
 import type { RuntimeEventStore } from "./runtime-events.js";
@@ -20,6 +21,9 @@ export interface CreateRuntimeCapabilityRegistryOptions {
   };
   mutation?: {
     durableOperations: DurableOperationStore;
+  };
+  observability?: {
+    reactiveCommands: ReactiveCommandRunner;
   };
 }
 
@@ -43,6 +47,13 @@ export function createRuntimeCapabilityRegistry(
       workspaces: options.workspaces,
       reviewCheckpoints: options.reviewCheckpoints,
       durableOperations: options.mutation.durableOperations,
+    });
+  }
+  if (options.observability) {
+    registerObservabilityRuntimeCapabilities(registry, {
+      workspaces: options.workspaces,
+      runtimeEvents: options.runtimeEvents,
+      reactiveCommands: options.observability.reactiveCommands,
     });
   }
   return registry;

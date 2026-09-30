@@ -17,7 +17,7 @@ const CAPABILITY_DEFINITIONS = [
   ["agent.delegate", "high", "policy", ["agent", "log"]],
   ["event.stream", "low", "none", ["event"]],
   ["event.wait", "low", "none", ["event"]],
-  ["evidence.read", "low", "none", ["log", "evidence"]],
+  ["evidence.read", "medium", "policy", ["log", "evidence"]],
   ["process.reactive", "high", "policy", ["process", "event", "log"]],
   ["file.watch", "medium", "policy", ["event"]],
 ] as const satisfies readonly [
