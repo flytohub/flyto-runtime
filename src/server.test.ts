@@ -594,7 +594,11 @@ test("Codex process_status exposes running progress without waiting", async (t) 
   assert.match(String(observed.result), /phase-one-ready/);
   assert.ok(performance.now() - observedAt < 1_000, "process_status must be an immediate snapshot");
 
-  await new Promise((resolve) => setTimeout(resolve, 1_200));
+  // exec_command intentionally yields after about 750ms while the child keeps
+  // running. Leave enough headroom for slower hosted macOS runners to observe
+  // the child's exit and persist its terminal event without turning this into
+  // a polling test.
+  await new Promise((resolve) => setTimeout(resolve, 2_000));
   const finished = structuredContent(await context.client.callTool({
     name: "process_status",
     arguments: {
