@@ -113,7 +113,13 @@ export class RuntimeEventStore {
 
     const event = transaction.immediate();
     this.emitter.emit("event", event.sequence);
+    this.emitter.emit("record", event);
     return event;
+  }
+
+  onEvent(listener: (event: RuntimeEvent) => void): () => void {
+    this.emitter.on("record", listener);
+    return () => this.emitter.off("record", listener);
   }
 
   list(query: RuntimeEventQuery = {}): RuntimeEvent[] {

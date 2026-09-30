@@ -156,6 +156,30 @@ Host header, preventing the public MCP/tunnel URL from becoming a direct machine
 execution endpoint. Core therefore communicates over the wire contract rather
 than importing Runtime providers, state stores, or TypeScript types.
 
+### Event-driven long-task continuation
+
+Long-running processes are not kept alive by a ChatGPT response stream. Runtime
+owns the process session and evidence while the host remains the task owner.
+Meaningful state changes are projected into generic Runtime events:
+
+- `process.completed`
+- `process.failed`
+- `process.stalled`
+- `task.needs_attention`
+
+The authenticated `/mcp` endpoint implements the ChatGPT MCP Events draft for
+event discovery, subscription, unsubscribe, callback verification, and webhook
+delivery. Subscription state is persistent. Deliveries use Standard Webhooks
+HMAC signatures and a DNS-pinned HTTPS connection after public-address
+validation; redirects are not followed.
+
+Events are advisory continuation signals, not a replacement for durable state.
+When a process fails or becomes orphaned, the owning Host Task is reconciled to
+`needs_attention` without being auto-completed. On startup, Runtime repairs stale
+active tasks whose latest owning process already failed. If an event callback is
+missed, `open_workspace` exposes the attention reason and process recovery data
+so ChatGPT can resume from evidence rather than rerunning the failed command.
+
 The Runtime composition root also keeps provider modules optional. Read-only,
 durable execution, and local mutation modules may be enabled independently.
 Core or Cloud integration never changes which lower-level Runtime modules are
@@ -274,3 +298,5 @@ External filesystem changes use persistent native watches rather than polling. W
 23. Standalone Runtime explicitly enables the full production capability profile; composed callers may select bundles without changing the wire contract.
 24. Agent delegation is an optional Runtime bundle over the existing local-agent lifecycle; provider credentials and provider sessions never become cross-product contract state.
 25. Same-machine Core/Runtime composition crosses an authenticated localhost wire bridge; it never imports Runtime implementation or exposes the bridge through the public tunnel host.
+26. MCP Events are the primary push signal for meaningful long-task state changes; durable process/task recovery remains authoritative when delivery is missed.
+27. Failed/orphaned processes may move an owning Host Task to `needs_attention`, but Runtime never auto-completes or advances the ChatGPT-owned task plan.

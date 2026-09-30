@@ -88,6 +88,7 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
         status: z.enum(["active", "completed", "failed", "stopped"]),
         execution_state: z.enum([
           "waiting_for_host",
+          "needs_attention",
           "completed",
           "failed",
           "stopped",
@@ -108,6 +109,8 @@ export function registerBackgroundTaskTool(context: ToolRegistrationContext): vo
         }).optional(),
         original_prompt: z.string().optional(),
         checkpoint: z.string().optional(),
+        attention_reason: z.string().optional(),
+        attention_at: z.string().optional(),
         response: z.string().optional(),
       }),
       annotations: BACKGROUND_TASK_ANNOTATIONS,
@@ -338,6 +341,8 @@ function recordResult(
     plan: record.plan ? planOutput(record.plan) : undefined,
     original_prompt: originalPrompt,
     checkpoint,
+    attention_reason: record.attentionReason,
+    attention_at: record.attentionAt,
     response,
   });
 }
@@ -422,6 +427,8 @@ function toolResult(
     };
     original_prompt?: string;
     checkpoint?: string;
+    attention_reason?: string;
+    attention_at?: string;
     response?: string;
   },
   isError = false,

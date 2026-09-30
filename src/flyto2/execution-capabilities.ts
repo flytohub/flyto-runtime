@@ -229,6 +229,11 @@ function processRecordOutput(job: ReactiveJobRecord): Record<string, unknown> {
     command_digest: job.command_digest,
     started_at: job.started_at,
     completed_at: job.completed_at,
+    elapsed_ms: job.elapsed_ms,
+    evidence_bytes: job.evidence_bytes,
+    last_activity_at: job.last_activity_at,
+    idle_ms: job.idle_ms,
+    suspected_stall: job.suspected_stall,
   };
 }
 

@@ -4,6 +4,7 @@ import { openDatabase, type DatabaseHandle } from "../db/client.js";
 export type HostTaskStatus = "active" | "completed" | "stopped";
 export type HostTaskExecutionState =
   | "waiting_for_host"
+  | "needs_attention"
   | "completed"
   | "stopped";
 export type HostTaskPlanStageStatus = "pending" | "running" | "done" | "blocked";
@@ -29,6 +30,8 @@ export interface HostTaskRecord {
   plan?: HostTaskPlan;
   checkpoint?: string;
   result?: string;
+  attentionReason?: string;
+  attentionAt?: string;
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
@@ -39,6 +42,7 @@ export function hostTaskExecutionState(
 ): HostTaskExecutionState {
   if (record.status === "completed") return "completed";
   if (record.status === "stopped") return "stopped";
+  if (record.attentionReason) return "needs_attention";
   return "waiting_for_host";
 }
 
@@ -52,6 +56,8 @@ interface HostTaskRow {
   plan_json: string | null;
   checkpoint: string | null;
   result: string | null;
+  attention_reason: string | null;
+  attention_at: string | null;
   created_at: string;
   updated_at: string;
   completed_at: string | null;
@@ -106,7 +112,7 @@ export class HostTaskStore {
   get(id: string): HostTaskRecord | undefined {
     const row = this.database.sqlite.prepare(
       `select id, workspace_id, repo_root, workspace_root, prompt, status, plan_json, checkpoint,
-              result, created_at, updated_at, completed_at
+              result, attention_reason, attention_at, created_at, updated_at, completed_at
        from host_tasks
        where id = ?`,
     ).get(id) as HostTaskRow | undefined;
@@ -116,7 +122,7 @@ export class HostTaskStore {
   findLatestActiveByRoot(workspaceRoot: string): HostTaskRecord | undefined {
     const row = this.database.sqlite.prepare(
       `select id, workspace_id, repo_root, workspace_root, prompt, status, plan_json, checkpoint,
-              result, created_at, updated_at, completed_at
+              result, attention_reason, attention_at, created_at, updated_at, completed_at
        from host_tasks
        where workspace_root = ? and status = 'active'
        order by updated_at desc, rowid desc
@@ -128,7 +134,7 @@ export class HostTaskStore {
   findLatestByRoot(workspaceRoot: string): HostTaskRecord | undefined {
     const row = this.database.sqlite.prepare(
       `select id, workspace_id, repo_root, workspace_root, prompt, status, plan_json, checkpoint,
-              result, created_at, updated_at, completed_at
+              result, attention_reason, attention_at, created_at, updated_at, completed_at
        from host_tasks
        where workspace_root = ?
        order by updated_at desc, rowid desc
@@ -140,7 +146,7 @@ export class HostTaskStore {
   findLatestActiveByRepoRoot(repoRoot: string): HostTaskRecord | undefined {
     const row = this.database.sqlite.prepare(
       `select id, workspace_id, repo_root, workspace_root, prompt, status, plan_json, checkpoint,
-              result, created_at, updated_at, completed_at
+              result, attention_reason, attention_at, created_at, updated_at, completed_at
        from host_tasks
        where repo_root = ? and status = 'active'
        order by updated_at desc, rowid desc
@@ -149,10 +155,48 @@ export class HostTaskStore {
     return row ? hostTaskFromRow(row) : undefined;
   }
 
+  findLatestActiveByWorkspaceId(workspaceId: string): HostTaskRecord | undefined {
+    const row = this.database.sqlite.prepare(
+      `select id, workspace_id, repo_root, workspace_root, prompt, status, plan_json, checkpoint,
+              result, attention_reason, attention_at, created_at, updated_at, completed_at
+       from host_tasks
+       where workspace_id = ? and status = 'active'
+       order by updated_at desc
+       limit 1`,
+    ).get(workspaceId) as HostTaskRow | undefined;
+    return row ? hostTaskFromRow(row) : undefined;
+  }
+
+  listActiveByRepoRoot(repoRoot: string): HostTaskRecord[] {
+    const rows = this.database.sqlite.prepare(
+      `select id, workspace_id, repo_root, workspace_root, prompt, status, plan_json, checkpoint,
+              result, attention_reason, attention_at, created_at, updated_at, completed_at
+       from host_tasks
+       where repo_root = ? and status = 'active'
+       order by updated_at desc`,
+    ).all(repoRoot) as HostTaskRow[];
+    return rows.map(hostTaskFromRow);
+  }
+
+  listActive(limit = 128): HostTaskRecord[] {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 512) {
+      throw new Error("Host task list limit must be an integer between 1 and 512.");
+    }
+    const rows = this.database.sqlite.prepare(
+      `select id, workspace_id, repo_root, workspace_root, prompt, status, plan_json, checkpoint,
+              result, attention_reason, attention_at, created_at, updated_at, completed_at
+       from host_tasks
+       where status = 'active'
+       order by updated_at desc
+       limit ?`,
+    ).all(limit) as HostTaskRow[];
+    return rows.map(hostTaskFromRow);
+  }
+
   findLatestByRepoRoot(repoRoot: string): HostTaskRecord | undefined {
     const row = this.database.sqlite.prepare(
       `select id, workspace_id, repo_root, workspace_root, prompt, status, plan_json, checkpoint,
-              result, created_at, updated_at, completed_at
+              result, attention_reason, attention_at, created_at, updated_at, completed_at
        from host_tasks
        where repo_root = ?
        order by updated_at desc, rowid desc
@@ -180,7 +224,7 @@ export class HostTaskStore {
     const now = new Date().toISOString();
     this.database.sqlite.prepare(
       `update host_tasks
-       set checkpoint = ?, updated_at = ?
+       set checkpoint = ?, attention_reason = null, attention_at = null, updated_at = ?
        where id = ? and status = 'active'`,
     ).run(checkpoint, now, id);
     return this.get(id);
@@ -201,10 +245,30 @@ export class HostTaskStore {
     const now = new Date().toISOString();
     this.database.sqlite.prepare(
       `update host_tasks
-       set plan_json = ?, updated_at = ?
+       set plan_json = ?, attention_reason = null, attention_at = null, updated_at = ?
        where id = ? and status = 'active'`,
     ).run(serializePlan(plan), now, id);
     return this.get(id);
+  }
+
+  markNeedsAttention(id: string, reason: string): HostTaskRecord | undefined {
+    const normalized = reason.trim();
+    if (!normalized) throw new Error("Host task attention reason cannot be empty.");
+    const now = new Date().toISOString();
+    this.database.sqlite.prepare(
+      `update host_tasks
+       set attention_reason = ?, attention_at = ?, updated_at = ?
+       where id = ? and status = 'active'`,
+    ).run(normalized, now, now, id);
+    return this.get(id);
+  }
+
+  markLatestActiveNeedsAttentionByRepoRoot(
+    repoRoot: string,
+    reason: string,
+  ): HostTaskRecord | undefined {
+    const current = this.findLatestActiveByRepoRoot(repoRoot);
+    return current ? this.markNeedsAttention(current.id, reason) : undefined;
   }
 
   complete(id: string, result?: string): HostTaskRecord | undefined {
@@ -219,7 +283,8 @@ export class HostTaskStore {
       : undefined;
     this.database.sqlite.prepare(
       `update host_tasks
-       set status = 'completed', result = ?, plan_json = ?, updated_at = ?, completed_at = ?
+       set status = 'completed', result = ?, plan_json = ?, attention_reason = null,
+           attention_at = null, updated_at = ?, completed_at = ?
        where id = ? and status = 'active'`,
     ).run(result ?? null, serializePlan(completedPlan), now, now, id);
     return this.get(id);
@@ -229,7 +294,8 @@ export class HostTaskStore {
     const now = new Date().toISOString();
     this.database.sqlite.prepare(
       `update host_tasks
-       set status = 'stopped', result = ?, updated_at = ?, completed_at = ?
+       set status = 'stopped', result = ?, attention_reason = null, attention_at = null,
+           updated_at = ?, completed_at = ?
        where id = ? and status = 'active'`,
     ).run(reason ?? null, now, now, id);
     return this.get(id);
@@ -251,6 +317,8 @@ function hostTaskFromRow(row: HostTaskRow): HostTaskRecord {
     plan: parsePlan(row.plan_json),
     checkpoint: row.checkpoint ?? undefined,
     result: row.result ?? undefined,
+    attentionReason: row.attention_reason ?? undefined,
+    attentionAt: row.attention_at ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     completedAt: row.completed_at ?? undefined,

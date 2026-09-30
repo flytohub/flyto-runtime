@@ -91,13 +91,15 @@ const workspaceAvailableAgentsFileOutputSchema = z.object({
 const workspaceRecoveryOutputSchema = z.object({
   task_id: z.string(),
   status: z.enum(["active", "completed", "stopped"]),
-  execution_state: z.enum(["waiting_for_host", "completed", "stopped"]),
+  execution_state: z.enum(["waiting_for_host", "needs_attention", "completed", "stopped"]),
   updated_at: z.string(),
   workspace_id: z.string(),
   workspace_root: z.string(),
   repository_root: z.string(),
   original_prompt: z.string(),
   checkpoint: z.string().optional(),
+  attention_reason: z.string().optional(),
+  attention_at: z.string().optional(),
   response: z.string().optional(),
   active_processes: z.array(z.object({
     session_id: z.string(),
@@ -105,6 +107,11 @@ const workspaceRecoveryOutputSchema = z.object({
     started_at: z.string(),
     event_type: z.string(),
     command_digest: z.string(),
+    elapsed_ms: z.number().int().nonnegative(),
+    evidence_bytes: z.number().int().nonnegative(),
+    last_activity_at: z.string(),
+    idle_ms: z.number().int().nonnegative(),
+    suspected_stall: z.boolean(),
     progress: z.string().optional(),
   })).optional(),
 });
@@ -425,13 +432,15 @@ function workspaceInstruction(
 interface WorkspaceRecovery {
   task_id: string;
   status: "active" | "completed" | "stopped";
-  execution_state: "waiting_for_host" | "completed" | "stopped";
+  execution_state: "waiting_for_host" | "needs_attention" | "completed" | "stopped";
   updated_at: string;
   workspace_id: string;
   workspace_root: string;
   repository_root: string;
   original_prompt: string;
   checkpoint?: string;
+  attention_reason?: string;
+  attention_at?: string;
   response?: string;
   active_processes?: WorkspaceRecoveryProcess[];
 }
@@ -442,6 +451,11 @@ interface WorkspaceRecoveryProcess {
   started_at: string;
   event_type: string;
   command_digest: string;
+  elapsed_ms: number;
+  evidence_bytes: number;
+  last_activity_at: string;
+  idle_ms: number;
+  suspected_stall: boolean;
   progress?: string;
 }
 
@@ -475,6 +489,8 @@ function workspaceRecovery(
     repository_root: record.repoRoot,
     original_prompt: recoveryPreview(record.prompt, RECOVERY_PROMPT_CHARS) ?? "",
     checkpoint: recoveryPreview(record.checkpoint, RECOVERY_CHECKPOINT_CHARS),
+    attention_reason: recoveryPreview(record.attentionReason, 1_000),
+    attention_at: record.attentionAt,
     response: recoveryPreview(record.result, RECOVERY_RESPONSE_CHARS),
     active_processes: activeProcesses.length > 0 ? activeProcesses : undefined,
   };
@@ -502,6 +518,11 @@ function workspaceRecoveryProcess(
     started_at: job.started_at,
     event_type: job.event_type,
     command_digest: job.command_digest,
+    elapsed_ms: job.elapsed_ms,
+    evidence_bytes: job.evidence_bytes,
+    last_activity_at: job.last_activity_at,
+    idle_ms: job.idle_ms,
+    suspected_stall: job.suspected_stall,
     progress,
   };
 }
@@ -518,6 +539,9 @@ function recoveryInstruction(recovery: WorkspaceRecovery): string {
   }
   if (recovery.status === "stopped") {
     return `Recovered latest durable task ${recovery.task_id}: stopped. Do not silently restart it; inspect the structured recovery field before deciding whether the user's current request requires new work.`;
+  }
+  if (recovery.execution_state === "needs_attention") {
+    return `Recovered unfinished durable task ${recovery.task_id}: needs_attention. Inspect attention_reason and the latest process evidence before doing anything else. Reuse the existing session/evidence when available, correct the failure, then save a new checkpoint with background_task continue; do not blindly rerun the failed command.`;
   }
   const activeProcessInstruction = recovery.active_processes?.length
     ? ` Active durable processes already exist for this repository: ${recovery.active_processes.map((process) => `${process.session_id} (workspace ${process.workspace_id})`).join(", ")}. Before launching any command that may duplicate their work, inspect the relevant existing session with process_status using its listed workspace_id and session_id. Do not rerun matching side effects or start another watcher for the same remote operation.`

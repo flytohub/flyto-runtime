@@ -192,6 +192,27 @@ same-user token stored at `<stateDir>/capability-bridge.token` (0600 on POSIX)
 in the `x-flyto2-capability-token` header. Both the TCP peer and Host header must
 be loopback, so the public MCP/tunnel URL cannot be used as an execution bridge.
 
+### Durable continuation with MCP Events
+
+Runtime supports the ChatGPT MCP Events draft (`2026-07-28`) on the same
+authenticated `/mcp` endpoint as its tools. The event catalog exposes
+`process.completed`, `process.failed`, `process.stalled`, and
+`task.needs_attention`. A ChatGPT chat can subscribe with webhook delivery so a
+long-running Runtime process can call the subscribed chat back when meaningful
+state changes instead of requiring continuous polling.
+
+Subscriptions are persisted in Runtime state across restarts. Callback URLs are
+verified before activation, must use public HTTPS destinations, are re-resolved
+for every connection, and receive Standard Webhooks HMAC signatures. Private,
+loopback, link-local, multicast, documentation, and other non-public addresses
+are rejected. Runtime does not follow callback redirects.
+
+MCP Events are the push path, not the only recovery path. Process evidence,
+Host Task checkpoints, `process_status`, and `open_workspace` recovery remain
+durable fallbacks. If a terminal process fails or becomes orphaned, Runtime
+moves the owning ChatGPT task to `needs_attention` rather than leaving it looking
+indefinitely active.
+
 ## Desktop and background service
 
 Flyto2 Runtime is designed to stay available after setup.

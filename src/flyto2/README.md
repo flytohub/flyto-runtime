@@ -10,6 +10,8 @@ This directory contains the Flyto2-specific TypeScript surface layered onto the 
 - `capability-bundles.ts`: explicit standalone/read-only/custom capability profiles for selective composition.
 - `agent-capabilities.ts`: optional delegated-agent adapter over the existing local-agent daemon/session lifecycle.
 - `local-capability-bridge.ts`: localhost-only same-user cross-process transport for Core or other non-TypeScript consumers.
+- `mcp-events.ts`: persistent ChatGPT MCP Events subscriptions and signed webhook delivery for meaningful durable process/task state changes.
+- `task-process-closure.ts`: aligns failed/orphaned process terminals with ChatGPT-owned Host Task `needs_attention` state.
 - `read-only-capabilities.ts`: first provider adapters for checkout workspace open, source read, Git inspect, and non-advancing review diff.
 - `execution-capabilities.ts`: policy-gated package test/build providers plus read-only durable process status.
 - `mutation-capabilities.ts`: optional policy-gated source patching and local Git stage/commit providers. It deliberately excludes push/reset/clean/checkout.
@@ -51,6 +53,13 @@ transport as in-process composition, accepts the same wire envelopes, and
 requires a persistent same-user bridge token. It is not an MCP surface, not a
 workflow engine, and is rejected unless both the socket peer and Host header are
 loopback.
+
+Long-running host continuation uses two complementary paths. MCP Events can push
+`process.completed`, `process.failed`, `process.stalled`, and
+`task.needs_attention` to a subscribed ChatGPT chat. Durable Runtime state stays
+authoritative when delivery is unavailable: process snapshots include elapsed
+time, evidence bytes, last activity, idle duration, and a stall heuristic;
+`open_workspace` recovers Host Tasks and identifies `needs_attention` explicitly.
 
 Capability registration is grouped into explicit bundles: `read`, `execution`, `mutation`, `observability`, and optional `agent`. The standalone server uses the core standalone profile and adds the agent bundle only when subagents are enabled. Embedded/composed callers may select a smaller profile without importing or initializing unrelated execution/mutation/agent state. The live manifest still advertises capabilities, not bundle implementation details.
 

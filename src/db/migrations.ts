@@ -82,6 +82,16 @@ const migrations: Migration[] = [
     name: "host-task-repo-identity",
     up: migrateHostTaskRepoIdentity,
   },
+  {
+    version: 16,
+    name: "host-task-attention-state",
+    up: migrateHostTaskAttentionState,
+  },
+  {
+    version: 17,
+    name: "mcp-event-subscriptions",
+    up: migrateMcpEventSubscriptions,
+  },
 ];
 
 export const FLYTO2_STATE_SCHEMA_VERSION =
@@ -452,6 +462,35 @@ function migrateHostTaskRepoIdentity(sqlite: Database.Database): void {
   sqlite.exec(`
     create index if not exists host_tasks_repo_root_idx
       on host_tasks(repo_root, status, updated_at desc);
+  `);
+}
+
+function migrateHostTaskAttentionState(sqlite: Database.Database): void {
+  addColumnIfMissing(sqlite, "host_tasks", "attention_reason", "text");
+  addColumnIfMissing(sqlite, "host_tasks", "attention_at", "text");
+}
+
+function migrateMcpEventSubscriptions(sqlite: Database.Database): void {
+  sqlite.exec(`
+    create table if not exists flyto2_mcp_event_subscriptions (
+      id text primary key,
+      principal text not null,
+      name text not null,
+      arguments_json text not null,
+      callback_url text not null,
+      signing_secret text not null,
+      status text not null,
+      created_at text not null,
+      updated_at text not null,
+      verified_at text not null,
+      expires_at text not null
+    );
+
+    create index if not exists flyto2_mcp_event_subscriptions_event_idx
+      on flyto2_mcp_event_subscriptions(name, status, expires_at);
+
+    create index if not exists flyto2_mcp_event_subscriptions_principal_idx
+      on flyto2_mcp_event_subscriptions(principal, updated_at desc);
   `);
 }
 

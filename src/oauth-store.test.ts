@@ -59,6 +59,8 @@ async function testDatabaseConfiguration(stateDir: string): Promise<void> {
       { version: 13, name: "host-tasks" },
       { version: 14, name: "host-task-plans" },
       { version: 15, name: "host-task-repo-identity" },
+      { version: 16, name: "host-task-attention-state" },
+      { version: 17, name: "mcp-event-subscriptions" },
     ]);
   } finally {
     database.close();

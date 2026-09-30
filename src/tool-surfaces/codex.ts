@@ -34,6 +34,10 @@ type CodexSessionId = string;
 interface CodexProcessSnapshot extends Omit<ProcessSnapshot, "sessionId"> {
   sessionId?: CodexSessionId;
   nextAction?: "continue" | "done";
+  evidenceBytes?: number;
+  lastActivityAt?: string;
+  idleMs?: number;
+  suspectedStall?: boolean;
 }
 
 const CODEX_DURABLE_EVENT_TYPE = "codex.exec.exited";
@@ -70,7 +74,9 @@ function processStatus(snapshot: CodexProcessSnapshot, legacyShell = false): str
   return snapshot.running
     ? legacyShell
       ? `Still running (session ${snapshot.sessionId}). Get more output with this same bash tool using command exactly: ${LEGACY_JOB_COMMAND} ${snapshot.sessionId} (append --cancel to stop it). Do not rerun the original command.`
-      : `Process is running durably with session_id=${snapshot.sessionId}. This background process does not end the assistant turn. Continue independent work normally. When the result is required, call process_status with the same session_id; it returns an immediate snapshot and never waits. Never rerun the original command and do not busy-poll.`
+      : snapshot.suspectedStall
+        ? `Process is still alive with session_id=${snapshot.sessionId}, but no output progress has been observed for ${Math.round((snapshot.idleMs ?? 0) / 1_000)} seconds. Runtime's adaptive stall watchdog is active. Inspect this same session later; do not rerun the original command.`
+        : `Process is running durably with session_id=${snapshot.sessionId}. This background process does not end the assistant turn. Continue independent work normally. When the result is required, call process_status with the same session_id; it returns an immediate snapshot and never waits. Never rerun the original command and do not busy-poll.`
     : snapshot.signal === CODEX_UNCERTAIN_OUTCOME_SIGNAL
       ? "Process outcome is uncertain. Do not rerun the command blindly."
       : snapshot.signal
@@ -92,6 +98,10 @@ function processOutputSchema(): z.ZodRawShape {
     exit_code: z.number().int().optional(),
     signal: z.string().optional(),
     wall_time_ms: z.number().nonnegative(),
+    evidence_bytes: z.number().int().nonnegative().optional(),
+    last_activity_at: z.string().optional(),
+    idle_ms: z.number().int().nonnegative().optional(),
+    suspected_stall: z.boolean().optional(),
     output_truncated: z.boolean(),
     next_action: z.enum(["continue", "done"]).optional(),
   });
@@ -112,6 +122,10 @@ function processToolResponse(snapshot: CodexProcessSnapshot, legacyShell = false
       exit_code: snapshot.exitCode,
       signal: snapshot.signal,
       wall_time_ms: snapshot.wallTimeMs,
+      evidence_bytes: snapshot.evidenceBytes,
+      last_activity_at: snapshot.lastActivityAt,
+      idle_ms: snapshot.idleMs,
+      suspected_stall: snapshot.suspectedStall,
       output_truncated: snapshot.outputTruncated,
       next_action: snapshot.nextAction,
     },
@@ -589,6 +603,10 @@ async function durableProcessSnapshot(
       outputTruncated: evidence.truncated || evidence.text.length > progress.length,
       running: true,
       wallTimeMs,
+      evidenceBytes: job.evidence_bytes,
+      lastActivityAt: job.last_activity_at,
+      idleMs: job.idle_ms,
+      suspectedStall: job.suspected_stall,
       nextAction: "continue",
     };
   }
@@ -607,6 +625,10 @@ async function durableProcessSnapshot(
     exitCode: job.exit_code,
     signal: orphaned ? CODEX_UNCERTAIN_OUTCOME_SIGNAL : job.signal,
     wallTimeMs,
+    evidenceBytes: job.evidence_bytes,
+    lastActivityAt: job.last_activity_at,
+    idleMs: job.idle_ms,
+    suspectedStall: job.suspected_stall,
     nextAction: "done",
   };
 }

@@ -28,6 +28,13 @@ test("reactive commands return immediately and publish shallow completion with e
   assert.equal(receipt.status, "running");
   assert.equal(receipt.event_type, "test.completed");
   assert.match(receipt.evidence_ref, /^flyto2:\/\/evidence\/job_/);
+  const running = runner.get(receipt.job_id);
+  assert.ok(running);
+  assert.equal(running.status, "running");
+  assert.ok(running.elapsed_ms >= 0);
+  assert.ok(running.evidence_bytes >= 0);
+  assert.ok(Date.parse(running.last_activity_at) > 0);
+  assert.ok(running.idle_ms >= 0);
 
   const event = await events.wait({
     after_sequence: after,
@@ -48,6 +55,39 @@ test("reactive commands return immediately and publish shallow completion with e
   const evidence = runner.readEvidence(receipt.evidence_ref);
   assert.match(evidence.text, /hello-reactor/);
   assert.equal(evidence.job.status, "completed");
+});
+
+test("reactive command idle watchdog publishes process.stalled before termination", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "flyto2-reactive-stall-"));
+  const events = new RuntimeEventStore(stateDir);
+  const runner = new ReactiveCommandRunner(stateDir, events);
+  t.after(async () => {
+    runner.shutdown();
+    events.close();
+    await rm(stateDir, { recursive: true, force: true });
+  });
+
+  const after = events.latestSequence();
+  const receipt = runner.start({
+    workspace_id: "ws-stall",
+    workspace_root: stateDir,
+    cwd: stateDir,
+    command: "node -e \"setTimeout(() => process.exit(0), 5000)\"",
+    timeout_seconds: 1,
+    timeout_mode: "idle",
+  });
+  const stalled = await events.wait({
+    after_sequence: after,
+    workspace_id: "ws-stall",
+    type: "process.stalled",
+    correlation_id: receipt.job_id,
+    timeout_ms: 3_000,
+  });
+  assert.equal(stalled?.type, "process.stalled");
+  const snapshot = runner.get(receipt.job_id);
+  assert.equal(snapshot?.status, "running");
+  assert.equal(snapshot?.suspected_stall, true);
+  runner.signal(receipt.job_id, "ws-stall", "SIGINT");
 });
 
 test("terminal reactive jobs can be discarded after a synchronous compatibility response", async (t) => {

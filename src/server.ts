@@ -59,6 +59,12 @@ import { WorkspaceWatchRegistry } from "./flyto2/workspace-watch.js";
 import { WorkspaceRegistry } from "./workspaces.js";
 import { HostTaskStore } from "./flyto2/host-tasks.js";
 import { createLocalAgentClient } from "./local-agent-client.js";
+import { attachTaskProcessClosure } from "./flyto2/task-process-closure.js";
+import {
+  authenticatedMcpPrincipal,
+  McpEventService,
+  type JsonRpcRequestLike,
+} from "./flyto2/mcp-events.js";
 import { registerLocalCapabilityBridge } from "./flyto2/local-capability-bridge.js";
 import { registryCapabilityTransport } from "./flyto2/capability-transport.js";
 import {
@@ -381,11 +387,18 @@ export function createServer(
   const workspaceStore = createWorkspaceStore(config.stateDir);
   const durableOperations = new DurableOperationStore(config.stateDir);
   const runtimeEvents = new RuntimeEventStore(config.stateDir);
+  const mcpEvents = new McpEventService(config.stateDir, runtimeEvents);
   const reactiveCommands = new ReactiveCommandRunner(config.stateDir, runtimeEvents);
   const workspaceWatches = new WorkspaceWatchRegistry(config.stateDir, runtimeEvents);
   const hostTasks = new HostTaskStore(config.stateDir);
   const workspaces = new WorkspaceRegistry(config, workspaceStore);
   const reviewCheckpoints = createReviewCheckpointManager();
+  const detachTaskProcessClosure = attachTaskProcessClosure({
+    hostTasks,
+    reactiveCommands,
+    runtimeEvents,
+    workspaces,
+  });
   const capabilityRegistry = createStandaloneRuntimeCapabilityRegistry({
     workspaces,
     reviewCheckpoints,
@@ -539,6 +552,15 @@ export function createServer(
       return;
     }
 
+    const eventResponse = await mcpEvents.handle(
+      req.body as JsonRpcRequestLike,
+      authenticatedMcpPrincipal(req),
+    );
+    if (eventResponse) {
+      res.status(200).json(eventResponse);
+      return;
+    }
+
     logEvent(config.logging, "debug", "mcp_request", {
       requestId,
       method: req.method,
@@ -618,7 +640,9 @@ export function createServer(
         }
         processSessions.shutdown();
         workspaceWatches.shutdown();
+        detachTaskProcessClosure();
         reactiveCommands.shutdown();
+        mcpEvents.close();
         oauthProvider.close();
         durableOperations.close();
         runtimeEvents.close();

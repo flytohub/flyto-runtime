@@ -6,6 +6,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  statSync,
   unlinkSync,
   writeSync,
 } from "node:fs";
@@ -50,6 +51,11 @@ export interface ReactiveJobRecord {
   completed_at?: string;
   exit_code?: number;
   signal?: string;
+  elapsed_ms: number;
+  evidence_bytes: number;
+  last_activity_at: string;
+  idle_ms: number;
+  suspected_stall: boolean;
 }
 
 export interface ReactiveRunnerHealth {
@@ -92,6 +98,9 @@ interface ReactiveJobRow {
 }
 
 interface ActiveReactiveJob {
+  jobId: string;
+  workspaceId: string;
+  eventType: string;
   child: ChildProcess;
   evidenceFd: number;
   evidenceBytes: number;
@@ -99,6 +108,7 @@ interface ActiveReactiveJob {
   finished: boolean;
   timedOut: boolean;
   idleStallStrikes: number;
+  lastActivityAt: number;
   timeoutSeconds?: number;
   timeoutMode?: "deadline" | "idle";
   timeoutTimer?: NodeJS.Timeout;
@@ -169,6 +179,9 @@ export class ReactiveCommandRunner {
     }
 
     const active: ActiveReactiveJob = {
+      jobId,
+      workspaceId: input.workspace_id,
+      eventType,
       child,
       evidenceFd,
       evidenceBytes: 0,
@@ -176,6 +189,7 @@ export class ReactiveCommandRunner {
       finished: false,
       timedOut: false,
       idleStallStrikes: 0,
+      lastActivityAt: Date.now(),
     };
     this.active.set(jobId, active);
 
@@ -236,7 +250,7 @@ export class ReactiveCommandRunner {
          from flyto2_reactive_jobs where id = ?`,
       )
       .get(jobId) as ReactiveJobRow | undefined;
-    return row ? reactiveJobFromRow(row) : undefined;
+    return row ? reactiveJobFromRow(row, this.active.get(row.id)) : undefined;
   }
 
   listRunningForRepository(repoRoot: string, limit = 8): ReactiveJobRecord[] {
@@ -255,7 +269,32 @@ export class ReactiveCommandRunner {
          limit ?`,
       )
       .all(repoRoot, limit) as ReactiveJobRow[];
-    return rows.map(reactiveJobFromRow);
+    return rows.map((row) => reactiveJobFromRow(row, this.active.get(row.id)));
+  }
+
+  latestForRepository(repoRoot: string): ReactiveJobRecord | undefined {
+    const row = this.database.sqlite.prepare(
+      `select jobs.id, jobs.workspace_id, jobs.command_digest, jobs.event_type, jobs.status,
+              jobs.evidence_path, jobs.started_at, jobs.completed_at, jobs.exit_code, jobs.signal
+       from flyto2_reactive_jobs as jobs
+       join workspace_sessions as workspaces on workspaces.id = jobs.workspace_id
+       where coalesce(nullif(workspaces.source_root, ''), workspaces.root) = ?
+       order by jobs.started_at desc
+       limit 1`,
+    ).get(repoRoot) as ReactiveJobRow | undefined;
+    return row ? reactiveJobFromRow(row, this.active.get(row.id)) : undefined;
+  }
+
+  latestForWorkspace(workspaceId: string): ReactiveJobRecord | undefined {
+    const row = this.database.sqlite.prepare(
+      `select id, workspace_id, command_digest, event_type, status,
+              evidence_path, started_at, completed_at, exit_code, signal
+       from flyto2_reactive_jobs
+       where workspace_id = ?
+       order by started_at desc
+       limit 1`,
+    ).get(workspaceId) as ReactiveJobRow | undefined;
+    return row ? reactiveJobFromRow(row, this.active.get(row.id)) : undefined;
   }
 
   onTerminal(listener: ReactiveJobTerminalListener): () => void {
@@ -353,12 +392,12 @@ export class ReactiveCommandRunner {
       ? readFileSync(row.evidence_path, "utf8")
       : "";
     if (text.length <= maxCharacters) {
-      return { job: reactiveJobFromRow(row), text, truncated: false };
+      return { job: reactiveJobFromRow(row, this.active.get(row.id)), text, truncated: false };
     }
 
     const half = Math.floor((maxCharacters - 64) / 2);
     return {
-      job: reactiveJobFromRow(row),
+      job: reactiveJobFromRow(row, this.active.get(row.id)),
       text:
         text.slice(0, half)
         + "\n... evidence truncated; request a larger bound if needed ...\n"
@@ -449,11 +488,36 @@ export class ReactiveCommandRunner {
       },
       evidence: [evidence],
     });
+    const terminalEventType = success ? "process.completed" : "process.failed";
+    if (eventType !== terminalEventType) {
+      this.events.append({
+        type: terminalEventType,
+        source: "reactive-runner",
+        workspace_id: workspaceId,
+        correlation_id: jobId,
+        summary: success
+          ? "Reactive command completed successfully."
+          : "Reactive command exited unsuccessfully.",
+        payload: {
+          job_id: jobId,
+          event_type: eventType,
+          success,
+          exit_code: exitCode ?? null,
+          signal: signal ?? null,
+          duration_ms: Math.max(0, Date.parse(completedAt) - Date.parse(startedAt)),
+          command_digest: commandDigest,
+          log_truncated: active.truncated,
+          timed_out: active.timedOut,
+        },
+        evidence: [evidence],
+      });
+    }
     this.notifyTerminal(jobId);
   }
 
   private appendEvidence(active: ActiveReactiveJob, data: Buffer): void {
     if (active.finished || this.closed || data.length === 0) return;
+    active.lastActivityAt = Date.now();
     if (active.timeoutMode === "idle" && !active.timedOut) {
       active.idleStallStrikes = 0;
       this.armTimeout(active);
@@ -489,6 +553,22 @@ export class ReactiveCommandRunner {
       if (active.finished || this.closed) return;
       if (active.timeoutMode === "idle" && active.child.exitCode === null) {
         active.idleStallStrikes += 1;
+        if (active.idleStallStrikes === 1) {
+          this.events.append({
+            type: "process.stalled",
+            source: "reactive-runner",
+            workspace_id: active.workspaceId,
+            correlation_id: active.jobId,
+            summary: "Reactive command is alive but has made no output progress.",
+            payload: {
+              job_id: active.jobId,
+              event_type: active.eventType,
+              observation: active.idleStallStrikes,
+              idle_window_seconds: timeoutSeconds * idleMultiplier,
+            },
+            evidence: [{ kind: "process.log", ref: evidenceRefForJob(active.jobId) }],
+          });
+        }
         if (active.idleStallStrikes < MAX_IDLE_STALL_STRIKES) {
           const nextMultiplier = Math.min(
             MAX_IDLE_BACKOFF_MULTIPLIER,
@@ -684,7 +764,15 @@ function evidenceMetadata(
   };
 }
 
-function reactiveJobFromRow(row: ReactiveJobRow): ReactiveJobRecord {
+function reactiveJobFromRow(
+  row: ReactiveJobRow,
+  active?: ActiveReactiveJob,
+): ReactiveJobRecord {
+  const startedMs = Date.parse(row.started_at);
+  const completedMs = row.completed_at ? Date.parse(row.completed_at) : undefined;
+  const now = Date.now();
+  const evidenceStat = safeEvidenceStat(row.evidence_path);
+  const lastActivityMs = active?.lastActivityAt ?? evidenceStat?.mtimeMs ?? startedMs;
   return {
     job_id: row.id,
     workspace_id: row.workspace_id,
@@ -696,5 +784,19 @@ function reactiveJobFromRow(row: ReactiveJobRow): ReactiveJobRecord {
     completed_at: row.completed_at ?? undefined,
     exit_code: row.exit_code ?? undefined,
     signal: row.signal ?? undefined,
+    elapsed_ms: Math.max(0, (completedMs ?? now) - startedMs),
+    evidence_bytes: active?.evidenceBytes ?? evidenceStat?.size ?? 0,
+    last_activity_at: new Date(lastActivityMs).toISOString(),
+    idle_ms: row.status === "running" ? Math.max(0, now - lastActivityMs) : 0,
+    suspected_stall: row.status === "running" && (active?.idleStallStrikes ?? 0) > 0,
   };
+}
+
+function safeEvidenceStat(path: string): { size: number; mtimeMs: number } | undefined {
+  try {
+    const stat = statSync(path);
+    return { size: stat.size, mtimeMs: stat.mtimeMs };
+  } catch {
+    return undefined;
+  }
 }

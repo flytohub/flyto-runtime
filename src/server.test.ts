@@ -378,6 +378,40 @@ test("healthz exposes only minimal public liveness", async (t) => {
   }
 });
 
+test("authenticated MCP endpoint advertises draft event discovery without changing tool transport", async (t) => {
+  const context = await httpServerFixture(t, "devspace-mcp-events-discovery-");
+  const discover = await postModernMcp(
+    context.localBaseUrl,
+    context.accessToken,
+    "server/discover",
+    {},
+  );
+  assert.equal(discover.status, 200, await discover.clone().text());
+  const discoverBody = await discover.json() as {
+    result?: { supportedVersions?: string[]; capabilities?: { events?: object } };
+  };
+  assert.deepEqual(discoverBody.result?.supportedVersions, ["2026-07-28"]);
+  assert.deepEqual(discoverBody.result?.capabilities?.events, {});
+
+  const listed = await postModernMcp(
+    context.localBaseUrl,
+    context.accessToken,
+    "events/list",
+    {},
+  );
+  assert.equal(listed.status, 200, await listed.clone().text());
+  const listedBody = await listed.json() as {
+    result?: { events?: Array<{ name?: string }> };
+  };
+  const eventNames = listedBody.result?.events?.map(({ name }) => name) ?? [];
+  assert.deepEqual(eventNames, [
+    "process.completed",
+    "process.failed",
+    "process.stalled",
+    "task.needs_attention",
+  ]);
+});
+
 test("HTTP server exposes the localhost capability bridge over the execution contract", async (t) => {
   const context = await httpServerFixture(t, "devspace-capability-bridge-server-");
   const token = (

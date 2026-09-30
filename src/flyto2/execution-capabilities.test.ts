@@ -98,6 +98,11 @@ test("test.run uses a declared package script once and exposes durable process s
   assert.equal(status.status, "success");
   assert.equal(status.output.status, "completed");
   assert.equal(status.output.exit_code, 0);
+  assert.equal(typeof status.output.elapsed_ms, "number");
+  assert.equal(typeof status.output.evidence_bytes, "number");
+  assert.equal(typeof status.output.last_activity_at, "string");
+  assert.equal(status.output.idle_ms, 0);
+  assert.equal(status.output.suspected_stall, false);
 
   const waitFollowUp = started.operation?.wait;
   assert.ok(waitFollowUp);
