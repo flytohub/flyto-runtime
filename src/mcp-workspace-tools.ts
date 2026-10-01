@@ -479,8 +479,7 @@ function workspaceRecovery(
   workspace: WorkspaceContext["workspace"],
 ): WorkspaceRecovery | undefined {
   const repoRoot = workspace.sourceRoot ?? workspace.root;
-  const record = hostTasks.findLatestActiveByRepoRoot(repoRoot)
-    ?? hostTasks.findLatestByRepoRoot(repoRoot);
+  const record = hostTasks.findLatestActiveByRepoRoot(repoRoot);
   if (!record) return undefined;
 
   const activeProcesses = record.status === "active"

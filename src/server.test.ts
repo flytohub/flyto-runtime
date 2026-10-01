@@ -207,7 +207,7 @@ test("a new ChatGPT conversation recovers the latest active durable task for the
   assert.equal(explicitStatus.checkpoint, "Old-chat checkpoint is ready.");
 });
 
-test("a new ChatGPT conversation sees the latest completed durable task without redoing it", async (t) => {
+test("a new ChatGPT conversation does not auto-recover completed durable task history", async (t) => {
   const context = await fixture(t, { toolMode: "codex", uiEnabled: false });
   const oldWorkspace = structuredContent(
     await callOpen(context.client, context.project, "completed-conversation-old"),
@@ -239,19 +239,23 @@ test("a new ChatGPT conversation sees the latest completed durable task without 
   const newlyOpened = structuredContent(
     await callOpen(context.client, context.project, "completed-conversation-new"),
   );
-  const recovery = newlyOpened.recovery as {
-    task_id?: string;
-    status?: string;
-    execution_state?: string;
-    original_prompt?: string;
-    response?: string;
-  } | undefined;
-  assert.equal(recovery?.task_id, taskId);
-  assert.equal(recovery?.status, "completed");
-  assert.equal(recovery?.execution_state, "completed");
-  assert.equal(recovery?.original_prompt, "Ship the existing verified change.");
-  assert.equal(recovery?.response, "Verified, pushed, and deployed.");
-  assert.match(String(newlyOpened.instruction), /completed\. Do not redo it/);
+  assert.equal(newlyOpened.recovery, undefined);
+  assert.doesNotMatch(String(newlyOpened.instruction), /Recovered latest durable task/);
+  assert.doesNotMatch(String(newlyOpened.instruction), /Ship the existing verified change/);
+
+  const historical = structuredContent(await context.client.callTool({
+    name: "background_task",
+    arguments: {
+      action: "status",
+      workspace_id: newlyOpened.workspace_id,
+      include_response: true,
+    },
+  }));
+  assert.equal(historical.task_id, taskId);
+  assert.equal(historical.status, "completed");
+  assert.equal(historical.execution_state, "completed");
+  assert.equal(historical.original_prompt, "Ship the existing verified change.");
+  assert.equal(historical.response, "Verified, pushed, and deployed.");
 });
 
 test("a durable task follows its source repo into a real managed worktree", async (t) => {
