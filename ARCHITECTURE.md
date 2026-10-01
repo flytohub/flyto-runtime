@@ -188,6 +188,7 @@ Meaningful state changes are projected into generic Runtime events:
 - `process.completed`
 - `process.failed`
 - `process.stalled`
+- `task.resumed`
 - `task.needs_attention`
 
 The authenticated `/mcp` endpoint implements the ChatGPT MCP Events draft for
@@ -202,6 +203,11 @@ When a process fails or becomes orphaned, the owning Host Task is reconciled to
 active tasks whose latest owning process already failed. If an event callback is
 missed, `open_workspace` exposes the attention reason and process recovery data
 so ChatGPT can resume from evidence rather than rerunning the failed command.
+When ChatGPT subsequently starts a new process for the uniquely owning active
+task, Runtime clears only an older attention marker and emits `task.resumed`.
+This records host continuation without advancing a plan or retrying anything on
+the host's behalf; a newer process failure remains authoritative and returns the
+task to `needs_attention`.
 
 ### Long-task diagnostic projection
 

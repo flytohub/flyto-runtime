@@ -32,6 +32,9 @@ export function attachTaskProcessClosure(options: {
     if (!job) return;
     void resolveOwningTask(hostTasks, workspaces, job).then((task) => {
       if (!task) return;
+      if (event.type === "process.started") {
+        resumeTaskFromHostActivity(hostTasks, runtimeEvents, task, job, event);
+      }
       appendTaskProcessEvent(runtimeEvents, task, job, event);
     }).catch(() => {
       // Timeline projection is advisory and must never affect process state.
@@ -52,6 +55,39 @@ export function attachTaskProcessClosure(options: {
     detachTimeline();
     detachTerminal();
   };
+}
+
+function resumeTaskFromHostActivity(
+  hostTasks: HostTaskStore,
+  runtimeEvents: RuntimeEventStore,
+  task: HostTaskRecord,
+  job: ReactiveJobRecord,
+  event: RuntimeEvent,
+): void {
+  if (!task.attentionReason) return;
+  const resumed = hostTasks.resumeAfterAttention(task.id, job.started_at);
+  if (!resumed) return;
+  runtimeEvents.append({
+    type: "task.resumed",
+    source: "task-process-closure",
+    workspace_id: job.workspace_id,
+    correlation_id: task.id,
+    correlations: {
+      task_id: task.id,
+      workspace_id: job.workspace_id,
+      process_session_id: reactiveJobSessionId(job.job_id),
+    },
+    summary: "ChatGPT resumed the durable task with new process activity.",
+    payload: {
+      task_id: task.id,
+      job_id: job.job_id,
+      event_type: job.event_type,
+      previous_attention_reason: task.attentionReason,
+      resumed_at: job.started_at,
+    },
+    evidence: event.evidence,
+    occurred_at: event.occurred_at,
+  });
 }
 
 function reconcileExistingAttention(

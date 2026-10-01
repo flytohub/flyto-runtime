@@ -49,6 +49,32 @@ test("HostTaskStore persists needs-attention state and clears it on host continu
   assert.equal(resumed?.attentionAt, undefined);
 });
 
+test("HostTaskStore clears attention only for host activity newer than the failure", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "flyto2-host-task-resume-guard-"));
+  const store = new HostTaskStore(stateDir);
+  t.after(async () => {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  });
+  const created = store.create({
+    workspaceId: "ws_resume_guard",
+    repoRoot: "/repo-resume-guard",
+    workspaceRoot: "/repo-resume-guard",
+    prompt: "Repair the verification failure.",
+  });
+  const attention = store.markNeedsAttention(created.id, "Tests failed.");
+  assert.ok(attention?.attentionAt);
+
+  const stale = store.resumeAfterAttention(created.id, "2000-01-01T00:00:00.000Z");
+  assert.equal(stale, undefined);
+  assert.equal(hostTaskExecutionState(store.get(created.id)!), "needs_attention");
+
+  const resumed = store.resumeAfterAttention(created.id, attention!.attentionAt!);
+  assert.equal(hostTaskExecutionState(resumed!), "waiting_for_host");
+  assert.equal(resumed?.attentionReason, undefined);
+  assert.equal(resumed?.attentionAt, undefined);
+});
+
 test("HostTaskStore persists ChatGPT-owned task state", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "flyto2-host-task-"));
   const store = new HostTaskStore(stateDir);

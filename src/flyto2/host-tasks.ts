@@ -273,6 +273,24 @@ export class HostTaskStore {
     return this.get(id);
   }
 
+  /**
+   * Clears stale attention only when the host activity happened after the
+   * recorded attention point. This keeps a late process-start projection from
+   * erasing a newer failure from the same process.
+   */
+  resumeAfterAttention(id: string, activityAt: string): HostTaskRecord | undefined {
+    if (Number.isNaN(Date.parse(activityAt))) {
+      throw new Error("Host task resume activity must use a valid timestamp.");
+    }
+    const resumed = this.database.sqlite.prepare(
+      `update host_tasks
+       set attention_reason = null, attention_at = null, updated_at = ?
+       where id = ? and status = 'active' and attention_reason is not null
+         and (attention_at is null or attention_at <= ?)`,
+    ).run(activityAt, id, activityAt);
+    return resumed.changes > 0 ? this.get(id) : undefined;
+  }
+
   markLatestActiveNeedsAttentionByRepoRoot(
     repoRoot: string,
     reason: string,

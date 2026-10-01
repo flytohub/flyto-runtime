@@ -118,6 +118,89 @@ test("live process lifecycle is correlated back to the owning durable task", asy
   assert.equal(failed?.payload.reason_code, "PROCESS_EXIT_NONZERO");
 });
 
+test("new host process activity resumes needs_attention without hiding a newer failure", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "flyto2-task-process-resume-"));
+  const runtimeEvents = new RuntimeEventStore(stateDir);
+  const runner = new ReactiveCommandRunner(stateDir, runtimeEvents);
+  const hostTasks = new HostTaskStore(stateDir);
+  const workspaceId = "ws_task_resume";
+  const workspaces = {
+    getWorkspace: async () => ({ root: stateDir, sourceRoot: stateDir }),
+  } as unknown as WorkspaceRegistry;
+  const detach = attachTaskProcessClosure({
+    hostTasks,
+    reactiveCommands: runner,
+    runtimeEvents,
+    workspaces,
+  });
+  t.after(async () => {
+    detach();
+    runner.shutdown();
+    runtimeEvents.close();
+    hostTasks.close();
+    await rm(stateDir, { recursive: true, force: true });
+  });
+
+  const task = hostTasks.create({
+    workspaceId,
+    repoRoot: stateDir,
+    workspaceRoot: stateDir,
+    prompt: "Fix the failing tests and continue.",
+  });
+  let cursor = runtimeEvents.latestSequence();
+  const firstFailure = runner.start({
+    workspace_id: workspaceId,
+    workspace_root: stateDir,
+    cwd: stateDir,
+    event_type: "capability.test.exited",
+    command: "node -e \"process.exit(1)\"",
+  });
+  const firstAttention = await runtimeEvents.wait({
+    after_sequence: cursor,
+    type: "task.needs_attention",
+    correlation_id: task.id,
+    timeout_ms: 3_000,
+  });
+  assert.equal(firstAttention?.payload.job_id, firstFailure.job_id);
+  assert.equal(hostTaskExecutionState(hostTasks.get(task.id)!), "needs_attention");
+
+  cursor = runtimeEvents.latestSequence();
+  const resumedProcess = runner.start({
+    workspace_id: workspaceId,
+    workspace_root: stateDir,
+    cwd: stateDir,
+    event_type: "capability.test.exited",
+    command: "node -e \"setTimeout(() => process.exit(0), 25)\"",
+  });
+  const resumed = await runtimeEvents.wait({
+    after_sequence: cursor,
+    type: "task.resumed",
+    correlation_id: task.id,
+    timeout_ms: 3_000,
+  });
+  assert.equal(resumed?.payload.job_id, resumedProcess.job_id);
+  assert.equal(hostTaskExecutionState(hostTasks.get(task.id)!), "waiting_for_host");
+
+  cursor = runtimeEvents.latestSequence();
+  const secondFailure = runner.start({
+    workspace_id: workspaceId,
+    workspace_root: stateDir,
+    cwd: stateDir,
+    event_type: "capability.test.exited",
+    command: "node -e \"process.exit(7)\"",
+  });
+  const secondAttention = await runtimeEvents.wait({
+    after_sequence: cursor,
+    type: "task.needs_attention",
+    correlation_id: task.id,
+    timeout_ms: 3_000,
+  });
+  assert.equal(secondAttention?.payload.job_id, secondFailure.job_id);
+  assert.equal(secondAttention?.payload.exit_code, 7);
+  assert.equal(hostTaskExecutionState(hostTasks.get(task.id)!), "needs_attention");
+  assert.match(hostTasks.get(task.id)?.attentionReason ?? "", /exit code 7/);
+});
+
 test("process closure refuses to guess ownership when two active tasks share a workspace", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "flyto2-task-process-ambiguous-"));
   const runtimeEvents = new RuntimeEventStore(stateDir);
