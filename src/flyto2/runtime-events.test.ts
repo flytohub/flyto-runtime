@@ -148,7 +148,13 @@ test("runtime event payloads are bounded", async (t) => {
 test("runtime events expose one canonical correlation envelope without a schema migration", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "flyto2-events-correlation-"));
   const store = new RuntimeEventStore(stateDir);
+  let reopened: RuntimeEventStore | undefined;
+  // One cleanup hook: every handle on the database must be closed before the
+  // directory is removed. Node runs `t.after` hooks in registration order, so
+  // a second hook for the reopened store would close it only after `rm`, and
+  // Windows refuses to unlink a SQLite file that is still open (EBUSY).
   t.after(async () => {
+    reopened?.close();
     store.close();
     await rm(stateDir, { recursive: true, force: true });
   });
@@ -180,7 +186,6 @@ test("runtime events expose one canonical correlation envelope without a schema 
   assert.equal(event.payload.task_id, "task_correlation");
   assert.equal(event.payload.process_session_id, "proc_correlation");
 
-  const reopened = new RuntimeEventStore(stateDir);
-  t.after(() => reopened.close());
+  reopened = new RuntimeEventStore(stateDir);
   assert.deepEqual(reopened.list({ correlation_id: "task_correlation" })[0]?.correlations, event.correlations);
 });

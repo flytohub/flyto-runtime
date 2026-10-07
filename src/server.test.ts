@@ -635,14 +635,7 @@ test("Codex non-interactive commands become durable behind exec_command", async 
   assert.equal(observed.next_action, "continue");
   assert.ok(performance.now() - observedAt < 1_000, "process_status must not wait for the process");
 
-  await new Promise((resolve) => setTimeout(resolve, 1_200));
-  const finished = structuredContent(await context.client.callTool({
-    name: "process_status",
-    arguments: {
-      workspace_id: workspaceId,
-      session_id: started.session_id,
-    },
-  }));
+  const finished = await waitForProcessExit(context.client, workspaceId, started.session_id);
   assert.equal(finished.running, false);
   assert.equal(finished.next_action, "done");
   assert.equal(finished.exit_code, 0);
@@ -679,18 +672,7 @@ test("Codex process_status exposes running progress without waiting", async (t) 
   assert.match(String(observed.result), /phase-one-ready/);
   assert.ok(performance.now() - observedAt < 1_000, "process_status must be an immediate snapshot");
 
-  // exec_command intentionally yields after about 750ms while the child keeps
-  // running. Leave enough headroom for slower hosted macOS runners to observe
-  // the child's exit and persist its terminal event without turning this into
-  // a polling test.
-  await new Promise((resolve) => setTimeout(resolve, 2_000));
-  const finished = structuredContent(await context.client.callTool({
-    name: "process_status",
-    arguments: {
-      workspace_id: workspaceId,
-      session_id: started.session_id,
-    },
-  }));
+  const finished = await waitForProcessExit(context.client, workspaceId, started.session_id);
   assert.equal(finished.running, false);
   assert.equal(finished.next_action, "done");
   assert.match(String(finished.result), /phase-two-done/);
@@ -738,14 +720,7 @@ test("Codex v2 write_stdin compatibility snapshot never waits", async (t) => {
     "catalog v2 write_stdin compatibility must not wait",
   );
 
-  await new Promise((resolve) => setTimeout(resolve, 2_000));
-  const finished = structuredContent(await context.client.callTool({
-    name: "process_status",
-    arguments: {
-      workspace_id: workspaceId,
-      session_id: started.session_id,
-    },
-  }));
+  const finished = await waitForProcessExit(context.client, workspaceId, started.session_id);
   assert.equal(finished.running, false);
   assert.equal(finished.exit_code, 0);
   assert.match(String(finished.result), /slow-done/);
@@ -780,14 +755,7 @@ test("Codex exec_command replays a lost response without repeating the process s
     "once",
   );
 
-  await new Promise((resolve) => setTimeout(resolve, 600));
-  const finished = structuredContent(await context.client.callTool({
-    name: "process_status",
-    arguments: {
-      workspace_id: workspaceId,
-      session_id: first.session_id,
-    },
-  }));
+  const finished = await waitForProcessExit(context.client, workspaceId, first.session_id);
   assert.equal(finished.running, false);
   assert.equal(finished.next_action, "done");
   assert.equal(finished.exit_code, 0);
@@ -1173,17 +1141,19 @@ test("legacy Claude bash yields long commands into a durable Runtime job", async
   const jobId = /job_[A-Za-z0-9]+/.exec(first.result as string)?.[0];
   assert.ok(jobId);
 
-  // The compatibility receipt is intentionally non-blocking. Give the
-  // command enough time to finish before exercising the resume path; Windows
-  // process startup is measurably slower than macOS/Linux.
-  await new Promise((resolve) => setTimeout(resolve, 1_800));
-  const resumed = structuredContent(await context.client.callTool({
-    name: "bash",
-    arguments: {
-      workspace_id: workspaceId,
-      command: `@flyto2/job ${jobId}`,
-    },
-  }));
+  // The compatibility receipt is intentionally non-blocking. Resume until the
+  // job reports its output instead of guessing how long a hosted runner takes
+  // to start Node.
+  const resumed = await eventually(
+    async () => structuredContent(await context.client.callTool({
+      name: "bash",
+      arguments: {
+        workspace_id: workspaceId,
+        command: `@flyto2/job ${jobId}`,
+      },
+    })),
+    (result) => !/still running/i.test(String(result.result)),
+  );
   assert.match(resumed.result as string, /legacy-reactive-done/);
   assert.doesNotMatch(resumed.result as string, /still running/i);
 });
@@ -1986,6 +1956,44 @@ async function git(cwd: string, args: string[]): Promise<void> {
   await execFileAsync("git", args, { cwd });
 }
 
+/** Repeat a non-waiting read until `settled` holds or the deadline passes. */
+async function eventually<T>(
+  read: () => Promise<T>,
+  settled: (value: T) => boolean,
+  timeoutMs = 20_000,
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = await read();
+    if (settled(value) || Date.now() >= deadline) return value;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
+/**
+ * Read `process_status` until the session reports it is no longer running.
+ *
+ * These tests assert that a long command yields, that `process_status` is an
+ * immediate snapshot, and that the terminal state is eventually reported.
+ * None of them is about how fast a hosted runner starts Node, so they must
+ * not depend on a fixed sleep outlasting the child: on slow macOS Intel and
+ * Windows runners a fixed sleep was regularly shorter than startup plus the
+ * child's own timer. Each read is still a non-waiting snapshot.
+ */
+async function waitForProcessExit(
+  client: Client,
+  workspaceId: unknown,
+  sessionId: unknown,
+): Promise<Record<string, unknown>> {
+  return eventually(
+    async () => structuredContent(await client.callTool({
+      name: "process_status",
+      arguments: { workspace_id: workspaceId, session_id: sessionId },
+    })),
+    (snapshot) => snapshot.running === false,
+  );
+}
+
 async function waitForFile(path: string): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     try {
@@ -2350,12 +2358,16 @@ test("a cached ChatGPT bash call yields quickly and polls via @flyto2/job", asyn
   assert.match(snapshotText, /Still running/);
   assert.ok(performance.now() - snapshotAt < 1_000, "legacy process snapshot must not wait");
 
-  await new Promise((resolve) => setTimeout(resolve, 1_700));
-  const resumed = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
-    name: "bash", arguments: { workspaceId, command: `@flyto2/job ${legacySessionId}` },
-  });
-  assert.equal(resumed.status, 200, await resumed.clone().text());
-  const resumedText = await resumed.text();
+  const resumedText = await eventually(
+    async () => {
+      const resumed = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
+        name: "bash", arguments: { workspaceId, command: `@flyto2/job ${legacySessionId}` },
+      });
+      assert.equal(resumed.status, 200, await resumed.clone().text());
+      return resumed.text();
+    },
+    (text) => /legacy-waited/.test(text),
+  );
   assert.match(resumedText, /legacy-waited/);
 
   const started = await postModernMcp(localBaseUrl, accessToken, "tools/call", {

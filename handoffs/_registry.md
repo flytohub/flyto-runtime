@@ -2,6 +2,7 @@
 
 | Date | Topic | File | Status |
 | --- | --- | --- | --- |
+| 2026-10-07 | Red main CI: Windows EBUSY and timing-dependent process tests | `2026-10-07-red-main-smoke-matrix.md` | Resolved |
 | 2026-09-24 | Release loop hardening: flaky daemon test, ABI, reproducible app, widget | `2026-09-24-closed-loop-hardening.md` | Resolved |
 | 2026-09-24 | macOS app: Flyto2 Runtime.app in a disk image | `2026-09-24-macos-app.md` | Resolved |
 | 2026-09-24 | First run from a downloaded ZIP, with nothing preinstalled but Node | `2026-09-24-first-run-from-zip.md` | Resolved |
