@@ -1,5 +1,14 @@
 # Flyto2 Runtime architecture
 
+## Mobile companion gateway (experimental, 2026-10-10)
+
+A separately configured HTTPS listener makes allowlisted Runtime capabilities
+available to a paired phone. It has in-memory, time-bounded sessions and
+operation-ID deduplication. It never exposes Runtime's same-user loopback
+bridge credentials, MCP OAuth or process/shell services to mobile clients.
+High-risk and explicit-approval operations fail closed. The separate
+cybersecurity Engine has no role. See docs/mobile-companion-gateway.md.
+
 ## Product identity
 
 Flyto2 Runtime is the standalone local execution runtime in the Flyto2 project.

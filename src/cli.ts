@@ -615,7 +615,16 @@ async function serve(): Promise<void> {
     }
   }
   const { createServer } = await import("./server.js");
-  const { app, close, localAgentProviders } = createServer(config);
+  const { app, close, localAgentProviders, capabilityRegistry } = createServer(config);
+  // Opt-in, separately TLS-protected and scoped phone-to-host endpoint.
+  // Never expose the same-user localhost bridge or MCP credentials.
+  const { startMobileCompanionGateway } = await import("./flyto2/mobile-companion-gateway.js");
+  const mobile = await startMobileCompanionGateway(config, capabilityRegistry);
+  if (mobile) {
+    console.log("Flyto2 local mobile gateway: TLS listener enabled");
+    console.log("Mobile gateway certificate SHA-256: " + mobile.certificateSha256);
+    console.log("Mobile pairing code (expires in two minutes): " + mobile.pairingCode);
+  }
   const maintenance = createRuntimeMaintenance(config);
   const httpServer = app.listen(config.port, config.host, () => {
     maintenance.start();
@@ -636,6 +645,7 @@ async function serve(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     maintenance.stop();
+    if (mobile) await mobile.close();
     await shutdownHttpServer(httpServer, close);
     process.exit(0);
   };
