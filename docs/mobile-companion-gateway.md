@@ -36,11 +36,48 @@ the host to issue a new pairing code.
 
 ## Transport
 
+### Optional installed device capability packages
+
+An execution host can declare additional operator-installed adapters using
+the optional environment variable FLYTO2_MOBILE_ADAPTER_MANIFEST with an
+absolute path to an existing JSON file. Example of its entire format:
+
+    {
+      "schema": "flyto2.local-adapters.v1",
+      "adapters": [{
+        "capability": {
+          "id": "robot.ros2.readiness",
+          "revision": 1,
+          "risk_level": "low",
+          "approval": "policy",
+          "evidence": ["ros2_graph_status"]
+        },
+        "executable": "/absolute/path/to/installed/python3",
+        "argv": ["-m", "flyto_robotics.mobile_provider",
+                 "--status-file", "/absolute/path/to/ros2-adapter-status.json"],
+        "timeout_ms": 5000
+      }]
+    }
+
+Set FLYTO2_MOBILE_CAPABILITIES=robot.ros2.readiness as well. The adapter
+module must actually be installed in that Python environment. The manifest
+is local and not writable by other users; mobile cannot upload its own
+executable or claim a nonexistent capability. Runtime starts each invocation
+as a bounded child process with fixed executable/arguments and no shell,
+minimal environment, strict typed result and no inherited secrets.
+
+This sample is a passive ROS2 readiness reader from the independently
+installed flyto-robotics package; it is **not** a motion command or proof
+that the robot arrived anywhere. The ROS2 graph reporter refreshes its
+status heartbeat, and the reader rejects observations older than 15 seconds.
+All medium/high/dangerous capabilities are denied on mobile until a safe
+per-operation approval/execution authority is verified.
+
 API prefix: /flyto2/mobile/v1
 
 - POST /pair: one-time 8-digit code; returns a time-bounded session token.
 - GET /manifest: authenticated live flyto2.execution.v1 manifest, filtered
-  to allowed low/medium, non-explicit-approval capabilities.
+  to allowed **low-risk** non-explicit-approval capabilities only.
 - POST /invoke: authenticated, manifest-declared and allowlisted invocation.
   Same operation ID/same payload yields original result, different payload
   yields a conflict. No blind actuation replay.
@@ -53,7 +90,7 @@ Accepted does not prove independent mission completion.
 
 Runtime's same-user localhost bridge is not exposed over LAN. The gateway
 does not offer shell, MCP credentials, arbitrary workflow construction,
-or physically risky/explicit-approval operations. This is a real bridge
+or medium/high/dangerous/explicit-approval operations. This is a real bridge
 for installed Runtime host capabilities, **not** complete standalone
 Core AI Space, ROS2 robot execution or verified vehicle integration.
 

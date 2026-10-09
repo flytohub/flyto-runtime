@@ -6,7 +6,10 @@ A separately configured HTTPS listener makes allowlisted Runtime capabilities
 available to a paired phone. It has in-memory, time-bounded sessions and
 operation-ID deduplication. It never exposes Runtime's same-user loopback
 bridge credentials, MCP OAuth or process/shell services to mobile clients.
-High-risk and explicit-approval operations fail closed. The separate
+The optional host-owned installed-adapter manifest projects additional
+versioned capabilities through fixed binaries and bounded processes, not
+Cloud or App-defined commands. Anything above low risk and explicit-approval
+operations fail closed. The separate
 cybersecurity Engine has no role. See docs/mobile-companion-gateway.md.
 
 ## Product identity

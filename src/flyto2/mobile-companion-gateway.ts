@@ -13,6 +13,7 @@ import express, { type Express, type Request, type Response } from "express";
 import type { ServerConfig } from "../config.js";
 import type { RuntimeCapabilityRegistry } from "./capability-provider.js";
 import { registryCapabilityTransport, type Flyto2CapabilityTransport } from "./capability-transport.js";
+import { createInstalledAdapterTransport, joinRuntimeAndInstalledTransports, readInstalledAdapterManifest } from "./mobile-installed-adapters.js";
 import { flyto2CapabilityInvocationSchema, flyto2CapabilityResultSchema } from "./protocol.js";
 
 export const MOBILE_COMPANION_BASE = "/flyto2/mobile/v1";
@@ -99,8 +100,7 @@ export function createMobileCompanionGateway(options: MobileGatewayOptions): Exp
       ...manifest,
       capabilities: manifest.capabilities.filter((c) =>
         options.allowedCapabilities.has(c.id) &&
-        c.risk_level !== "dangerous" &&
-        c.risk_level !== "high" &&
+        c.risk_level === "low" &&
         c.approval !== "explicit"
       ),
       mobile_gateway_schema: "flyto2.mobile-companion.v1",
@@ -119,7 +119,7 @@ export function createMobileCompanionGateway(options: MobileGatewayOptions): Exp
     const capability = options.transport.manifest().capabilities.find(c =>
       c.id === command.capability && c.revision === command.revision);
     if (!capability || !options.allowedCapabilities.has(capability.id) ||
-        capability.risk_level === "high" || capability.risk_level === "dangerous" ||
+        capability.risk_level !== "low" ||
         capability.approval === "explicit") {
       res.status(403).json({ error: "capability_not_authorized" });
       return;
@@ -196,8 +196,16 @@ export async function startMobileCompanionGateway(
     throw new Error("Mobile gateway requires explicit host, port, TLS certificate/key, and capability allowlist");
   }
   const pairingCode = randomInt(0, 100_000_000).toString().padStart(8, "0");
+  const runtime = registryCapabilityTransport(config, registry);
+  const installedFile = env.FLYTO2_MOBILE_ADAPTER_MANIFEST;
+  const transport = installedFile
+    ? joinRuntimeAndInstalledTransports(
+        runtime,
+        createInstalledAdapterTransport(config, readInstalledAdapterManifest(installedFile)),
+      )
+    : runtime;
   const app = createMobileCompanionGateway({
-    transport: registryCapabilityTransport(config, registry),
+    transport,
     allowedCapabilities: new Set(allowed),
     pairingCode,
   });

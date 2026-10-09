@@ -8,6 +8,9 @@
   fingerprint display, explicit capability allowlist, high-risk denial
   and operation-ID replay protection.
 - No change to same-user localhost bridge and no mandatory Cloud service.
+- Added optional installed adapter manifest, dynamic capability composition
+  and bounded, no-shell external provider invocation. Mobile gate remains
+  strictly read/low-risk only until host/device approvals are implemented.
 
 ## Unreleased
 

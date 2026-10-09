@@ -16,6 +16,7 @@ const capabilities: Flyto2RuntimeManifest["capabilities"] = [
   { id: "source.read", revision: 1, risk_level: "low", approval: "policy", evidence: ["file_sha256"] },
   { id: "motion.advance", revision: 1, risk_level: "high", approval: "explicit", evidence: ["robot_pose"] },
   { id: "unsafe.write", revision: 1, risk_level: "medium", approval: "explicit", evidence: [] },
+  { id: "medium.mutate", revision: 1, risk_level: "medium", approval: "policy", evidence: [] },
 ];
 const manifest: Flyto2RuntimeManifest = {
   schema: "flyto2.execution.v1", product: "Flyto2", runtime: "flyto-runtime",
@@ -49,7 +50,7 @@ async function fixture(now: () => number = Date.now) {
   const server = createServer(createMobileCompanionGateway({
     transport,
     pairingCode: "12345678",
-    allowedCapabilities: new Set(["source.read", "motion.advance", "unsafe.write"]),
+    allowedCapabilities: new Set(["source.read", "motion.advance", "unsafe.write", "medium.mutate"]),
     now,
   }));
   server.listen(0, "127.0.0.1");
@@ -142,6 +143,12 @@ test("registered allowlist filters unsafe capabilities; invocation is idempotent
     }),
   });
   assert.equal(forbidden.status, 403);
+  const medium = await fetch(f.origin + "/invoke", {
+    method: "POST", headers, body: JSON.stringify({
+      ...invocation, capability: "medium.mutate", operation_id: "medium-operation-12",
+    }),
+  });
+  assert.equal(medium.status, 403);
   assert.equal(f.called.length, 1);
   const unpair = await fetch(f.origin + "/unpair", { method: "POST", headers });
   assert.equal(unpair.status, 200);
