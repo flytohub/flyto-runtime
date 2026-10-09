@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
+import { createServer as createHttpsServer, request as httpsRequest } from "node:https";
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { once } from "node:events";
 import test from "node:test";
 import type { Flyto2CapabilityTransport } from "./capability-transport.js";
@@ -140,4 +146,76 @@ test("registered allowlist filters unsafe capabilities; invocation is idempotent
   const unpair = await fetch(f.origin + "/unpair", { method: "POST", headers });
   assert.equal(unpair.status, 200);
   assert.equal((await fetch(f.origin + "/manifest", { headers })).status, 401);
+});
+
+test("real TLS listener permits a verified private host and rejects anonymous access", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("openssl test certificate fixture is Unix-only");
+    return;
+  }
+  const root = await mkdtemp(join(tmpdir(), "flyto-mobile-https-"));
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  const key = join(root, "host.key");
+  const cert = join(root, "host.crt");
+  execFileSync("openssl", [
+    "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+    "-keyout", key, "-out", cert, "-days", "1", "-subj", "/CN=Flyto2",
+    "-addext", "subjectAltName=IP:127.0.0.1",
+  ], { stdio: "ignore" });
+  const ca = readFileSync(cert);
+  const transport: Flyto2CapabilityTransport = {
+    manifest: () => manifest,
+    invoke: async (item) => ({
+      schema: "flyto2.execution.v1", invocation_id: item.invocation_id,
+      capability: item.capability, revision: item.revision,
+      status: "success", started_at: "2026-10-10T00:00:00Z",
+      completed_at: "2026-10-10T00:00:01Z",
+      output: {}, evidence: [],
+    }),
+  };
+  const server = createHttpsServer({
+    key: readFileSync(key),
+    cert: ca,
+    minVersion: "TLSv1.2",
+  }, createMobileCompanionGateway({
+    transport, pairingCode: "12345678",
+    allowedCapabilities: new Set(["source.read"]),
+  }));
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(() => new Promise<void>((resolve, reject) => {
+    server.closeAllConnections();
+    server.close(error => error ? reject(error) : resolve());
+  }));
+  const addr = server.address();
+  if (!addr || typeof addr === "string") throw new Error("TLS server missing");
+
+  const call = (method: string, path: string, auth = "", data = "") =>
+    new Promise<{ code: number; body: string }>((resolve, reject) => {
+      const req = httpsRequest({
+        hostname: "127.0.0.1", port: addr.port,
+        path: MOBILE_COMPANION_BASE + path,
+        method, ca, rejectUnauthorized: true,
+        headers: {
+          "content-type": "application/json",
+          ...(auth ? { authorization: "Bearer " + auth } : {}),
+        },
+      }, res => {
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", chunk => { body += chunk; });
+        res.on("end", () => resolve({ code: res.statusCode ?? 0, body }));
+      });
+      req.on("error", reject);
+      req.end(data);
+    });
+
+  const anonymous = await call("GET", "/manifest");
+  assert.equal(anonymous.code, 401);
+  const paired = await call("POST", "/pair", "", JSON.stringify({ code: "12345678" }));
+  assert.equal(paired.code, 200);
+  const token = JSON.parse(paired.body) as { access_token: string };
+  const visible = await call("GET", "/manifest", token.access_token);
+  assert.equal(visible.code, 200);
+  assert.equal((JSON.parse(visible.body) as { capabilities: unknown[] }).capabilities.length, 1);
 });
