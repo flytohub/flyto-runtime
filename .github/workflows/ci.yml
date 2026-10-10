@@ -18,7 +18,10 @@ jobs:
   smoke:
     name: Smoke (${{ matrix.os }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
+    # Windows npm's clean tarball install can take longer than the unit suite.
+    # Give that smoke test enough time to finish rather than cancelling a green
+    # test matrix halfway through the release's safety gate.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 30 || 15 }}
     strategy:
       fail-fast: false
       matrix:

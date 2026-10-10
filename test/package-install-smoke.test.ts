@@ -25,6 +25,7 @@ function testPackedPackageLaunchers(): void {
     assert.ok(archive, "npm pack must produce a package archive");
 
     const packageRoot = join(installRoot, "node_modules", "flyto2-runtime");
+    console.log("package-install smoke: installing the packed Runtime into a clean directory");
     // Both native desktop entrypoints must ship in the same package so a
     // release is installable without a source checkout on either desktop OS.
     // Validate the archive itself through the installed package before running
@@ -42,7 +43,9 @@ function testPackedPackageLaunchers(): void {
       encoding: "utf8",
       stdio: "pipe",
       shell: process.platform === "win32",
+      timeout: 20 * 60_000,
     });
+    console.log("package-install smoke: clean package installation completed");
 
     assert.equal(existsSync(join(packageRoot, "Install.command")), true);
     assert.equal(existsSync(join(packageRoot, "Flyto2 Runtime.command")), true);
