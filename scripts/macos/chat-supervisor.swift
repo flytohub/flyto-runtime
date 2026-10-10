@@ -165,6 +165,11 @@ if args.count != 3 || args[1] != "--watch" {
     fputs("Usage: Flyto2ChatSupervisor --watch <status-file>\n", stderr)
     exit(2)
 }
+// Ask macOS to display its native Accessibility consent UI when this freshly
+// installed app is started. This is a request, not a permission bypass. Only
+// perform it once per process launch to avoid repeated system prompts.
+let promptOptions = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+_ = AXIsProcessTrustedWithOptions(promptOptions)
 var previous: String? = nil
 var changed: Date? = nil
 while true {
