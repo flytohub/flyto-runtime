@@ -94,6 +94,18 @@ export function parseWindowsRuntimeConfigDirectory(script: string): string | und
   return match?.[1]?.replaceAll("''", "'");
 }
 
+/** Read the installed PowerShell wrapper, not the checkout running the CLI. */
+export function parseWindowsRuntimePackageRoot(script: string): string | undefined {
+  const match = script.match(/^Set-Location -LiteralPath '(.*)'\r?$/m);
+  return match?.[1]?.replaceAll("''", "'");
+}
+
+export function installedWindowsRuntimePackageRoot(serviceRoot?: string): string | undefined {
+  const { scriptPath } = windowsRuntimeServicePaths(serviceRoot);
+  if (!existsSync(scriptPath)) return undefined;
+  return parseWindowsRuntimePackageRoot(readFileSync(scriptPath, "utf8"));
+}
+
 function resolveWindowsRuntimeConfigDirectory(
   configDirectory?: string,
   serviceRoot?: string,
@@ -350,7 +362,9 @@ export function windowsRuntimeServiceStatus(options: {
   configDirectory?: string;
   serviceRoot?: string;
 } = {}): WindowsRuntimeServiceStatus {
-  const packageRoot = options.packageRoot ?? flyto2RuntimePackageRoot();
+  const packageRoot = options.packageRoot
+    ?? installedWindowsRuntimePackageRoot(options.serviceRoot)
+    ?? flyto2RuntimePackageRoot();
   const configDirectory = resolveWindowsRuntimeConfigDirectory(options.configDirectory, options.serviceRoot);
   const paths = windowsRuntimeServicePaths(options.serviceRoot);
   if (platform() !== "win32") {

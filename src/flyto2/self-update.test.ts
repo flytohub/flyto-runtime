@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   evaluateCheckRuns,
   fetchCheckRuns,
+  installedRuntimeGitSha,
   isSelfUpdateInProgress,
   readSelfUpdateStatus,
   runSelfUpdate,
@@ -25,6 +26,26 @@ const green: CheckRun[] = [
   { name: "Smoke (macos-latest-node24)", status: "completed", conclusion: "success" },
   { name: "Analyze", status: "completed", conclusion: "neutral" },
 ];
+
+test("self-update reads the installed running build rather than the invoking CLI checkout", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "installed-runtime-build-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, "dist"));
+  const sha = "a".repeat(40);
+  const running = { installed: true, loaded: true, state: "running", packageRoot: root };
+  const receipt = join(root, "dist", "build-info.json");
+  writeFileSync(receipt, JSON.stringify({ git_sha: sha, git_dirty: false }));
+  assert.equal(installedRuntimeGitSha(running), sha);
+  assert.equal(installedRuntimeGitSha({ ...running, installed: false }), null);
+  assert.equal(installedRuntimeGitSha({ ...running, loaded: false }), null);
+  assert.equal(installedRuntimeGitSha({ ...running, state: "waiting" }), null);
+  writeFileSync(receipt, JSON.stringify({ git_sha: sha, git_dirty: true }));
+  assert.equal(installedRuntimeGitSha(running), null);
+  writeFileSync(receipt, JSON.stringify({ git_sha: "unverified" }));
+  assert.equal(installedRuntimeGitSha(running), null);
+  writeFileSync(receipt, "broken json");
+  assert.equal(installedRuntimeGitSha(running), null);
+});
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();

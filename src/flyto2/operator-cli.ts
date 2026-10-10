@@ -153,7 +153,6 @@ async function startQuickTunnelForConfig(
 async function runSelfUpdateCommand(args: string[]): Promise<void> {
   const selfUpdate = await import("./self-update.js");
   const { flyto2NativeRuntimeHome } = await import("./native-paths.js");
-  const { flyto2BuildInfo } = await import("./build-info.js");
   const paths = selfUpdate.selfUpdatePaths(flyto2NativeRuntimeHome());
   const [action, requestId, ...extra] = args;
   const usage = "Usage: flyto2-runtime service self-update [status]";
@@ -162,8 +161,12 @@ async function runSelfUpdateCommand(args: string[]): Promise<void> {
     throw new Error(`This Runtime was installed from a packaged Flyto2 Runtime distribution, which updates by installing the new version from ${FLYTO2_RUNTIME_DOWNLOADS_URL}.`);
   }
 
+  const service = await import("./native-service.js");
+  // A different CLI checkout may schedule updates for an installed build. The
+  // running LaunchAgent/Task Scheduler package, not this CLI, owns current_sha.
+  const installedSha = () => selfUpdate.installedRuntimeGitSha(service.nativeRuntimeServiceStatus());
+
   if (action === undefined) {
-    const service = await import("./native-service.js");
     if (!service.nativeRuntimeServiceStatus().installed) {
       throw new Error(
         "Remote self-update switches the background service, which is not installed. Run `flyto2-runtime service install` first.",
@@ -178,7 +181,7 @@ async function runSelfUpdateCommand(args: string[]): Promise<void> {
     }));
     console.log(JSON.stringify({
       ...status,
-      current_sha: flyto2BuildInfo().git_sha,
+      current_sha: installedSha(),
       next: "The update runs in the background: fetch main, require green CI, build, restart behind a health check, roll back on failure. "
         + "The connection drops for a few seconds during the restart. Check progress with `flyto2-runtime service self-update status`.",
     }, null, 2));
@@ -186,14 +189,13 @@ async function runSelfUpdateCommand(args: string[]): Promise<void> {
   }
   if (action === "status" && requestId === undefined) {
     console.log(JSON.stringify({
-      current_sha: flyto2BuildInfo().git_sha,
+      current_sha: installedSha(),
       update: selfUpdate.readSelfUpdateStatus(paths) ?? null,
     }, null, 2));
     return;
   }
   if (action === "run" && requestId && extra.length === 0) {
     const { spawnSync } = await import("node:child_process");
-    const service = await import("./native-service.js");
     const status = await selfUpdate.runSelfUpdate(requestId, paths, {
       run: (command, commandArgs, options) => {
         const result = spawnSync(command, commandArgs, {
@@ -210,7 +212,7 @@ async function runSelfUpdateCommand(args: string[]): Promise<void> {
         };
       },
       fetchCheckRuns: (sha) => selfUpdate.fetchCheckRuns(sha),
-      currentGitSha: () => flyto2BuildInfo().git_sha,
+      currentGitSha: installedSha,
       activate: (packageRoot) => {
         service.installNativeRuntimeService({
           packageRoot,

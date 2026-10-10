@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.1.6 - 2026-10-10
+
+- Report installed Runtime package roots from the macOS LaunchAgent and Windows Task Scheduler wrapper instead of the CLI checkout path; preserve escaped path characters.
+- Read the installed, running and clean build receipt for `service self-update` status and update admission, avoiding stale version reports and redundant deployments after self-update.
+- Fail closed to an unknown installed revision if a service is stopped or the build receipt cannot be verified; add targeted regression tests for status and update safety.
+
 ## 1.1.5 - 2026-10-10
 
 - Stop native Cloudflare tunnel restart storms when the edge SRV record cannot be resolved: hold repairs while DNS is unavailable, check for recovery every 60 seconds, and emit one structured log event per DNS state transition.

@@ -16,6 +16,31 @@ import { join } from "node:path";
 
 export const SELF_UPDATE_REPOSITORY = "https://github.com/flytohub/flyto-runtime.git";
 export const SELF_UPDATE_BRANCH = "main";
+
+/** Only an installed, running and clean build can prove it is already current. */
+export function installedRuntimeGitSha(service: {
+  installed: boolean;
+  loaded: boolean;
+  state?: string;
+  packageRoot: string;
+}): string | null {
+  if (!service.installed || !service.loaded || (service.state && service.state !== "running")) {
+    return null;
+  }
+  try {
+    const receipt = JSON.parse(readFileSync(join(service.packageRoot, "dist", "build-info.json"), "utf8")) as {
+      git_sha?: unknown;
+      git_dirty?: unknown;
+    };
+    return typeof receipt.git_sha === "string"
+      && /^[a-f0-9]{40}$/i.test(receipt.git_sha)
+      && receipt.git_dirty === false
+      ? receipt.git_sha.toLowerCase()
+      : null;
+  } catch {
+    return null;
+  }
+}
 const CHECK_RUNS_API = "https://api.github.com/repos/flytohub/flyto-runtime/commits";
 // A job that stops reporting for this long is treated as dead, so a crashed
 // updater cannot block every later request.

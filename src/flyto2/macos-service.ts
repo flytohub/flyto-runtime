@@ -115,6 +115,25 @@ export function parseMacRuntimeConfigDirectory(plist: string): string | undefine
     .replaceAll("&amp;", "&");
 }
 
+/** Read the installed LaunchAgent's actual build instead of guessing the CLI checkout. */
+export function parseMacRuntimePackageRoot(plist: string): string | undefined {
+  const match = plist.match(/<key>WorkingDirectory<\/key>\s*<string>([^<]*)<\/string>/);
+  return match?.[1]
+    ?.replaceAll("&quot;", '"')
+    .replaceAll("&apos;", "'")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&amp;", "&");
+}
+
+export function installedMacRuntimePackageRoot(
+  homeDirectory = homedir(),
+): string | undefined {
+  const { plistPath } = macRuntimeServicePaths(homeDirectory);
+  if (!existsSync(plistPath)) return undefined;
+  return parseMacRuntimePackageRoot(readFileSync(plistPath, "utf8"));
+}
+
 function resolveMacRuntimeConfigDirectory(
   configDirectory?: string,
   homeDirectory = homedir(),
@@ -458,7 +477,9 @@ export function macRuntimeServiceStatus(options: {
   configDirectory?: string;
   homeDirectory?: string;
 } = {}): MacRuntimeServiceStatus {
-  const packageRoot = options.packageRoot ?? flyto2RuntimePackageRoot();
+  const packageRoot = options.packageRoot
+    ?? installedMacRuntimePackageRoot(options.homeDirectory)
+    ?? flyto2RuntimePackageRoot();
   const configDirectory = resolveMacRuntimeConfigDirectory(options.configDirectory, options.homeDirectory);
   const homeDirectory = options.homeDirectory ?? homedir();
   const paths = macRuntimeServicePaths(homeDirectory);

@@ -9,6 +9,7 @@ import {
   macRuntimeServicePaths,
   macRuntimeServiceStatus,
   parseMacRuntimeConfigDirectory,
+  parseMacRuntimePackageRoot,
   renderMacRuntimeLaunchAgent,
   restartLaunchAgentWithRecovery,
 } from "./macos-service.js";
@@ -45,6 +46,16 @@ test("installed config is recovered from the Runtime LaunchAgent", () => {
   assert.equal(parseMacRuntimeConfigDirectory(plist), configDirectory);
 });
 
+test("installed macOS build root is recovered from the LaunchAgent, including XML escapes", () => {
+  const packageRoot = "/Users/Chester/Flyto2 & Team's/Runtime";
+  const plist = renderMacRuntimeLaunchAgent({
+    packageRoot,
+    configDirectory: "/Users/Chester/Config",
+  });
+  assert.equal(parseMacRuntimePackageRoot(plist), packageRoot);
+  assert.equal(parseMacRuntimePackageRoot("<plist><dict></dict></plist>"), undefined);
+});
+
 test("native service installer can stage a LaunchAgent without loading it", {
   skip: platform() !== "darwin",
 }, async (t) => {
@@ -71,6 +82,7 @@ test("native service installer can stage a LaunchAgent without loading it", {
   assert.equal(status.loaded, loadedBeforeStage);
   assert.equal(status.plistPath, paths.plistPath);
   assert.equal(macRuntimeServiceStatus({ homeDirectory }).configDirectory, configDirectory);
+  assert.equal(macRuntimeServiceStatus({ homeDirectory }).packageRoot, packageRoot);
   const plist = await readFile(paths.plistPath, "utf8");
   assert.match(plist, /local\.flyto2\.runtime/);
   assert.match(plist, /FLYTO2_RUNTIME_CONFIG_DIR/);

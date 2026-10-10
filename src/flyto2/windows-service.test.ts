@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   parseWindowsRuntimeConfigDirectory,
+  parseWindowsRuntimePackageRoot,
   renderWindowsRuntimeScript,
   renderWindowsRuntimeTask,
   windowsRuntimeServicePaths,
@@ -25,6 +26,18 @@ test("Windows Runtime wrapper preserves config and paths with spaces", () => {
   assert.match(script, /while \(\$true\)/);
   assert.match(script, /Start-Sleep -Seconds \$restartDelaySeconds/);
   assert.match(script, /\[Math\]::Min\(30, \$restartDelaySeconds \* 2\)/);
+  assert.equal(parseWindowsRuntimePackageRoot(script), "C:\\Users\\Chester Hsu\\AppData\\Local\\Flyto2 Runtime\\releases\\v1");
+});
+
+test("Windows installed build root escapes PowerShell single quotes", () => {
+  const packageRoot = "C:\\Users\\O'Brien\\Flyto2 Runtime";
+  const script = renderWindowsRuntimeScript({
+    packageRoot,
+    configDirectory: "C:\\Flyto2\\Config",
+    nodePath: "C:\\node.exe",
+  });
+  assert.equal(parseWindowsRuntimePackageRoot(script), packageRoot);
+  assert.equal(parseWindowsRuntimePackageRoot("not a Runtime script"), undefined);
 });
 
 test("installed config is recovered from the Runtime wrapper", () => {
