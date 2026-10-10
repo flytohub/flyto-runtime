@@ -1,16 +1,46 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   CHAT_SUPERVISOR_LABEL,
+  chatRecoveryRecommendation,
   chatSupervisorPaths,
   readSupervisorObservation,
   renderChatSupervisorLaunchAgent,
   supervisorEnabled,
   supervisorState,
 } from "./chat-supervisor.js";
+
+test("conversation hard limit requires handoff rather than stop/continue", () => {
+  const limit = chatRecoveryRecommendation("conversation_limit_reached");
+  assert.equal(limit.category, "conversation_handoff");
+  assert.equal(limit.priority, "urgent");
+  assert.equal(limit.automaticActionEnabled, false);
+  assert.match(limit.recommendation, /new chat/);
+  assert.match(limit.recommendation, /Do not press Continue/);
+  assert.equal(chatRecoveryRecommendation("conversation_limit_needs_review").category, "possible_conversation_limit");
+  assert.equal(chatRecoveryRecommendation("connection_interrupted").category, "connection_recovery");
+  assert.equal(chatRecoveryRecommendation("unchanged_needs_review").category, "ui_progress_review");
+  assert.equal(chatRecoveryRecommendation("permission_required").category, "none");
+  assert.equal(chatRecoveryRecommendation("off").category, "none");
+});
+
+test("native observer recognizes conversation caps and interruptions", {
+  skip: process.platform !== "darwin" ? "requires macOS Swift compiler" : false,
+}, (t) => {
+  const buildDirectory = mkdtempSync(join(tmpdir(), "flyto2-native-chat-rules-"));
+  t.after(() => rmSync(buildDirectory, { recursive: true, force: true }));
+  const binary = join(buildDirectory, "Flyto2ChatSupervisor");
+  const source = fileURLToPath(new URL("../../scripts/macos/chat-supervisor.swift", import.meta.url));
+  execFileSync("xcrun", ["swiftc", "-O", source, "-o", binary], { timeout: 120_000 });
+  assert.match(execFileSync(binary, ["--self-test"], {
+    encoding: "utf8", timeout: 15_000,
+  }), /classification tests passed/);
+});
 
 test("Chat Supervisor keeps its app in Applications, outside hidden local state", () => {
   const paths = chatSupervisorPaths("/Users/Test Person", "/Applications");

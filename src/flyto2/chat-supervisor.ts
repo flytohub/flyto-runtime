@@ -29,6 +29,64 @@ export interface ChatSupervisorObservation {
   coverage: string;
   windowSource?: "accessibility" | "window_server_only" | null;
   accessibilityErrorCode?: number | null;
+  stopControlVisible?: boolean | null;
+}
+
+export type ChatRecoveryCategory =
+  | "conversation_handoff"
+  | "possible_conversation_limit"
+  | "connection_recovery"
+  | "ui_progress_review"
+  | "error_review"
+  | "none";
+
+export interface ChatRecoveryRecommendation {
+  category: ChatRecoveryCategory;
+  priority: "urgent" | "review" | "none";
+  recommendation: string;
+  automaticActionEnabled: false;
+}
+
+/** Read-only diagnosis. A ChatGPT window is not proof that a task is stopped. */
+export function chatRecoveryRecommendation(state: string): ChatRecoveryRecommendation {
+  const choices: Record<string, ChatRecoveryRecommendation> = {
+    conversation_limit_reached: {
+      category: "conversation_handoff",
+      priority: "urgent",
+      recommendation: "Save the available conversation and verify local task evidence, then hand off to a correctly named new chat. Do not press Continue in the capped chat or delete the old one.",
+      automaticActionEnabled: false,
+    },
+    conversation_limit_needs_review: {
+      category: "possible_conversation_limit",
+      priority: "review",
+      recommendation: "Confirm that the actual ChatGPT limit banner and Start New Chat control are present; quoted chat text is not enough evidence.",
+      automaticActionEnabled: false,
+    },
+    connection_interrupted: {
+      category: "connection_recovery",
+      priority: "review",
+      recommendation: "Check Runtime commands and side-effect evidence, then stop the stalled response and send a guarded Continue only if safe.",
+      automaticActionEnabled: false,
+    },
+    unchanged_needs_review: {
+      category: "ui_progress_review",
+      priority: "review",
+      recommendation: "Confirm ChatGPT is generating and local tools are idle before diagnosing a stall; unchanged text alone does not justify stopping.",
+      automaticActionEnabled: false,
+    },
+    error_detected: {
+      category: "error_review",
+      priority: "review",
+      recommendation: "Inspect the specific error and local task evidence before retrying or refreshing.",
+      automaticActionEnabled: false,
+    },
+  };
+  return choices[state] ?? {
+    category: "none",
+    priority: "none",
+    recommendation: "No recovery action is indicated by the current observable evidence.",
+    automaticActionEnabled: false,
+  };
 }
 
 export function chatSupervisorPaths(
@@ -199,13 +257,15 @@ export function chatSupervisorStatus(paths = chatSupervisorPaths()): object {
   const enabled = supervisorEnabled(paths);
   const loaded = platform() === "darwin" && agentLoaded();
   const observation = readSupervisorObservation(paths);
+  const state = supervisorState(enabled, loaded, observation);
   return {
     supported: platform() === "darwin",
     enabled,
-    state: supervisorState(enabled, loaded, observation),
+    state,
     loaded,
     permission_granted: observation?.permissionGranted ?? false,
     observation,
+    recovery: chatRecoveryRecommendation(state),
     capabilities: {
       visible_window_detection: true,
       accessible_chat_observation: enabled && loaded && observation?.windowSource === "accessibility",

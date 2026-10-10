@@ -47,6 +47,34 @@ that an app window is onscreen. This reports `window_detected_unreadable`, not
 `observing` or `error_detected`. WindowServer visibility is not permission to
 read screen pixels or infer model progress.
 
+### Recovery signals
+
+`conversation_limit_reached` is reserved for a visible ChatGPT message such as
+"你已達到本次對話的長度上限" (or an English equivalent) *together with* the
+dedicated **開始新對話 / Start new chat** button. This is **not** a network or
+model stall; repeated `Continue` in the capped conversation cannot resolve it.
+The safe next step is an evidence-backed handoff to a new conversation with a
+descriptive name such as `Flyto2 Engine — SPM Closure [CONT-02]`. Prefer asking
+the original chat to summarize before reaching the limit; if it is already
+blocked, reconstruct from readable conversation context and verified Runtime,
+Git and task evidence. Don't delete or archive the old conversation until the
+replacement is verified.
+
+`conversation_limit_needs_review` indicates a possible quoted limit message
+without the required UI button evidence; never perform a rollover based only
+on quoted text. `connection_interrupted` is a separate recoverable network
+signal, and `unchanged_needs_review` is reported only for an unchanged view
+that still exposes a Stop control. The structured observation includes a
+`stopControlVisible` indicator when accessible. The `supervisor status` command returns a
+read-only `recovery` recommendation. None of these indications currently
+authorizes UI clicking, automatic chat creation, or repeated tool commands.
+
+**Development installs:** changing the Swift helper code changes its ad-hoc
+signature and can revoke macOS Accessibility consent. To preserve an already
+approved, functioning observer, build and test new detectors before scheduling
+a controlled app upgrade. Source changes alone do not upgrade the installed
+signed observer or activate its new detection patterns.
+
 If permission is absent, the observer remains `permission_required` instead
 of faking success or performing arbitrary screen clicks. The main Runtime
 continues serving MCP independently. The LaunchAgent can be stopped via
