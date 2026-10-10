@@ -78,6 +78,7 @@ type Command =
   | "app"
   | "launcher"
   | "service"
+  | "supervisor"
   | "plugin"
   | "help"
   | "version";
@@ -128,6 +129,9 @@ async function main(argv: string[]): Promise<void> {
     case "service":
       await (await import("./flyto2/operator-cli.js")).runServiceCommand(args);
       return;
+    case "supervisor":
+      (await import("./flyto2/chat-supervisor.js")).runChatSupervisorCommand(args);
+      return;
     case "plugin":
       await runPluginCommand(args);
       return;
@@ -154,6 +158,7 @@ function normalizeCommand(command: string | undefined): Command {
     || command === "app"
     || command === "launcher"
     || command === "service"
+    || command === "supervisor"
     || command === "plugin"
   ) return command;
   if (command === "help" || command === "--help" || command === "-h") return "help";
@@ -1164,6 +1169,7 @@ function printHelp(): void {
       "  flyto2-runtime menu          Open the interactive Flyto2 Runtime launcher",
       "  flyto2-runtime launcher install|status|remove",
       "  flyto2-runtime service install|start|stop|restart|status|update|rollback|uninstall",
+      "  flyto2-runtime supervisor on|off|status  Opt-in macOS ChatGPT observer",
       "  flyto2-runtime plugin build [options]  Create an upload-ready portable ChatGPT plugin ZIP",
       "  devspace agents targets [--json]  List usable subagent providers and profiles",
       "  devspace agents ls       List subagent sessions",

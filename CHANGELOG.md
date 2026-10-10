@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.1.7 - 2026-10-11
+
+- Add an opt-in macOS Chat Supervisor observer with `supervisor on|off|status`, persisted choice, a dedicated signed LaunchAgent app and explicit macOS Accessibility permission. The observer records only local window metadata and generic error indicators.
+- Separate desired ON from effective permission/health status. Never mistake a stalled UI for a failed task or silently retry, refresh, hand off, delete, or dispatch host conversations without an independently verified controller.
+
 ## 1.1.6 - 2026-10-10
 
 - Report installed Runtime package roots from the macOS LaunchAgent and Windows Task Scheduler wrapper instead of the CLI checkout path; preserve escaped path characters.
