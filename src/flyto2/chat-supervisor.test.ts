@@ -12,6 +12,14 @@ import {
   supervisorState,
 } from "./chat-supervisor.js";
 
+test("Chat Supervisor keeps its app in Applications, outside hidden local state", () => {
+  const paths = chatSupervisorPaths("/Users/Test Person", "/Applications");
+  assert.equal(paths.appRoot, "/Applications/Flyto2 Chat Supervisor.app");
+  assert.equal(paths.executable, "/Applications/Flyto2 Chat Supervisor.app/Contents/MacOS/Flyto2ChatSupervisor");
+  assert.match(paths.statusFile, /Library\/Application Support\/Flyto2 Runtime\/chat-supervisor\/status\.json$/);
+  assert.doesNotMatch(paths.appRoot, /Library\/Application Support/);
+});
+
 test("Chat Supervisor remains disabled unless the user explicitly opts in", (t) => {
   const root = mkdtempSync(join(tmpdir(), "flyto2-chat-supervisor-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));

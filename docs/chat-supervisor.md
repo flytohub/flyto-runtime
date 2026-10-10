@@ -8,14 +8,14 @@ Runtime service restarts.
 ## Install and authorize
 
 Run `flyto2-runtime supervisor on`. This creates an agent in the user's
-LaunchAgents directory, builds the dedicated `Flyto2 Chat Supervisor.app`, and
+LaunchAgents directory, installs the dedicated `/Applications/Flyto2 Chat Supervisor.app`, registers it with LaunchServices, and
 opens System Settings > Privacy & Security > Accessibility. The user must
 explicitly enable **Flyto2 Chat Supervisor** there. `on` does *not* grant
 permission and `status` reports `permission_required` until macOS grants it.
 On startup the helper asks macOS for Accessibility consent using the native
 system prompt; this does not grant permission automatically. If the newly
 installed app does not appear in the Privacy > Accessibility list, click `+`
-and select `~/Library/Application Support/Flyto2 Runtime/chat-supervisor/Flyto2 Chat Supervisor.app`.
+and select `/Applications/Flyto2 Chat Supervisor.app` (not a hidden Library folder).
 If macOS loses that authorization after a supervisor binary upgrade, toggle
 its Accessibility permission off and on again. Re-running `supervisor on`
 with an unchanged binary does **not** re-sign it, preserving existing consent.

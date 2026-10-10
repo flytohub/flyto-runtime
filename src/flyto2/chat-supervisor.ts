@@ -31,9 +31,16 @@ export interface ChatSupervisorObservation {
   accessibilityErrorCode?: number | null;
 }
 
-export function chatSupervisorPaths(home = homedir()): ChatSupervisorPaths {
+export function chatSupervisorPaths(
+  home = homedir(),
+  applicationDirectory = platform() === "darwin" && home === homedir()
+    ? "/Applications"
+    : join(home, "Applications"),
+): ChatSupervisorPaths {
   const root = join(flyto2NativeRuntimeHome(home), "chat-supervisor");
-  const appRoot = join(root, "Flyto2 Chat Supervisor.app");
+  // macOS permission pickers should discover a normal Applications bundle,
+  // not an app hidden inside Application Support state files.
+  const appRoot = join(applicationDirectory, "Flyto2 Chat Supervisor.app");
   return {
     root,
     appRoot,
@@ -179,6 +186,15 @@ function installObserver(paths: ChatSupervisorPaths): void {
   writeAtomic(digestPath, sourceHash);
 }
 
+function registerMacApp(appRoot: string): void {
+  // A background app started from a LaunchAgent may not be listed by macOS
+  // permission pickers until it is registered with LaunchServices.
+  const lsregister = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
+  if (existsSync(lsregister)) {
+    execFileSync(lsregister, ["-f", appRoot], { stdio: "pipe", timeout: 15_000 });
+  }
+}
+
 export function chatSupervisorStatus(paths = chatSupervisorPaths()): object {
   const enabled = supervisorEnabled(paths);
   const loaded = platform() === "darwin" && agentLoaded();
@@ -215,16 +231,38 @@ export function setChatSupervisorEnabled(enabled: boolean, paths = chatSuperviso
   }
   // Build the signed observer before opting in. Never switch an existing
   // running observer to a partial or unsigned build.
+  const previousSourceHash = existsSync(join(paths.root, "installed-source.sha256"))
+    ? readFileSync(join(paths.root, "installed-source.sha256"), "utf8") : null;
+  const previousPlist = existsSync(paths.plistFile)
+    ? readFileSync(paths.plistFile, "utf8") : null;
   installObserver(paths);
+  registerMacApp(paths.appRoot);
   const plist = renderChatSupervisorLaunchAgent(paths);
+  const sourceUnchanged = previousSourceHash !== null
+    && previousSourceHash === readFileSync(join(paths.root, "installed-source.sha256"), "utf8");
+  // No-op ON must not restart a healthy app: unnecessary service churn can
+  // invalidate its Accessibility approval on an ad-hoc signed dev build.
+  if (wasLoaded && previousPlist === plist && sourceUnchanged) {
+    writeAtomic(paths.enabledFile, JSON.stringify({ enabled: true }, null, 2));
+    return chatSupervisorStatus(paths);
+  }
   writeAtomic(paths.plistFile, plist);
-  if (wasLoaded) launchctl("bootout", `${launchDomain()}/${CHAT_SUPERVISOR_LABEL}`);
+  if (wasLoaded) {
+    launchctl("bootout", `${launchDomain()}/${CHAT_SUPERVISOR_LABEL}`);
+    // launchctl can briefly report the outgoing old service as still loaded.
+    // Wait for complete teardown before attempting to bootstrap its replacement.
+    for (let attempt = 0; attempt < 8 && agentLoaded(); attempt += 1) {
+      execFileSync("/bin/sleep", ["1"], { timeout: 2500, stdio: "ignore" });
+    }
+    if (agentLoaded()) throw new Error("Previous Chat Supervisor has not finished stopping.");
+  }
   startSupervisorAgent(paths);
   writeAtomic(paths.enabledFile, JSON.stringify({ enabled: true }, null, 2));
   // The user must grant this separately. Opening Settings is not permission.
   spawnSync("open", ["x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"], {
     stdio: "ignore", timeout: 5000,
   });
+  spawnSync("open", ["-R", paths.appRoot], { stdio: "ignore", timeout: 5000 });
   return chatSupervisorStatus(paths);
 }
 
