@@ -44,6 +44,23 @@ test("Chat Supervisor fail-closes stale status and untrusted UI", (t) => {
   assert.equal(supervisorState(true, true, null), "unresponsive");
 });
 
+test("Chat Supervisor accepts a visible but inaccessible window as an incomplete observation", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "flyto2-chat-supervisor-fallback-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const paths = chatSupervisorPaths(root);
+  mkdirSync(paths.root, { recursive: true });
+  const observedAt = new Date().toISOString();
+  const status = {
+    state: "window_detected_unreadable", permissionGranted: true,
+    appRunning: true, observedAt, windowCount: 1,
+    coverage: "visible_chatgpt_windows_only", windowSource: "window_server_only" as const,
+    accessibilityErrorCode: -25205,
+  };
+  writeFileSync(paths.statusFile, JSON.stringify(status));
+  assert.deepEqual(readSupervisorObservation(paths), status);
+  assert.equal(supervisorState(true, true, status), "window_detected_unreadable");
+});
+
 test("launchd supervisor only launches the dedicated observer, never the runtime server", () => {
   const plist = renderChatSupervisorLaunchAgent(chatSupervisorPaths("/Users/Chester & Team's"));
   assert.match(plist, new RegExp(CHAT_SUPERVISOR_LABEL.replaceAll(".", "\\.")));

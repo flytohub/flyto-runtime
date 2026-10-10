@@ -27,6 +27,8 @@ export interface ChatSupervisorObservation {
   errorHint?: string | null;
   unchangedSeconds?: number | null;
   coverage: string;
+  windowSource?: "accessibility" | "window_server_only" | null;
+  accessibilityErrorCode?: number | null;
 }
 
 export function chatSupervisorPaths(home = homedir()): ChatSupervisorPaths {
@@ -129,6 +131,24 @@ function agentLoaded(): boolean {
   }).status === 0;
 }
 
+function startSupervisorAgent(paths: ChatSupervisorPaths): void {
+  // launchd can race its own teardown after bootout. A failed first bootstrap
+  // should not turn a requested ON state into a stranded, unloaded service.
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      if (!agentLoaded()) launchctl("bootstrap", launchDomain(), paths.plistFile);
+      if (agentLoaded()) return;
+    } catch (error) {
+      lastError = error;
+    }
+    if (attempt < 4) {
+      execFileSync("/bin/sleep", ["1"], { timeout: 2500, stdio: "ignore" });
+    }
+  }
+  throw new Error(`Chat Supervisor LaunchAgent did not start: ${String(lastError)}`);
+}
+
 function installObserver(paths: ChatSupervisorPaths): void {
   const swiftPath = fileURLToPath(new URL("../../scripts/macos/chat-supervisor.swift", import.meta.url));
   if (!existsSync(swiftPath)) throw new Error("Flyto2 Chat Supervisor Swift source is missing from this distribution.");
@@ -171,8 +191,9 @@ export function chatSupervisorStatus(paths = chatSupervisorPaths()): object {
     permission_granted: observation?.permissionGranted ?? false,
     observation,
     capabilities: {
-      visible_chat_observation: true,
-      error_detection: true,
+      visible_window_detection: true,
+      accessible_chat_observation: enabled && loaded && observation?.windowSource === "accessibility",
+      error_detection: enabled && loaded && observation?.windowSource === "accessibility",
       automatic_ui_recovery: false,
       automatic_handoff: false,
       automatic_chat_creation: false,
@@ -198,7 +219,7 @@ export function setChatSupervisorEnabled(enabled: boolean, paths = chatSuperviso
   const plist = renderChatSupervisorLaunchAgent(paths);
   writeAtomic(paths.plistFile, plist);
   if (wasLoaded) launchctl("bootout", `${launchDomain()}/${CHAT_SUPERVISOR_LABEL}`);
-  launchctl("bootstrap", launchDomain(), paths.plistFile);
+  startSupervisorAgent(paths);
   writeAtomic(paths.enabledFile, JSON.stringify({ enabled: true }, null, 2));
   // The user must grant this separately. Opening Settings is not permission.
   spawnSync("open", ["x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"], {

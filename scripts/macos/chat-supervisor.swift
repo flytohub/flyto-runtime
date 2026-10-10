@@ -17,6 +17,8 @@ struct Observation: Codable {
     let unchangedSeconds: Int?
     let uiFingerprint: String?
     let coverage: String
+    let windowSource: String?
+    let accessibilityErrorCode: Int32?
 }
 
 let errors: [(String, String)] = [
@@ -27,6 +29,35 @@ let errors: [(String, String)] = [
     ("發生錯誤", "generation_error"),
     ("網路錯誤", "network_error"),
 ]
+
+// AXWindows isn't implemented consistently by every WebKit/Electron host.
+// The WindowServer can confirm a visible app window without Screen Recording
+// permission, but this fallback must never claim it can read conversation text.
+func visibleWindowCount(pid: pid_t) -> Int {
+    guard let rows = CGWindowListCopyWindowInfo(
+        [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
+    ) as? [[String: Any]] else { return 0 }
+    return rows.filter { row in
+        (row[kCGWindowOwnerPID as String] as? Int32) == pid
+          && (row[kCGWindowLayer as String] as? Int) == 0
+    }.count
+}
+
+func applicationWindows(_ app: AXUIElement) -> ([AXUIElement], Int32?) {
+    var value: CFTypeRef?
+    let error = AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value)
+    if error == .success, let windows = value as? [AXUIElement], !windows.isEmpty {
+        return (windows, nil)
+    }
+    // Some apps support only MainWindow or FocusedWindow.
+    for key in [kAXMainWindowAttribute, kAXFocusedWindowAttribute] {
+        if let value = attribute(app, key as String),
+           CFGetTypeID(value) == AXUIElementGetTypeID() {
+            return ([value as! AXUIElement], nil)
+        }
+    }
+    return ([], error == .success ? nil : error.rawValue)
+}
 
 func attribute(_ element: AXUIElement, _ key: String) -> AnyObject? {
     var value: CFTypeRef?
@@ -71,15 +102,23 @@ func observation(previousHash: String?, unchangedSince: Date?) -> (Observation, 
                             appRunning: base.appRunning, windowCount: 0,
                             conversationTitle: nil, errorHint: nil,
                             unchangedSeconds: nil, uiFingerprint: nil,
-                            coverage: "visible_chatgpt_windows_only"), nil, nil)
+                            coverage: "visible_chatgpt_windows_only", windowSource: nil,
+                            accessibilityErrorCode: nil), nil, nil)
     }
 
     let app = AXUIElementCreateApplication(chat.processIdentifier)
-    guard let windows = attribute(app, kAXWindowsAttribute as String) as? [AXUIElement] else {
-        return (Observation(state: "accessibility_unavailable", permissionGranted: true,
-                            observedAt: timestamp, appRunning: true, windowCount: 0,
-                            conversationTitle: nil, errorHint: nil, unchangedSeconds: nil,
-                            uiFingerprint: nil, coverage: "visible_chatgpt_windows_only"), nil, nil)
+    AXUIElementSetMessagingTimeout(app, 2.0)
+    let (windows, axError) = applicationWindows(app)
+    let visibleCount = max(windows.count, visibleWindowCount(pid: chat.processIdentifier))
+    let source = windows.isEmpty ? "window_server_only" : "accessibility"
+    guard !windows.isEmpty else {
+        return (Observation(state: visibleCount > 0 ? "window_detected_unreadable" : "no_visible_window",
+                            permissionGranted: true, observedAt: timestamp,
+                            appRunning: true, windowCount: visibleCount,
+                            conversationTitle: nil, errorHint: nil,
+                            unchangedSeconds: nil, uiFingerprint: nil,
+                            coverage: "visible_chatgpt_windows_only", windowSource: source,
+                            accessibilityErrorCode: axError), nil, nil)
     }
 
     // Only use the first visible window for title and observation. Other
@@ -97,13 +136,13 @@ func observation(previousHash: String?, unchangedSince: Date?) -> (Observation, 
     // UI inactivity alone is not proof the model is stuck. Mark for review;
     // no automatic click or refresh may be based solely on this timer.
     let state = matched != nil ? "error_detected"
-        : windows.isEmpty ? "no_visible_window"
         : seconds >= 300 ? "unchanged_needs_review" : "observing"
     return (Observation(state: state, permissionGranted: true,
                         observedAt: timestamp, appRunning: true,
-                        windowCount: windows.count, conversationTitle: title,
+                        windowCount: visibleCount, conversationTitle: title,
                         errorHint: matched, unchangedSeconds: seconds,
-                        uiFingerprint: hash, coverage: "visible_chatgpt_windows_only"), hash, changedAt)
+                        uiFingerprint: hash, coverage: "visible_chatgpt_windows_only",
+                        windowSource: source, accessibilityErrorCode: axError), hash, changedAt)
 }
 
 func save(_ value: Observation, to path: String) {

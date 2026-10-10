@@ -12,6 +12,12 @@ LaunchAgents directory, builds the dedicated `Flyto2 Chat Supervisor.app`, and
 opens System Settings > Privacy & Security > Accessibility. The user must
 explicitly enable **Flyto2 Chat Supervisor** there. `on` does *not* grant
 permission and `status` reports `permission_required` until macOS grants it.
+If macOS loses that authorization after a supervisor binary upgrade, toggle
+its Accessibility permission off and on again. Re-running `supervisor on`
+with an unchanged binary does **not** re-sign it, preserving existing consent.
+The development build currently uses an ad hoc signature when no stable
+Apple code-signing identity is available; that identity is not stable across
+binary changes and may require renewed consent after upgrades.
 
 Run `flyto2-runtime supervisor status` to see observer state and capability
 coverage. Run `flyto2-runtime supervisor off` to stop and disable the observer.
@@ -31,6 +37,11 @@ model progress are not observable through this helper. **Automatic Retry,
 Continue, Refresh, ChatGPT conversation creation/deletion, and handoff injection
 are deliberately not enabled**: they require a validated, app-specific UI
 controller and evidence-backed protection against duplicate side effects.
+
+On apps that don't expose `AXWindows`, WindowServer can independently confirm
+that an app window is onscreen. This reports `window_detected_unreadable`, not
+`observing` or `error_detected`. WindowServer visibility is not permission to
+read screen pixels or infer model progress.
 
 If permission is absent, the observer remains `permission_required` instead
 of faking success or performing arbitrary screen clicks. The main Runtime
