@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.1.5 - 2026-10-10
+
+- Stop native Cloudflare tunnel restart storms when the edge SRV record cannot be resolved: hold repairs while DNS is unavailable, check for recovery every 60 seconds, and emit one structured log event per DNS state transition.
+- Increase connector repair backoff up to five minutes when the network stays degraded, while resetting the retry budget as soon as redundancy is healthy.
+- Handle failed watchdog subprocess launches without bringing down the Runtime process; add isolated regression coverage for DNS outages, recovery, and sustained connector failures.
+
 ## 1.1.4 - 2026-09-30
 
 - Surface already-running durable process sessions in `open_workspace` recovery, including their originating workspace IDs and bounded progress, so a fresh ChatGPT conversation can inspect an existing CI/build/watch session instead of launching duplicate waiters.

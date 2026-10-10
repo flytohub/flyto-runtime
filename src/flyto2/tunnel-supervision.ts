@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { Resolver } from "node:dns/promises";
 import type { ServerConfig } from "../config.js";
 import { logEvent } from "../logger.js";
 import { setDevspaceConfigValues } from "../user-config.js";
@@ -14,6 +15,10 @@ import {
   readQuickTunnelProfile,
   waitForPublicDns,
 } from "./quick-tunnel.js";
+import {
+  decideTunnelRepair,
+  INITIAL_TUNNEL_REPAIR_STATE,
+} from "./tunnel-repair-policy.js";
 
 // A quick tunnel's URL changes whenever cloudflared restarts. The saved public
 // URL decides which Host headers and OAuth resource this process accepts, so a
@@ -21,6 +26,17 @@ import {
 // manager restarts this process with it (a non-zero code, because the Windows
 // supervisor treats exit 0 as a deliberate stop).
 const QUICK_TUNNEL_RESTART_EXIT_CODE = 75;
+// This is cloudflared's edge-discovery SRV name (not a DNS server override).
+const CLOUDFLARE_EDGE_SRV = "_v2-origintunneld._tcp.argotunnel.com";
+
+async function cloudflareEdgeDnsAvailable(): Promise<boolean> {
+  const resolver = new Resolver({ timeout: 2_000, tries: 1 });
+  try {
+    return (await resolver.resolveSrv(CLOUDFLARE_EDGE_SRV)).length > 0;
+  } catch {
+    return false;
+  }
+}
 
 /** Follow quick-tunnel hostname rotation and restart managed Runtime services safely. */
 export function startQuickTunnelFollower(
@@ -78,28 +94,34 @@ export function startNativeTunnelWatchdog(
 
   let stopped = false;
   let checking = false;
-  let repairAttempt = 0;
-  let nextRepairAt = 0;
+  let repairState = { ...INITIAL_TUNNEL_REPAIR_STATE };
 
   const check = async () => {
     if (stopped || checking) return;
     checking = true;
     try {
       const readiness = await nativeTunnelReadiness();
-      if (!shouldRepairNativeTunnelRedundancy(readiness)) {
-        repairAttempt = 0;
-        nextRepairAt = 0;
-        return;
-      }
-
       const now = Date.now();
-      if (now < nextRepairAt) return;
+      const degraded = shouldRepairNativeTunnelRedundancy(readiness);
+      if (degraded && now < repairState.nextRetryAt) return;
+      // Do not churn launchd/cloudflared during an upstream DNS outage.
+      // When at least one connector works, repair only the degraded peer.
+      const dnsAvailable = !degraded || readiness.ready_connectors > 0
+        || await cloudflareEdgeDnsAvailable();
+      if (stopped) return;
+      const decision = decideTunnelRepair(repairState, now, degraded, dnsAvailable);
+      repairState = decision.state;
+      if (decision.dnsTransition) {
+        logEvent(config.logging, decision.dnsTransition === "lost" ? "warn" : "info",
+          decision.dnsTransition === "lost" ? "tunnel_edge_dns_unavailable" : "tunnel_edge_dns_restored", {
+            readyConnectors: readiness.ready_connectors,
+            connectorCount: readiness.connector_count,
+            nextRetryMs: decision.retryMs,
+          });
+      }
+      if (decision.action !== "repair") return;
       const cliPath = process.argv[1];
       if (!cliPath) return;
-
-      const backoffMs = Math.min(30_000, 2_000 * (2 ** Math.min(repairAttempt, 4)));
-      nextRepairAt = now + backoffMs;
-      repairAttempt += 1;
 
       const child = spawn(
         process.execPath,
@@ -111,13 +133,18 @@ export function startNativeTunnelWatchdog(
           windowsHide: true,
         },
       );
+      child.once("error", (error) => {
+        logEvent(config.logging, "warn", "tunnel_repair_spawn_failed", {
+          error: error.message,
+        });
+      });
       child.unref();
 
       logEvent(config.logging, "warn", "tunnel_repair_started", {
         readyConnectors: readiness.ready_connectors,
         connectorCount: readiness.connector_count,
-        repairAttempt,
-        nextRetryMs: backoffMs,
+        repairAttempt: repairState.attempts,
+        nextRetryMs: decision.retryMs,
       });
     } catch (error) {
       logEvent(config.logging, "warn", "tunnel_watchdog_check_failed", {
