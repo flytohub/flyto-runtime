@@ -36,6 +36,7 @@ export type ChatRecoveryCategory =
   | "conversation_handoff"
   | "possible_conversation_limit"
   | "connection_recovery"
+  | "message_delivery_recovery"
   | "ui_progress_review"
   | "error_review"
   | "none";
@@ -66,6 +67,18 @@ export function chatRecoveryRecommendation(state: string): ChatRecoveryRecommend
       category: "connection_recovery",
       priority: "review",
       recommendation: "Check Runtime commands and side-effect evidence, then stop the stalled response and send a guarded Continue only if safe.",
+      automaticActionEnabled: false,
+    },
+    message_send_timeout: {
+      category: "message_delivery_recovery",
+      priority: "review",
+      recommendation: "ChatGPT reports a message send timeout and shows Retry. Check whether the preceding request or command took effect before any bounded resend. Do not blindly click Retry or duplicate a side-effecting operation.",
+      automaticActionEnabled: false,
+    },
+    message_timeout_needs_review: {
+      category: "message_delivery_recovery",
+      priority: "review",
+      recommendation: "Possible send timeout text without a verified Retry control. Inspect the active conversation before taking action.",
       automaticActionEnabled: false,
     },
     unchanged_needs_review: {

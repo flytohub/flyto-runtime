@@ -69,6 +69,13 @@ that still exposes a Stop control. The structured observation includes a
 read-only `recovery` recommendation. None of these indications currently
 authorizes UI clicking, automatic chat creation, or repeated tool commands.
 
+`message_send_timeout` distinguishes ChatGPT's red **訊息傳送逾時。請再試一次。**
+banner with a specific **重試** button from an ongoing stream disconnect and
+from a capped conversation. An exact Retry control is required: if the words
+are present but Retry is absent, the state is `message_timeout_needs_review`.
+Automatic resend is deliberately disabled until last-action idempotency is
+verified; otherwise a retry could repeat a side-effecting tool command.
+
 **Development installs:** changing the Swift helper code changes its ad-hoc
 signature and can revoke macOS Accessibility consent. To preserve an already
 approved, functioning observer, build and test new detectors before scheduling

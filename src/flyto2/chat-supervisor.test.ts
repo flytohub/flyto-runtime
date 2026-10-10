@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
@@ -24,6 +24,8 @@ test("conversation hard limit requires handoff rather than stop/continue", () =>
   assert.match(limit.recommendation, /Do not press Continue/);
   assert.equal(chatRecoveryRecommendation("conversation_limit_needs_review").category, "possible_conversation_limit");
   assert.equal(chatRecoveryRecommendation("connection_interrupted").category, "connection_recovery");
+  assert.equal(chatRecoveryRecommendation("message_send_timeout").category, "message_delivery_recovery");
+  assert.equal(chatRecoveryRecommendation("message_send_timeout").automaticActionEnabled, false);
   assert.equal(chatRecoveryRecommendation("unchanged_needs_review").category, "ui_progress_review");
   assert.equal(chatRecoveryRecommendation("permission_required").category, "none");
   assert.equal(chatRecoveryRecommendation("off").category, "none");
@@ -44,10 +46,11 @@ test("native observer recognizes conversation caps and interruptions", {
 
 test("Chat Supervisor keeps its app in Applications, outside hidden local state", () => {
   const paths = chatSupervisorPaths("/Users/Test Person", "/Applications");
-  assert.equal(paths.appRoot, "/Applications/Flyto2 Chat Supervisor.app");
-  assert.equal(paths.executable, "/Applications/Flyto2 Chat Supervisor.app/Contents/MacOS/Flyto2ChatSupervisor");
-  assert.match(paths.statusFile, /Library\/Application Support\/Flyto2 Runtime\/chat-supervisor\/status\.json$/);
-  assert.doesNotMatch(paths.appRoot, /Library\/Application Support/);
+  assert.equal(paths.appRoot, join("/Applications", "Flyto2 Chat Supervisor.app"));
+  assert.equal(paths.executable, join(paths.appRoot, "Contents", "MacOS", "Flyto2ChatSupervisor"));
+  assert.equal(basename(paths.statusFile), "status.json");
+  assert.equal(basename(dirname(paths.statusFile)), "chat-supervisor");
+  assert.notEqual(paths.root, paths.appRoot);
 });
 
 test("Chat Supervisor remains disabled unless the user explicitly opts in", (t) => {

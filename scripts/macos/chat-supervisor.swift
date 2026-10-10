@@ -52,6 +52,14 @@ let connectionInterruptedPhrases = [
     "waiting for the full response",
 ]
 
+let sendTimeoutPhrases = [
+    "訊息傳送逾時",
+    "message timed out",
+    "message send timed out",
+    "sending your message timed out",
+]
+let retryButtons = ["重試", "retry", "try again", "再試一次"]
+
 // These labels identify the recovery button in a terminal conversation-limit
 // banner. The ordinary sidebar "New chat" button does not count as evidence.
 let terminalNewChatButtons = ["開始新對話", "start new chat", "start a new chat"]
@@ -85,6 +93,17 @@ func classifyChatFault(_ snapshot: AccessibleSnapshot) -> ChatFault? {
         softLimitPhrases.contains(where: value.contains)
     }) {
         return ChatFault(state: "conversation_limit_needs_review", hint: "possible_conversation_limit")
+    }
+    let isSendTimeout = strings.contains { value in
+        sendTimeoutPhrases.contains(where: value.contains)
+    }
+    if isSendTimeout {
+        // The literal Retry control is important: the message could simply
+        // quote a failed send or an old conversation, not a current UI error.
+        let retryVisible = buttons.contains { retryButtons.contains($0) }
+        return ChatFault(state: retryVisible ? "message_send_timeout"
+                                           : "message_timeout_needs_review",
+                         hint: retryVisible ? "message_send_timeout" : "possible_message_timeout")
     }
     if strings.contains(where: { value in
         connectionInterruptedPhrases.contains(where: value.contains)
@@ -262,6 +281,13 @@ if args.count == 2 && args[1] == "--self-test" {
     let disconnected = AccessibleSnapshot(strings: ["連線已中斷。正在等待完整回覆"],
                                           buttons: [], stopVisible: true)
     expect(classifyChatFault(disconnected)?.state == "connection_interrupted", "network disconnect")
+    let timedOut = AccessibleSnapshot(strings: ["訊息傳送逾時。請再試一次。"],
+                                     buttons: ["重試"], stopVisible: false)
+    expect(classifyChatFault(timedOut)?.state == "message_send_timeout", "Chinese message send timeout")
+    let quotedTimeout = AccessibleSnapshot(strings: ["訊息傳送逾時。請再試一次。"],
+                                           buttons: ["複製"], stopVisible: false)
+    expect(classifyChatFault(quotedTimeout)?.state == "message_timeout_needs_review",
+           "quoted send timeout without retry action")
     expect(classifyChatFault(AccessibleSnapshot(strings: ["正常執行"], buttons: [], stopVisible: false)) == nil,
            "no false detection in normal chat")
     print("Chat Supervisor fault classification tests passed")
