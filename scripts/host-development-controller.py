@@ -14,7 +14,7 @@ import sys
 import uuid
 
 REPOS = {'flyto-app', 'flyto-cloud', 'flyto-engine', 'flyto-code', 'flyto-runtime'}
-CI_POLL_STATUSES = {'pr_published', 'ci_polling'}
+CI_POLL_STATUSES = {'published_pr', 'ci_polling'}
 CI_PASSING = {'pass', 'passing', 'success', 'successful', 'skipped', 'neutral'}
 CI_FAILING = {'fail', 'failed', 'failing', 'failure', 'error', 'cancelled', 'canceled', 'timed_out', 'action_required'}
 CI_PENDING = {'pending', 'queued', 'in_progress', 'waiting', 'requested', 'expected'}
@@ -245,7 +245,7 @@ def poll_pr_ci(checkout, state, task):
         return 'blocked'
 
     now = now_iso()
-    if task.get('status') == 'pr_published' or not task.get('ci_poll_started_at'):
+    if task.get('status') == 'published_pr' or not task.get('ci_poll_started_at'):
         task['ci_poll_started_at'] = now
     task['status'] = 'ci_polling'
     task['ci_poll_attempts'] = bounded_int(task.get('ci_poll_attempts'), 0, 0, MAX_CI_MAX_POLLS) + 1
@@ -267,7 +267,7 @@ def poll_pr_ci(checkout, state, task):
         return 'blocked'
 
     try:
-        result = subprocess.run(['gh', 'pr', 'checks', pr_ref, '--json',
+        result = subprocess.run(['gh', 'pr', 'checks', pr_ref, '--repo', f"flytohub/{task['repo']}", '--json',
                                  'name,state,link,workflow,bucket,startedAt,completedAt'],
                                 cwd=target, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 text=True, timeout=60)
@@ -279,7 +279,7 @@ def poll_pr_ci(checkout, state, task):
         return 'blocked'
 
     output = result.stdout or ''
-    if result.returncode:
+    if result.returncode not in (0, 8):
         task['status'] = 'blocked_ci_poll_error'
         task['ci_summary'] = f'gh pr checks returned {result.returncode}'
         task['ci_repair_context'] = 'gh CLI could not read PR checks; preserve state and inspect auth/repo/PR context.'

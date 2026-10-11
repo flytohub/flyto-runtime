@@ -239,7 +239,7 @@ class ControllerTests(unittest.TestCase):
                 'id': 'job_ci_success',
                 'repo': 'flyto-runtime',
                 'prompt': 'fix',
-                'status': 'pr_published',
+                'status': 'published_pr',
                 'worktree': str(worktree),
                 'pr_url': 'https://github.com/flytohub/flyto-runtime/pull/1',
             }
@@ -280,7 +280,7 @@ class ControllerTests(unittest.TestCase):
                 'id': 'job_ci_failure',
                 'repo': 'flyto-runtime',
                 'prompt': 'fix',
-                'status': 'pr_published',
+                'status': 'published_pr',
                 'worktree': str(worktree),
                 'pr_number': 12,
             }
@@ -313,7 +313,8 @@ class ControllerTests(unittest.TestCase):
             worktree.mkdir()
             task = {
                 'id': 'job_ci_pending',
-                'status': 'pr_published',
+                'repo': 'flyto-runtime',
+                'status': 'published_pr',
                 'worktree': str(worktree),
                 'pr': '13',
             }
@@ -375,7 +376,8 @@ class ControllerTests(unittest.TestCase):
             worktree.mkdir()
             task = {
                 'id': 'job_ci_cli',
-                'status': 'pr_published',
+                'repo': 'flyto-runtime',
+                'status': 'published_pr',
                 'worktree': str(worktree),
                 'pr': '15',
             }
@@ -408,7 +410,7 @@ class ControllerTests(unittest.TestCase):
                     'id': 'job_ci_first',
                     'repo': 'flyto-runtime',
                     'prompt': 'fix',
-                    'status': 'pr_published',
+                    'status': 'published_pr',
                     'worktree': str(worktree),
                     'pr': '16',
                 },
