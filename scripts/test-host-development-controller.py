@@ -13,6 +13,25 @@ spec.loader.exec_module(controller)
 
 
 class ControllerTests(unittest.TestCase):
+    def test_empty_worktree_cannot_claim_success(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            import subprocess
+            subprocess.run(['git', 'init', '-q', str(root)], check=True)
+            good, reason = controller.verify_result(root, root, {'id': 'test'})
+            self.assertFalse(good)
+            self.assertIn('no verifiable', reason)
+
+    def test_invalid_checks_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            import subprocess
+            subprocess.run(['git', 'init', '-q', str(root)], check=True)
+            (root / 'new.txt').write_text('change')
+            good, reason = controller.verify_result(root, root, {'id': 'test', 'checks': ['shell string']})
+            self.assertFalse(good)
+            self.assertEqual(reason, 'invalid check argv')
+
     def test_invalid_queue(self):
         for data in ({}, {'tasks': {}}, {'tasks': [{'id': 'duplicate'}, {'id': 'duplicate'}]}):
             with self.assertRaises(ValueError):
