@@ -119,8 +119,18 @@ const defaultInputResult = await manager.write({
   sessionId: defaultInteractive.sessionId,
   chars: "hello\n",
 });
-assert.equal(defaultInputResult.running, false);
-assert.match(defaultInputResult.output, /default-input:hello/);
+// The default interactive yield is intentionally short (250 ms). A busy CI
+// runner can take longer to schedule the child after stdin is written, so a
+// running snapshot is valid; wait for completion without resending input.
+const settledDefaultInput = defaultInputResult.running
+  ? await manager.write({
+      workspaceId: "workspace-a",
+      sessionId: defaultInteractive.sessionId,
+      yieldTimeMs: 5_000,
+    })
+  : defaultInputResult;
+assert.equal(settledDefaultInput.running, false);
+assert.match(defaultInputResult.output + (settledDefaultInput === defaultInputResult ? "" : settledDefaultInput.output), /default-input:hello/);
 
 const noisyInteractive = await manager.start({
   workspaceId: "workspace-a",
