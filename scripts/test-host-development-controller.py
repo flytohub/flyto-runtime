@@ -87,6 +87,32 @@ class ControllerTests(unittest.TestCase):
             task = json.loads((state / 'tasks.json').read_text())['tasks'][0]
             self.assertEqual(task['status'], 'blocked_invalid_task')
 
+    def test_malformed_inbox_task_rejected_without_worker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            inbox = state / 'inbox'
+            inbox.mkdir()
+            controller.write_json(state / 'tasks.json', {'tasks': []})
+            (inbox / 'job_malformed.json').write_text('{"id": "job_malformed",')
+            calls = []
+            original_run_worker = controller.run_worker
+
+            def fail_if_called(*args, **kwargs):
+                calls.append((args, kwargs))
+                raise AssertionError('worker must not run for malformed inbox task JSON')
+
+            controller.run_worker = fail_if_called
+            try:
+                with self.assertRaises(SystemExit):
+                    controller.run(state, state, True)
+            finally:
+                controller.run_worker = original_run_worker
+
+            self.assertEqual(calls, [])
+            health = json.loads((state / 'health.json').read_text())
+            self.assertEqual(health['state'], 'blocked_invalid_queue')
+            self.assertIn('Expecting property name', health['error'])
+
 
 if __name__ == '__main__':
     unittest.main()
