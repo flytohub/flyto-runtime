@@ -10,6 +10,7 @@ import { readFileSync } from "node:fs";
 import { createServer, type Server as HttpsServer } from "node:https";
 import { once } from "node:events";
 import express, { type Express, type Request, type Response } from "express";
+import { rateLimit } from "express-rate-limit";
 import type { ServerConfig } from "../config.js";
 import type { RuntimeCapabilityRegistry } from "./capability-provider.js";
 import { registryCapabilityTransport, type Flyto2CapabilityTransport } from "./capability-transport.js";
@@ -42,6 +43,15 @@ export function createMobileCompanionGateway(options: MobileGatewayOptions): Exp
   const app = express();
   app.disable("x-powered-by");
   app.use(express.json({ limit: "16kb", strict: true }));
+  // Recognized, per-client middleware at each sensitive route. Keep the
+  // independent bounded in-memory limiter below as defense in depth.
+  const requestLimit = rateLimit({
+    windowMs: 60_000,
+    limit: MAX_REQUESTS_PER_MINUTE,
+    standardHeaders: "draft-8",
+    legacyHeaders: false,
+    message: { error: "mobile_rate_limited" },
+  });
   const now = options.now ?? Date.now;
   const code = options.pairingCode ?? randomInt(0, 100_000_000).toString().padStart(8, "0");
   if (!/^\d{8}$/.test(code)) throw new Error("Invalid pairing code");
@@ -98,7 +108,7 @@ export function createMobileCompanionGateway(options: MobileGatewayOptions): Exp
     return undefined;
   }
 
-  app.post(MOBILE_COMPANION_BASE + "/pair", (req, res) => {
+  app.post(MOBILE_COMPANION_BASE + "/pair", requestLimit, (req, res) => {
     res.setHeader("Cache-Control", "no-store");
     const input = req.body?.code;
     if (used || attempts >= MAX_PAIR_ATTEMPTS || now() - created > PAIR_LIFETIME_MS) {
@@ -121,7 +131,7 @@ export function createMobileCompanionGateway(options: MobileGatewayOptions): Exp
     });
   });
 
-  app.get(MOBILE_COMPANION_BASE + "/manifest", (req, res) => {
+  app.get(MOBILE_COMPANION_BASE + "/manifest", requestLimit, (req, res) => {
     if (!authorized(req, res)) return;
     res.setHeader("Cache-Control", "no-store");
     const manifest = options.transport.manifest();
@@ -136,7 +146,7 @@ export function createMobileCompanionGateway(options: MobileGatewayOptions): Exp
     });
   });
 
-  app.post(MOBILE_COMPANION_BASE + "/invoke", async (req, res) => {
+  app.post(MOBILE_COMPANION_BASE + "/invoke", requestLimit, async (req, res) => {
     const sessionId = authorized(req, res);
     if (!sessionId) return;
     const parsed = flyto2CapabilityInvocationSchema.safeParse(req.body);
@@ -189,7 +199,7 @@ export function createMobileCompanionGateway(options: MobileGatewayOptions): Exp
 
   // One session per server lifetime in this first secure handoff. No remote
   // session refresh and no anonymous pairing-code retrieval endpoint.
-  app.post(MOBILE_COMPANION_BASE + "/unpair", (req, res) => {
+  app.post(MOBILE_COMPANION_BASE + "/unpair", requestLimit, (req, res) => {
     const id = authorized(req, res);
     if (!id) return;
     sessions.delete(id);
