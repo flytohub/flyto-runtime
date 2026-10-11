@@ -378,7 +378,12 @@ def run(root, state, once):
         write_json(queue, {'tasks': []})
     # A dead controller cannot prove whether its worker committed side effects.
     # Preserve the worktree and require review rather than replaying the prompt.
-    initial = validate_queue(json.loads(queue.read_text()))
+    try:
+        initial = validate_queue(json.loads(queue.read_text()))
+    except (ValueError, OSError, TypeError) as exc:
+        write_json(state / 'health.json', {'state': 'blocked_invalid_queue', 'error': str(exc)})
+        lock.close()
+        raise SystemExit('Invalid startup queue; refusing to start worker') from exc
     for task in initial['tasks']:
         if task.get('status') == 'running':
             task['status'] = 'blocked_interrupted_review'
