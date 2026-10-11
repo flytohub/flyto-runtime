@@ -108,7 +108,8 @@ def publish_pull_request(checkout, task, branch):
         return False, f'git push failed: {error}'
     title = task.get('pr_title') or f"chore: development controller task {task.get('id')}"
     body = format_pr_body(task)
-    result, error = run_checked([gh, 'pr', 'create', '--draft', '--base', 'main', '--head', branch,
+    result, error = run_checked([gh, 'pr', 'create', '--repo', f"flytohub/{task['repo']}",
+                                 '--draft', '--base', 'main', '--head', branch,
                                  '--title', title, '--body', body], checkout, timeout=300)
     if error:
         return False, f'gh pr create failed: {error}'
