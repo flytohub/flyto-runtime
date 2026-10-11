@@ -74,6 +74,29 @@ class ControllerTests(unittest.TestCase):
             controller.drain_inbox(state, data)
             self.assertIs(data['tasks'][0]['publish_pr'], True)
 
+    def test_cli_publish_pr_enqueue_survives_inbox_drain_without_publication(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            result = subprocess.run([
+                sys.executable,
+                str(SOURCE),
+                '--state', str(state),
+                '--enqueue', 'flyto-runtime',
+                '--prompt', 'Fix a test',
+                '--publish-pr',
+            ], check=True, capture_output=True, text=True)
+            job = result.stdout.strip()
+
+            data = {'tasks': []}
+            controller.write_json(state / 'tasks.json', data)
+            with mock.patch.object(controller, 'publish_pull_request') as publish_pull_request:
+                controller.drain_inbox(state, data)
+
+            publish_pull_request.assert_not_called()
+            self.assertEqual(data['tasks'][0]['id'], job)
+            self.assertIs(data['tasks'][0]['publish_pr'], True)
+            self.assertFalse((state / 'inbox' / f'{job}.json').exists())
+
     def test_enqueue_rejects_unknown_repo(self):
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaises(ValueError):
