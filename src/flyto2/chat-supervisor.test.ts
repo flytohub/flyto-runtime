@@ -12,6 +12,7 @@ import {
   readSupervisorObservation,
   renderChatSupervisorLaunchAgent,
   supervisorEnabled,
+  supervisorObservationEvidence,
   supervisorState,
 } from "./chat-supervisor.js";
 
@@ -100,6 +101,63 @@ test("Chat Supervisor accepts a visible but inaccessible window as an incomplete
   writeFileSync(paths.statusFile, JSON.stringify(status));
   assert.deepEqual(readSupervisorObservation(paths), status);
   assert.equal(supervisorState(true, true, status), "window_detected_unreadable");
+});
+
+test("Chat Supervisor preserves second-window fault evidence without enabling automatic retry", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "flyto2-chat-supervisor-multiwindow-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const paths = chatSupervisorPaths(root);
+  mkdirSync(paths.root, { recursive: true });
+  const observedAt = new Date().toISOString();
+  const status = {
+    state: "message_send_timeout", permissionGranted: true, observedAt,
+    appRunning: true, windowCount: 2, conversationTitle: "Second",
+    errorHint: "message_send_timeout", coverage: "visible_chatgpt_windows_only",
+    windows: [
+      { index: 0, conversationTitle: "First", state: "observing",
+        unchangedSeconds: 10, uiFingerprint: "a", stopControlVisible: false },
+      { index: 1, conversationTitle: "Second", state: "message_send_timeout",
+        errorHint: "message_send_timeout", unchangedSeconds: 0,
+        uiFingerprint: "b", stopControlVisible: false },
+    ],
+  };
+  writeFileSync(paths.statusFile, JSON.stringify(status));
+  const read = readSupervisorObservation(paths);
+  assert.equal(read?.windows?.length, 2);
+  assert.equal(read?.windows?.[1]?.conversationTitle, "Second");
+  assert.equal(supervisorState(true, true, read), "message_send_timeout");
+  assert.equal(chatRecoveryRecommendation(read?.state ?? "").automaticActionEnabled, false);
+});
+
+test("stale supervisor observations cannot advertise active Accessibility or error detection", () => {
+  const observedAt = "2026-10-11T01:00:00.000Z";
+  const observation = {
+    state: "observing", permissionGranted: true, appRunning: true,
+    observedAt, windowCount: 2, coverage: "visible_chatgpt_windows_only",
+    windowSource: "accessibility" as const,
+  };
+  const now = Date.parse(observedAt) + 5_000;
+  assert.deepEqual(supervisorObservationEvidence(true, true, observation, now), {
+    permissionGranted: true, accessibilityReady: true, fresh: true,
+  });
+  assert.deepEqual(supervisorObservationEvidence(true, true, observation, now + 61_000), {
+    permissionGranted: false, accessibilityReady: false, fresh: false,
+  });
+  assert.deepEqual(supervisorObservationEvidence(true, false, observation, now), {
+    permissionGranted: false, accessibilityReady: false, fresh: false,
+  });
+  assert.deepEqual(supervisorObservationEvidence(false, true, observation, now), {
+    permissionGranted: false, accessibilityReady: false, fresh: false,
+  });
+  assert.deepEqual(supervisorObservationEvidence(true, true, null, now), {
+    permissionGranted: false, accessibilityReady: false, fresh: false,
+  });
+  assert.deepEqual(supervisorObservationEvidence(true, true, {
+    ...observation, state: "window_detected_unreadable",
+    windowSource: "window_server_only" as const,
+  }, now), {
+    permissionGranted: true, accessibilityReady: false, fresh: true,
+  });
 });
 
 test("launchd supervisor only launches the dedicated observer, never the runtime server", () => {
