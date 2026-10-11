@@ -134,6 +134,7 @@ class ControllerTests(unittest.TestCase):
     def test_publish_pull_request_uses_gh_and_records_ci_state(self):
         task = {
             'id': 'job_test',
+            'repo': 'flyto-runtime',
             'prompt': 'Implement feature',
             'checks': [['python3', '-m', 'unittest']],
             'verification': 'changes present and checks passed',
@@ -166,12 +167,14 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(task['pr_url'], 'https://github.com/flytohub/flyto-runtime/pull/123')
         self.assertEqual(task['ci_state']['data']['state'], 'OPEN')
         self.assertIn('--draft', calls[4])
+        self.assertEqual(calls[4][calls[4].index('--repo') + 1], 'flytohub/flyto-runtime')
         self.assertNotIn(['/usr/bin/gh', 'pr', 'merge'], [call[:3] for call in calls])
         self.assertNotIn(['/usr/bin/gh', 'workflow', 'run'], [call[:3] for call in calls])
 
     def test_publish_pull_request_preserves_branch_and_worktree_on_gh_error(self):
         task = {
             'id': 'job_test',
+            'repo': 'flyto-runtime',
             'prompt': 'Implement feature',
             'checks': [],
             'verification': 'changes present and checks passed',
