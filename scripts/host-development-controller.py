@@ -9,6 +9,7 @@ from pathlib import Path
 import subprocess
 import time
 import signal
+import shutil
 
 REPOS = {'flyto-app', 'flyto-cloud', 'flyto-engine', 'flyto-code', 'flyto-runtime'}
 
@@ -17,6 +18,15 @@ def write_json(path, obj):
     temp = path.with_suffix('.tmp')
     temp.write_text(json.dumps(obj, indent=2, ensure_ascii=False) + '\n')
     temp.replace(path)
+
+
+def validate_queue(data):
+    if not isinstance(data, dict) or not isinstance(data.get('tasks'), list):
+        raise ValueError('tasks must be a list')
+    ids = [t.get('id') for t in data['tasks'] if isinstance(t, dict)]
+    if len(ids) != len(data['tasks']) or len(ids) != len(set(ids)):
+        raise ValueError('tasks must be objects with unique IDs')
+    return data
 
 
 def run(root, state, once):
@@ -31,7 +41,7 @@ def run(root, state, once):
         write_json(queue, {'tasks': []})
     # A dead controller cannot prove whether its worker committed side effects.
     # Preserve the worktree and require review rather than replaying the prompt.
-    initial = json.loads(queue.read_text())
+    initial = validate_queue(json.loads(queue.read_text()))
     for task in initial['tasks']:
         if task.get('status') == 'running':
             task['status'] = 'blocked_interrupted_review'
@@ -39,8 +49,8 @@ def run(root, state, once):
     write_json(queue, initial)
     while True:
         try:
-            data = json.loads(queue.read_text())
-        except (ValueError, OSError) as exc:
+            data = validate_queue(json.loads(queue.read_text()))
+        except (ValueError, OSError, TypeError) as exc:
             write_json(state / 'health.json', {'state': 'blocked_invalid_queue', 'error': str(exc)})
             raise SystemExit('Queue invalid; refusing to run tasks') from exc
         tasks = data['tasks']
@@ -48,6 +58,7 @@ def run(root, state, once):
         if pending is None:
             write_json(state / 'heartbeat.json', {'at': dt.datetime.now(dt.timezone.utc).isoformat(), 'state': 'idle', 'pending': 0})
             if once:
+                lock.close()
                 break
             time.sleep(30)
             continue
@@ -59,6 +70,10 @@ def run(root, state, once):
             write_json(queue, data)
             continue
         checkout = root / repo
+        if not checkout.is_dir():
+            pending['status'] = 'blocked_missing_checkout'
+            write_json(queue, data)
+            continue
         # Never run in a dirty checkout or on a non-main base; fail closed.
         clean = subprocess.run(['git', '-C', str(checkout), 'status', '--porcelain'], capture_output=True, text=True)
         if clean.returncode != 0 or clean.stdout.strip():
@@ -90,8 +105,11 @@ def run(root, state, once):
                        'If blocked, report the blocker. Task: ' + prompt)
         log = state / f'{task_id}.log'
         try:
+            binary = shutil.which('codex')
+            if binary is None:
+                raise OSError('codex CLI not found in controller PATH')
             with log.open('w') as output:
-                worker = subprocess.Popen(['codex', 'exec', '--sandbox', 'workspace-write', '-C', str(target), instruction],
+                worker = subprocess.Popen([binary, 'exec', '--sandbox', 'workspace-write', '-C', str(target), instruction],
                                           stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
                 try:
                     worker.wait(timeout=7200)
@@ -111,9 +129,11 @@ def run(root, state, once):
             pending['status'] = 'blocked_worker_unavailable'
             pending['error'] = str(exc)
         pending['finished_at'] = dt.datetime.now(dt.timezone.utc).isoformat()
+        pending['log'] = str(log)
         write_json(queue, data)
         if once:
             break
+    lock.close()
 
 
 if __name__ == '__main__':
