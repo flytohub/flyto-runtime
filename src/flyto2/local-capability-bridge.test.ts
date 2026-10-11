@@ -71,6 +71,7 @@ test("local capability bridge is token-authenticated, loopback-only, and provide
 
   const unauthorized = await fetch(`${baseUrl}/manifest`);
   assert.equal(unauthorized.status, 401);
+  assert.ok(unauthorized.headers.has("ratelimit"));
 
   const manifest = await fetch(`${baseUrl}/manifest`, {
     headers: { [LOCAL_CAPABILITY_BRIDGE_TOKEN_HEADER]: token },
@@ -97,6 +98,7 @@ test("local capability bridge is token-authenticated, loopback-only, and provide
     body: JSON.stringify(invocation),
   });
   assert.equal(invoked.status, 200);
+  assert.ok(invoked.headers.has("ratelimit"));
   assert.equal((await invoked.json() as { status?: string }).status, "success");
   assert.equal(invocations.length, 1);
 

@@ -8,6 +8,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import type { Express, Request, Response } from "express";
+import { rateLimit } from "express-rate-limit";
 import type { ServerConfig } from "../config.js";
 import type { Flyto2CapabilityTransport } from "./capability-transport.js";
 import { flyto2CapabilityInvocationSchema } from "./protocol.js";
@@ -58,14 +59,24 @@ export function registerLocalCapabilityBridge(
   trackActivity: CapabilityBridgeActivityTracker = (operation) => operation(),
 ): void {
   const token = ensureLocalCapabilityBridgeToken(config.stateDir);
+  // Bound token guessing and unauthenticated traffic before either handler
+  // performs authorization or calls into the capability transport. Both
+  // endpoints share a budget so callers cannot double their request rate.
+  const requestLimit = rateLimit({
+    windowMs: 60_000,
+    limit: 240,
+    standardHeaders: "draft-8",
+    legacyHeaders: false,
+    message: { error: "local_capability_bridge_rate_limited" },
+  });
 
-  app.get(`${LOCAL_CAPABILITY_BRIDGE_BASE_PATH}/manifest`, (req, res) => {
+  app.get(`${LOCAL_CAPABILITY_BRIDGE_BASE_PATH}/manifest`, requestLimit, (req, res) => {
     if (!authorizeLocalBridge(req, res, token)) return;
     res.setHeader("Cache-Control", "no-store");
     res.json(transport.manifest());
   });
 
-  app.post(`${LOCAL_CAPABILITY_BRIDGE_BASE_PATH}/invoke`, async (req, res) => {
+  app.post(`${LOCAL_CAPABILITY_BRIDGE_BASE_PATH}/invoke`, requestLimit, async (req, res) => {
     if (!authorizeLocalBridge(req, res, token)) return;
     const parsed = flyto2CapabilityInvocationSchema.safeParse(req.body);
     if (!parsed.success) {
