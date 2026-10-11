@@ -222,12 +222,15 @@ export class HostTaskStore {
     repoRoot = workspaceRoot,
   ): HostTaskRecord | undefined {
     const now = new Date().toISOString();
-    this.database.sqlite.prepare(
+    const result = this.database.sqlite.prepare(
       `update host_tasks
        set workspace_id = ?, workspace_root = ?, updated_at = ?
        where id = ? and repo_root = ? and status = 'active'`,
     ).run(workspaceId, workspaceRoot, now, id, repoRoot);
-    return this.get(id);
+    // Do not disclose an existing task when the repository boundary or active
+    // lifecycle check rejected the adoption. The caller must see a failure,
+    // not the unmodified record from another repository.
+    return result.changes === 1 ? this.get(id) : undefined;
   }
 
   checkpoint(id: string, checkpoint: string): HostTaskRecord | undefined {

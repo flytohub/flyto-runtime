@@ -170,8 +170,34 @@ test("HostTaskStore never adopts a task across repo roots", async (t) => {
     prompt: "Task.",
   });
   const adopted = store.adoptActive(created.id, "ws_new", "/workspace-b");
-  assert.equal(adopted?.workspaceId, "ws_old");
-  assert.equal(adopted?.workspaceRoot, "/workspace-a");
+  assert.equal(adopted, undefined);
+  assert.equal(store.get(created.id)?.workspaceId, "ws_old");
+  assert.equal(store.get(created.id)?.workspaceRoot, "/workspace-a");
+  assert.equal(store.adoptActive(created.id, "ws_new", "/workspace-b", "/workspace-b"), undefined);
+  assert.equal(store.adoptActive("task_missing", "ws_new", "/workspace-a"), undefined);
+});
+
+test("HostTaskStore rejects adoption of completed and stopped tasks", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "flyto2-host-task-terminal-adoption-"));
+  const store = new HostTaskStore(stateDir);
+  t.after(async () => {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  });
+
+  for (const terminalStatus of ["completed", "stopped"] as const) {
+    const created = store.create({
+      workspaceId: "ws_original",
+      workspaceRoot: "/repo",
+      prompt: "Do not reassign a finished task.",
+    });
+    if (terminalStatus === "completed") store.complete(created.id, "Done.");
+    else store.stop(created.id, "Stopped.");
+
+    assert.equal(store.adoptActive(created.id, "ws_new", "/other", "/repo"), undefined);
+    assert.equal(store.get(created.id)?.workspaceId, "ws_original");
+    assert.equal(store.get(created.id)?.status, terminalStatus);
+  }
 });
 
 test("HostTaskStore adopts one repo task across execution roots", async (t) => {
