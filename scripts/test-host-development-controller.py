@@ -3,7 +3,9 @@
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
 
 SOURCE = Path(__file__).with_name('host-development-controller.py')
@@ -112,6 +114,220 @@ class ControllerTests(unittest.TestCase):
             health = json.loads((state / 'health.json').read_text())
             self.assertEqual(health['state'], 'blocked_invalid_queue')
             self.assertIn('Expecting property name', health['error'])
+
+    def test_pr_ci_success_waits_for_review_without_merge_or_deploy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / 'state'
+            worktree = Path(directory) / 'worktree'
+            state.mkdir()
+            worktree.mkdir()
+            task = {
+                'id': 'job_ci_success',
+                'repo': 'flyto-runtime',
+                'prompt': 'fix',
+                'status': 'pr_published',
+                'worktree': str(worktree),
+                'pr_url': 'https://github.com/flytohub/flyto-runtime/pull/1',
+            }
+            calls = []
+            original_run = controller.subprocess.run
+
+            def fake_run(argv, **kwargs):
+                calls.append(argv)
+                self.assertEqual(argv[:3], ['gh', 'pr', 'checks'])
+                return SimpleNamespace(returncode=0, stdout=json.dumps([
+                    {'name': 'test', 'state': 'SUCCESS', 'conclusion': 'success', 'link': 'https://ci.example/test'},
+                    {'name': 'lint', 'state': 'SUCCESS', 'conclusion': 'skipped'},
+                ]))
+
+            controller.subprocess.run = fake_run
+            try:
+                result = controller.poll_pr_ci(worktree, state, task)
+            finally:
+                controller.subprocess.run = original_run
+
+            self.assertEqual(result, 'passed')
+            self.assertEqual(task['status'], 'review_ci_passed')
+            self.assertIn('No merge or deploy', task['ci_summary'])
+            self.assertEqual(len(calls), 1)
+            command_text = ' '.join(calls[0])
+            self.assertNotIn('merge', command_text)
+            self.assertNotIn('deploy', command_text)
+            ci_log = json.loads(Path(task['ci_log']).read_text())
+            self.assertEqual(ci_log['status'], 'review_ci_passed')
+
+    def test_pr_ci_failure_is_blocked_with_logs_and_repair_context(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / 'state'
+            worktree = Path(directory) / 'worktree'
+            state.mkdir()
+            worktree.mkdir()
+            task = {
+                'id': 'job_ci_failure',
+                'repo': 'flyto-runtime',
+                'prompt': 'fix',
+                'status': 'pr_published',
+                'worktree': str(worktree),
+                'pr_number': 12,
+            }
+            original_run = controller.subprocess.run
+
+            def fake_run(argv, **kwargs):
+                return SimpleNamespace(returncode=0, stdout=json.dumps([
+                    {'name': 'test', 'state': 'FAILURE', 'conclusion': 'failure', 'link': 'https://ci.example/test'},
+                    {'name': 'lint', 'state': 'SUCCESS', 'conclusion': 'success'},
+                ]))
+
+            controller.subprocess.run = fake_run
+            try:
+                result = controller.poll_pr_ci(worktree, state, task)
+            finally:
+                controller.subprocess.run = original_run
+
+            self.assertEqual(result, 'blocked')
+            self.assertEqual(task['status'], 'blocked_ci_failed')
+            self.assertIn('bounded', task['ci_repair_context'])
+            ci_log = json.loads(Path(task['ci_log']).read_text())
+            self.assertEqual(ci_log['failed_checks'][0]['name'], 'test')
+            self.assertEqual(ci_log['task']['prompt'], 'fix')
+
+    def test_pr_ci_pending_remains_bounded_polling(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / 'state'
+            worktree = Path(directory) / 'worktree'
+            state.mkdir()
+            worktree.mkdir()
+            task = {
+                'id': 'job_ci_pending',
+                'status': 'pr_published',
+                'worktree': str(worktree),
+                'pr': '13',
+            }
+            original_run = controller.subprocess.run
+
+            def fake_run(argv, **kwargs):
+                return SimpleNamespace(returncode=0, stdout=json.dumps([
+                    {'name': 'test', 'state': 'PENDING', 'conclusion': None},
+                ]))
+
+            controller.subprocess.run = fake_run
+            try:
+                result = controller.poll_pr_ci(worktree, state, task)
+            finally:
+                controller.subprocess.run = original_run
+
+            self.assertEqual(result, 'pending')
+            self.assertEqual(task['status'], 'ci_polling')
+            self.assertEqual(task['ci_checks_pending'], 1)
+            self.assertNotIn('ci_log', task)
+
+    def test_pr_ci_timeout_fails_closed_before_polling_gh(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / 'state'
+            worktree = Path(directory) / 'worktree'
+            state.mkdir()
+            worktree.mkdir()
+            task = {
+                'id': 'job_ci_timeout',
+                'status': 'ci_polling',
+                'worktree': str(worktree),
+                'pr': '14',
+                'ci_poll_started_at': '2026-01-01T00:00:00+00:00',
+                'ci_timeout_seconds': 60,
+            }
+            calls = []
+            original_run = controller.subprocess.run
+
+            def fake_run(argv, **kwargs):
+                calls.append(argv)
+                raise AssertionError('gh must not run after CI polling timeout')
+
+            controller.subprocess.run = fake_run
+            try:
+                result = controller.poll_pr_ci(worktree, state, task)
+            finally:
+                controller.subprocess.run = original_run
+
+            self.assertEqual(result, 'blocked')
+            self.assertEqual(task['status'], 'blocked_ci_timeout')
+            self.assertEqual(calls, [])
+            self.assertTrue(Path(task['ci_log']).exists())
+
+    def test_pr_ci_cli_failure_fails_closed_with_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / 'state'
+            worktree = Path(directory) / 'worktree'
+            state.mkdir()
+            worktree.mkdir()
+            task = {
+                'id': 'job_ci_cli',
+                'status': 'pr_published',
+                'worktree': str(worktree),
+                'pr': '15',
+            }
+            original_run = controller.subprocess.run
+
+            def fake_run(argv, **kwargs):
+                raise subprocess.TimeoutExpired(argv, 60, output='still waiting')
+
+            controller.subprocess.run = fake_run
+            try:
+                result = controller.poll_pr_ci(worktree, state, task)
+            finally:
+                controller.subprocess.run = original_run
+
+            self.assertEqual(result, 'blocked')
+            self.assertEqual(task['status'], 'blocked_ci_poll_error')
+            self.assertIn('CI polling failed', task['ci_summary'])
+            self.assertTrue(Path(task['ci_log']).exists())
+
+    def test_run_polls_published_pr_before_new_queued_work(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'root'
+            state = Path(directory) / 'state'
+            worktree = Path(directory) / 'worktree'
+            (root / 'flyto-runtime').mkdir(parents=True)
+            state.mkdir()
+            worktree.mkdir()
+            controller.write_json(state / 'tasks.json', {'tasks': [
+                {
+                    'id': 'job_ci_first',
+                    'repo': 'flyto-runtime',
+                    'prompt': 'fix',
+                    'status': 'pr_published',
+                    'worktree': str(worktree),
+                    'pr': '16',
+                },
+                {
+                    'id': 'job_queued',
+                    'repo': 'flyto-runtime',
+                    'prompt': 'do not start yet',
+                    'status': 'queued',
+                },
+            ]})
+            original_run = controller.subprocess.run
+            original_run_worker = controller.run_worker
+
+            def fake_run(argv, **kwargs):
+                self.assertEqual(argv[:3], ['gh', 'pr', 'checks'])
+                return SimpleNamespace(returncode=0, stdout=json.dumps([
+                    {'name': 'test', 'state': 'SUCCESS', 'conclusion': 'success'},
+                ]))
+
+            def fail_worker(*args, **kwargs):
+                raise AssertionError('queued work must not start while PR CI is being reconciled')
+
+            controller.subprocess.run = fake_run
+            controller.run_worker = fail_worker
+            try:
+                controller.run(root, state, True)
+            finally:
+                controller.subprocess.run = original_run
+                controller.run_worker = original_run_worker
+
+            tasks = json.loads((state / 'tasks.json').read_text())['tasks']
+            self.assertEqual(tasks[0]['status'], 'review_ci_passed')
+            self.assertEqual(tasks[1]['status'], 'queued')
 
 
 if __name__ == '__main__':

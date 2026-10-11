@@ -14,6 +14,14 @@ import sys
 import uuid
 
 REPOS = {'flyto-app', 'flyto-cloud', 'flyto-engine', 'flyto-code', 'flyto-runtime'}
+CI_POLL_STATUSES = {'pr_published', 'ci_polling'}
+CI_PASSING = {'pass', 'passing', 'success', 'successful', 'skipped', 'neutral'}
+CI_FAILING = {'fail', 'failed', 'failing', 'failure', 'error', 'cancelled', 'canceled', 'timed_out', 'action_required'}
+CI_PENDING = {'pending', 'queued', 'in_progress', 'waiting', 'requested', 'expected'}
+DEFAULT_CI_TIMEOUT_SECONDS = 30 * 60
+MAX_CI_TIMEOUT_SECONDS = 2 * 60 * 60
+DEFAULT_CI_MAX_POLLS = 60
+MAX_CI_MAX_POLLS = 240
 
 
 def write_json(path, obj):
@@ -81,6 +89,162 @@ def verify_result(checkout, state, task):
     return True, 'changes present and checks passed'
 
 
+def now_iso():
+    return dt.datetime.now(dt.timezone.utc).isoformat()
+
+
+def bounded_int(value, default, minimum, maximum):
+    if type(value) is not int:
+        return default
+    return max(minimum, min(maximum, value))
+
+
+def task_pr_reference(task):
+    value = task.get('pr_url') or task.get('pr_number') or task.get('pr')
+    if type(value) is int:
+        return str(value)
+    if isinstance(value, str) and value.strip() and len(value.strip()) <= 256 and not value.strip().startswith('-'):
+        return value.strip()
+    return None
+
+
+def ci_log_path(state, task):
+    return state / f"{task['id']}.ci.log"
+
+
+def write_ci_log(state, task, payload):
+    path = ci_log_path(state, task)
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + '\n')
+    task['ci_log'] = str(path)
+    return path
+
+
+def check_status_value(check):
+    values = []
+    for key in ('conclusion', 'state', 'bucket'):
+        value = check.get(key)
+        if isinstance(value, str) and value.strip():
+            values.append(value.strip().lower())
+    if any(value in CI_FAILING for value in values):
+        return 'failed'
+    if any(value in CI_PENDING for value in values) or not values:
+        return 'pending'
+    if any(value in CI_PASSING for value in values):
+        return 'passed'
+    return 'pending'
+
+
+def summarize_failed_checks(checks):
+    failed = []
+    for check in checks:
+        if not isinstance(check, dict) or check_status_value(check) != 'failed':
+            continue
+        failed.append({
+            'name': check.get('name') or check.get('workflow') or 'unnamed check',
+            'state': check.get('state'),
+            'conclusion': check.get('conclusion'),
+            'link': check.get('link') or check.get('url'),
+        })
+    return failed
+
+
+def poll_pr_ci(checkout, state, task):
+    """Bounded post-PR CI observation; never merges, deploys, or claims task success."""
+    task_id = task.get('id')
+    pr_ref = task_pr_reference(task)
+    if not isinstance(task_id, str) or not task_id.isidentifier():
+        task['status'] = 'blocked_invalid_task'
+        return 'blocked'
+    if not pr_ref:
+        task['status'] = 'blocked_missing_pr'
+        task['ci_repair_context'] = 'PR publication was recorded without a usable pr_url/pr_number.'
+        return 'blocked'
+    target = Path(task.get('worktree') or checkout)
+    if not target.is_dir():
+        task['status'] = 'blocked_missing_worktree'
+        task['ci_repair_context'] = 'CI cannot be inspected because the task worktree is missing.'
+        return 'blocked'
+
+    now = now_iso()
+    if task.get('status') == 'pr_published' or not task.get('ci_poll_started_at'):
+        task['ci_poll_started_at'] = now
+    task['status'] = 'ci_polling'
+    task['ci_poll_attempts'] = bounded_int(task.get('ci_poll_attempts'), 0, 0, MAX_CI_MAX_POLLS) + 1
+    task['ci_last_polled_at'] = now
+
+    max_polls = bounded_int(task.get('ci_max_polls'), DEFAULT_CI_MAX_POLLS, 1, MAX_CI_MAX_POLLS)
+    timeout_seconds = bounded_int(task.get('ci_timeout_seconds'), DEFAULT_CI_TIMEOUT_SECONDS, 60, MAX_CI_TIMEOUT_SECONDS)
+    try:
+        started = dt.datetime.fromisoformat(str(task['ci_poll_started_at']))
+    except ValueError:
+        started = dt.datetime.now(dt.timezone.utc)
+        task['ci_poll_started_at'] = started.isoformat()
+    elapsed = (dt.datetime.now(dt.timezone.utc) - started).total_seconds()
+    if task['ci_poll_attempts'] > max_polls or elapsed > timeout_seconds:
+        task['status'] = 'blocked_ci_timeout'
+        task['ci_summary'] = 'CI did not reach a passing terminal state within the bounded polling window.'
+        task['ci_repair_context'] = 'Preserve the PR, worktree, task prompt, and CI log; repair only after explicit review.'
+        write_ci_log(state, task, {'pr': pr_ref, 'status': task['status'], 'elapsed_seconds': elapsed, 'task': task})
+        return 'blocked'
+
+    try:
+        result = subprocess.run(['gh', 'pr', 'checks', pr_ref, '--json',
+                                 'name,state,link,workflow,bucket,startedAt,completedAt'],
+                                cwd=target, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        task['status'] = 'blocked_ci_poll_error'
+        task['ci_summary'] = f'CI polling failed: {exc}'
+        task['ci_repair_context'] = 'gh CLI polling failed after PR publication; inspect task context before any repair.'
+        write_ci_log(state, task, {'pr': pr_ref, 'status': task['status'], 'error': str(exc), 'task': task})
+        return 'blocked'
+
+    output = result.stdout or ''
+    if result.returncode:
+        task['status'] = 'blocked_ci_poll_error'
+        task['ci_summary'] = f'gh pr checks returned {result.returncode}'
+        task['ci_repair_context'] = 'gh CLI could not read PR checks; preserve state and inspect auth/repo/PR context.'
+        write_ci_log(state, task, {'pr': pr_ref, 'status': task['status'], 'gh_output': output[-20000:], 'task': task})
+        return 'blocked'
+    try:
+        checks = json.loads(output)
+    except json.JSONDecodeError as exc:
+        task['status'] = 'blocked_ci_poll_error'
+        task['ci_summary'] = f'gh pr checks returned invalid JSON: {exc}'
+        task['ci_repair_context'] = 'Preserve gh output and task context; do not treat unparsable CI as success.'
+        write_ci_log(state, task, {'pr': pr_ref, 'status': task['status'], 'gh_output': output[-20000:], 'task': task})
+        return 'blocked'
+    if not isinstance(checks, list) or not checks:
+        task['status'] = 'blocked_ci_no_checks'
+        task['ci_summary'] = 'PR has no readable CI checks; refusing to claim success.'
+        task['ci_repair_context'] = 'Confirm CI configuration or GitHub permissions before manual review.'
+        write_ci_log(state, task, {'pr': pr_ref, 'status': task['status'], 'checks': checks, 'task': task})
+        return 'blocked'
+
+    statuses = [check_status_value(check) if isinstance(check, dict) else 'pending' for check in checks]
+    task['ci_checks_total'] = len(checks)
+    task['ci_checks_pending'] = statuses.count('pending')
+    task['ci_checks_failed'] = statuses.count('failed')
+    if task['ci_checks_failed']:
+        failed = summarize_failed_checks(checks)
+        task['status'] = 'blocked_ci_failed'
+        task['ci_summary'] = f"{task['ci_checks_failed']} CI check(s) failed after PR publication."
+        task['ci_failed_checks'] = failed
+        task['ci_repair_context'] = 'Repair is bounded to the existing PR/worktree; never auto-merge or deploy.'
+        write_ci_log(state, task, {'pr': pr_ref, 'status': task['status'], 'failed_checks': failed,
+                                   'checks': checks, 'task': task})
+        return 'blocked'
+    if task['ci_checks_pending']:
+        task['ci_summary'] = f"{task['ci_checks_pending']} CI check(s) still pending."
+        return 'pending'
+
+    task['status'] = 'review_ci_passed'
+    task['ci_summary'] = 'All readable PR CI checks passed; awaiting human review. No merge or deploy was attempted.'
+    task['ci_finished_at'] = now_iso()
+    write_ci_log(state, task, {'pr': pr_ref, 'status': task['status'], 'checks': checks, 'task': task})
+    return 'passed'
+
+
 def worker_instruction(prompt, feedback=None):
     policy = ('Work only in this isolated checkout. Implement the task and run appropriate tests. '
               'Do not push, merge, delete worktrees, deploy, run production scans, or bypass approval gates. '
@@ -144,6 +308,17 @@ def run(root, state, once):
             lock.close()
             raise SystemExit('Queue invalid; refusing to run tasks') from exc
         tasks = data['tasks']
+        ci_task = next((t for t in tasks if t.get('status') in CI_POLL_STATUSES), None)
+        if ci_task is not None:
+            repo = ci_task.get('repo')
+            checkout = root / repo if repo in REPOS else root
+            poll_pr_ci(checkout, state, ci_task)
+            write_json(queue, data)
+            if once:
+                lock.close()
+                break
+            time.sleep(30)
+            continue
         pending = next((t for t in tasks if t.get('status') == 'queued'), None)
         if pending is None:
             write_json(state / 'heartbeat.json', {'at': dt.datetime.now(dt.timezone.utc).isoformat(), 'state': 'idle', 'pending': 0})
