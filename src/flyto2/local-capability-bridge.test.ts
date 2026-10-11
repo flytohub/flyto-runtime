@@ -120,6 +120,39 @@ test("local capability bridge is token-authenticated, loopback-only, and provide
   assert.equal(invalid.status, 400);
   assert.equal(invocations.length, 1);
 
+  // Unauthenticated requests consume the same budget as authorized calls.
+  // Check the actual 429 behavior, not merely the presence of rate-limit headers.
+  let exhausted = false;
+  for (let attempt = 0; attempt < 240; attempt += 1) {
+    const response = await fetch(`${baseUrl}/manifest`);
+    await response.arrayBuffer();
+    if (response.status === 429) {
+      assert.ok(response.headers.has("retry-after"));
+      exhausted = true;
+      break;
+    }
+    assert.equal(response.status, 401);
+  }
+  assert.ok(exhausted, "unauthenticated requests must exhaust the shared bridge budget");
+
+  const authorizedAfterExhaustion = await fetch(`${baseUrl}/manifest`, {
+    headers: { [LOCAL_CAPABILITY_BRIDGE_TOKEN_HEADER]: token },
+  });
+  assert.equal(authorizedAfterExhaustion.status, 429);
+  await authorizedAfterExhaustion.arrayBuffer();
+
+  const invokedAfterExhaustion = await fetch(`${baseUrl}/invoke`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      [LOCAL_CAPABILITY_BRIDGE_TOKEN_HEADER]: token,
+    },
+    body: JSON.stringify(invocation),
+  });
+  assert.equal(invokedAfterExhaustion.status, 429);
+  await invokedAfterExhaustion.arrayBuffer();
+  assert.equal(invocations.length, 1, "throttled requests must not dispatch capabilities");
+
   if (process.platform !== "win32") {
     assert.equal((await stat(tokenPath)).mode & 0o777, 0o600);
   }
