@@ -11,6 +11,7 @@ import time
 import signal
 import shutil
 import sys
+import uuid
 
 REPOS = {'flyto-app', 'flyto-cloud', 'flyto-engine', 'flyto-code', 'flyto-runtime'}
 
@@ -27,6 +28,34 @@ def validate_queue(data):
     ids = [t.get('id') for t in data['tasks'] if isinstance(t, dict)]
     if len(ids) != len(data['tasks']) or len(ids) != len(set(ids)):
         raise ValueError('tasks must be objects with unique IDs')
+    return data
+
+
+def enqueue(state, repo, prompt, checks):
+    if repo not in REPOS or not prompt.strip():
+        raise ValueError('valid repository and nonempty task required')
+    if any(not check or len(check) > 12 for check in checks):
+        raise ValueError('invalid check command')
+    inbox = state / 'inbox'
+    inbox.mkdir(parents=True, exist_ok=True)
+    task_id = 'job_' + uuid.uuid4().hex
+    task = {'id': task_id, 'repo': repo, 'prompt': prompt, 'status': 'queued', 'checks': checks}
+    write_json(inbox / f'{task_id}.json', task)
+    return task_id
+
+
+def drain_inbox(state, data):
+    inbox = state / 'inbox'
+    known = {task['id'] for task in data['tasks']}
+    for file in sorted(inbox.glob('job_*.json')) if inbox.exists() else []:
+        task = json.loads(file.read_text())
+        if task.get('id') != file.stem or task.get('repo') not in REPOS or not isinstance(task.get('prompt'), str):
+            raise ValueError(f'invalid inbox task {file.name}')
+        if task['id'] not in known:
+            data['tasks'].append(task)
+            known.add(task['id'])
+            write_json(state / 'tasks.json', data)
+        file.unlink()
     return data
 
 
@@ -101,7 +130,7 @@ def run(root, state, once):
     write_json(queue, initial)
     while True:
         try:
-            data = validate_queue(json.loads(queue.read_text()))
+            data = drain_inbox(state, validate_queue(json.loads(queue.read_text())))
         except (ValueError, OSError, TypeError) as exc:
             write_json(state / 'health.json', {'state': 'blocked_invalid_queue', 'error': str(exc)})
             raise SystemExit('Queue invalid; refusing to run tasks') from exc
@@ -196,5 +225,17 @@ if __name__ == '__main__':
     p.add_argument('--root', default=str(Path.home() / 'flytohub'))
     p.add_argument('--state', default=str(Path.home() / 'Library/Application Support/Flyto2 Runtime/development-controller'))
     p.add_argument('--once', action='store_true')
+    p.add_argument('--enqueue', choices=sorted(REPOS))
+    p.add_argument('--prompt')
+    p.add_argument('--check', action='append', default=[], help='JSON argv array for an independent verification command')
     args = p.parse_args()
-    run(Path(args.root), Path(args.state), args.once)
+    if args.enqueue:
+        try:
+            checks = [json.loads(item) for item in args.check]
+            if any(not isinstance(c, list) or not all(isinstance(v, str) and v for v in c) for c in checks):
+                raise ValueError('checks must be arrays of nonempty strings')
+            print(enqueue(Path(args.state), args.enqueue, args.prompt or '', checks))
+        except (ValueError, TypeError) as exc:
+            p.error(str(exc))
+    else:
+        run(Path(args.root), Path(args.state), args.once)

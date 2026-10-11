@@ -13,6 +13,23 @@ spec.loader.exec_module(controller)
 
 
 class ControllerTests(unittest.TestCase):
+    def test_enqueue_durable_inbox_and_idempotent_drain(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            job = controller.enqueue(state, 'flyto-runtime', 'Fix a test', [['python3', '-m', 'unittest']])
+            data = {'tasks': []}
+            controller.write_json(state / 'tasks.json', data)
+            controller.drain_inbox(state, data)
+            self.assertEqual(data['tasks'][0]['id'], job)
+            self.assertEqual(data['tasks'][0]['checks'][0][0], 'python3')
+            controller.drain_inbox(state, data)
+            self.assertEqual(len(data['tasks']), 1)
+
+    def test_enqueue_rejects_unknown_repo(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(ValueError):
+                controller.enqueue(Path(directory), '../unsafe', 'task', [])
+
     def test_repair_instruction_contains_feedback_and_boundaries(self):
         instruction = controller.worker_instruction('Fix widget', 'test failed')
         self.assertIn('test failed', instruction)
