@@ -14,6 +14,13 @@ spec.loader.exec_module(controller)
 
 
 class ControllerTests(unittest.TestCase):
+    def test_publish_pr_flag_is_atomic_in_inbox(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            job = controller.enqueue(state, 'flyto-runtime', 'test task', [], publish_pr=True)
+            payload = json.loads((state / 'inbox' / f'{job}.json').read_text())
+            self.assertIs(payload['publish_pr'], True)
+
     def test_worker_model_override_does_not_change_user_configuration(self):
         command = controller.worker_command('/bin/codex', Path('/tmp/checkout'), 'task', 'gpt-5.5')
         self.assertEqual(command[-3:], ['--model', 'gpt-5.5', 'task'])

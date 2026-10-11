@@ -31,7 +31,7 @@ def validate_queue(data):
     return data
 
 
-def enqueue(state, repo, prompt, checks):
+def enqueue(state, repo, prompt, checks, publish_pr=False):
     if repo not in REPOS or not prompt.strip():
         raise ValueError('valid repository and nonempty task required')
     if any(not check or len(check) > 12 for check in checks):
@@ -39,7 +39,7 @@ def enqueue(state, repo, prompt, checks):
     inbox = state / 'inbox'
     inbox.mkdir(parents=True, exist_ok=True)
     task_id = 'job_' + uuid.uuid4().hex
-    task = {'id': task_id, 'repo': repo, 'prompt': prompt, 'status': 'queued', 'checks': checks}
+    task = {'id': task_id, 'repo': repo, 'prompt': prompt, 'status': 'queued', 'checks': checks, 'publish_pr': publish_pr}
     write_json(inbox / f'{task_id}.json', task)
     return task_id
 
@@ -326,13 +326,7 @@ if __name__ == '__main__':
             checks = [json.loads(item) for item in args.check]
             if any(not isinstance(c, list) or not all(isinstance(v, str) and v for v in c) for c in checks):
                 raise ValueError('checks must be arrays of nonempty strings')
-            task_id = enqueue(Path(args.state), args.enqueue, args.prompt or '', checks)
-            if args.publish_pr:
-                inbox_file = Path(args.state) / 'inbox' / f'{task_id}.json'
-                task = json.loads(inbox_file.read_text())
-                task['publish_pr'] = True
-                write_json(inbox_file, task)
-            print(task_id)
+            print(enqueue(Path(args.state), args.enqueue, args.prompt or '', checks, args.publish_pr))
         except (ValueError, TypeError) as exc:
             p.error(str(exc))
     else:
