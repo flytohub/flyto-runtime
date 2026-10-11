@@ -13,6 +13,15 @@ spec.loader.exec_module(controller)
 
 
 class ControllerTests(unittest.TestCase):
+    def test_worker_model_override_does_not_change_user_configuration(self):
+        command = controller.worker_command('/bin/codex', Path('/tmp/checkout'), 'task', 'gpt-5.5')
+        self.assertEqual(command[-3:], ['--model', 'gpt-5.5', 'task'])
+        self.assertIn('workspace-write', command)
+
+    def test_worker_model_can_be_unset(self):
+        command = controller.worker_command('/bin/codex', Path('/tmp/checkout'), 'task')
+        self.assertNotIn('--model', command)
+
     def test_enqueue_durable_inbox_and_idempotent_drain(self):
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory)
