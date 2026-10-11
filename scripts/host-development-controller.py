@@ -14,6 +14,13 @@ import sys
 import uuid
 
 REPOS = {'flyto-app', 'flyto-cloud', 'flyto-engine', 'flyto-code', 'flyto-runtime'}
+BACKLOG_FILE_KEYWORDS = ('todo', 'roadmap', 'backlog')
+BACKLOG_EXCLUDED_DIRS = {
+    '.git', '.hg', '.svn', '.idea', '.vscode',
+    'node_modules', 'dist', 'build', '.next', 'coverage',
+    '.venv', 'venv', '__pycache__',
+}
+BACKLOG_MAX_FILE_BYTES = 512 * 1024
 CI_POLL_STATUSES = {'published_pr', 'ci_polling'}
 CI_PASSING = {'pass', 'passing', 'success', 'successful', 'skipped', 'neutral'}
 CI_FAILING = {'fail', 'failed', 'failing', 'failure', 'error', 'cancelled', 'canceled', 'timed_out', 'action_required'}
@@ -50,6 +57,139 @@ def enqueue(state, repo, prompt, checks, publish_pr=False):
     task = {'id': task_id, 'repo': repo, 'prompt': prompt, 'status': 'queued', 'checks': checks, 'publish_pr': publish_pr}
     write_json(inbox / f'{task_id}.json', task)
     return task_id
+
+
+def is_documented_backlog_file(path):
+    name = path.name.lower()
+    return any(keyword in name for keyword in BACKLOG_FILE_KEYWORDS) and path.suffix.lower() in {
+        '', '.md', '.markdown', '.txt', '.rst', '.adoc',
+    }
+
+
+def should_skip_backlog_dir(path):
+    return path.name in BACKLOG_EXCLUDED_DIRS or path.name.startswith('.flyto')
+
+
+def backlog_item_kind(line):
+    stripped = line.strip()
+    lowered = stripped.lower()
+    if lowered.startswith(('- [ ]', '* [ ]', '+ [ ]')):
+        return 'unchecked_checkbox'
+    if lowered.startswith(('- [x]', '* [x]', '+ [x]')):
+        return 'checked_checkbox'
+    if any(token in lowered for token in ('todo', 'fixme', 'hack', 'backlog')):
+        return 'tagged_note'
+    if stripped.startswith(('-', '*', '+')) and any(token in lowered for token in ('next', 'remaining', 'open', 'pending', 'follow-up', 'follow up')):
+        return 'roadmap_note'
+    if stripped.startswith(('-', '*', '+')):
+        return 'documented_note'
+    return None
+
+
+def classify_backlog_line(line):
+    lowered = line.strip().lower()
+    if lowered.startswith(('- [x]', '* [x]', '+ [x]')):
+        return 'historic', 'completed checkbox'
+    if any(token in lowered for token in ('shipped', 'released', 'done', 'completed', 'fixed', 'superseded', 'deprecated')):
+        return 'historic', 'completion marker'
+    if lowered.startswith(('- [ ]', '* [ ]', '+ [ ]')):
+        return 'actionable', 'unchecked checkbox'
+    if any(token in lowered for token in ('todo', 'fixme', 'remaining', 'pending', 'open issue', 'follow-up', 'follow up')):
+        return 'actionable', 'open work marker'
+    if 'roadmap' in lowered or 'backlog' in lowered:
+        return 'actionable', 'roadmap/backlog marker'
+    return 'historic', 'documented note without open-work marker'
+
+
+def clean_backlog_text(line):
+    text = line.strip()
+    for prefix in ('- [ ]', '* [ ]', '+ [ ]', '- [x]', '* [x]', '+ [x]', '-', '*', '+'):
+        if text.lower().startswith(prefix):
+            return text[len(prefix):].strip()
+    return text
+
+
+def discover_backlog(root):
+    """Read documented backlog files only; never enqueue or execute discovered work."""
+    repos = []
+    actionable = []
+    historic = []
+    for repo in sorted(REPOS):
+        checkout = root / repo
+        repo_record = {'repo': repo, 'path': str(checkout), 'available': checkout.is_dir(), 'files': []}
+        repos.append(repo_record)
+        if not checkout.is_dir():
+            continue
+        for current, dirs, files in os.walk(checkout):
+            current_path = Path(current)
+            dirs[:] = [name for name in dirs if not should_skip_backlog_dir(current_path / name)]
+            for name in sorted(files):
+                path = current_path / name
+                if not is_documented_backlog_file(path) or path.is_symlink():
+                    continue
+                try:
+                    stat = path.stat()
+                except OSError:
+                    continue
+                if stat.st_size > BACKLOG_MAX_FILE_BYTES:
+                    continue
+                try:
+                    lines = path.read_text(encoding='utf-8').splitlines()
+                except UnicodeDecodeError:
+                    lines = path.read_text(encoding='utf-8', errors='replace').splitlines()
+                except OSError:
+                    continue
+                relative = str(path.relative_to(checkout))
+                repo_record['files'].append(relative)
+                for line_number, line in enumerate(lines, start=1):
+                    kind = backlog_item_kind(line)
+                    if kind is None:
+                        continue
+                    classification, reason = classify_backlog_line(line)
+                    evidence = {
+                        'repo': repo,
+                        'file': relative,
+                        'line': line_number,
+                        'text': line.strip()[:500],
+                        'kind': kind,
+                        'classification': classification,
+                        'reason': reason,
+                    }
+                    if classification == 'actionable':
+                        evidence['suggested_prompt'] = f"{repo}: {clean_backlog_text(line)[:240]}"
+                        actionable.append(evidence)
+                    else:
+                        historic.append(evidence)
+    return {
+        'generated_at': now_iso(),
+        'root': str(root),
+        'mode': 'read_only_backlog_discovery',
+        'safety': {
+            'read_only': True,
+            'enqueued_tasks': 0,
+            'auto_execute': False,
+            'requires_explicit_enqueue': True,
+        },
+        'repositories': repos,
+        'actionable': actionable,
+        'historic': historic,
+        'summary': {
+            'repositories': len(repos),
+            'available_repositories': sum(1 for repo in repos if repo['available']),
+            'files': sum(len(repo['files']) for repo in repos),
+            'actionable': len(actionable),
+            'historic': len(historic),
+        },
+    }
+
+
+def write_backlog_discovery(root, state, output=None):
+    state.mkdir(parents=True, exist_ok=True)
+    report = discover_backlog(root)
+    path = Path(output) if output else state / 'backlog-discovery.json'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_json(path, report)
+    return path, report
 
 
 def format_pr_body(task):
@@ -508,8 +648,21 @@ if __name__ == '__main__':
     p.add_argument('--prompt')
     p.add_argument('--check', action='append', default=[], help='JSON argv array for an independent verification command')
     p.add_argument('--publish-pr', action='store_true', help='after independent verification, publish a draft GitHub PR with gh CLI')
+    p.add_argument('--discover-backlog', action='store_true',
+                   help='read documented TODO/roadmap/backlog files across known repositories and write evidence JSON; never enqueues work')
+    p.add_argument('--backlog-output', help='path for --discover-backlog evidence JSON; defaults to state/backlog-discovery.json')
     args = p.parse_args()
-    if args.enqueue:
+    if args.discover_backlog:
+        if args.enqueue:
+            p.error('--discover-backlog is read-only and cannot be combined with --enqueue')
+        path, report = write_backlog_discovery(Path(args.root), Path(args.state), args.backlog_output)
+        print(json.dumps({
+            'ok': True,
+            'evidence': str(path),
+            'summary': report['summary'],
+            'safety': report['safety'],
+        }, indent=2, ensure_ascii=False))
+    elif args.enqueue:
         try:
             checks = [json.loads(item) for item in args.check]
             if any(not isinstance(c, list) or not all(isinstance(v, str) and v for v in c) for c in checks):
