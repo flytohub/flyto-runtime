@@ -20,6 +20,41 @@ struct Observation: Codable {
     let windowSource: String?
     let accessibilityErrorCode: Int32?
     let stopControlVisible: Bool?
+    // One entry per accessible window. Background tabs are not observable.
+    let windows: [WindowObservation]?
+}
+
+struct WindowObservation: Codable {
+    let index: Int
+    let conversationTitle: String?
+    let state: String
+    let errorHint: String?
+    let unchangedSeconds: Int
+    let uiFingerprint: String
+    let stopControlVisible: Bool
+}
+
+struct WindowHistory {
+    let hash: String
+    let since: Date
+}
+
+// Prefer actionable UI faults over ordinary activity, regardless of window
+// order. This is observation priority only; it never authorizes a UI action.
+func observationPriority(_ state: String) -> Int {
+    switch state {
+    case "conversation_limit_reached": return 7
+    case "message_send_timeout": return 6
+    case "connection_interrupted": return 5
+    case "error_detected": return 4
+    case "conversation_limit_needs_review", "message_timeout_needs_review": return 3
+    case "unchanged_needs_review": return 2
+    default: return 0
+    }
+}
+
+func primaryWindow(_ windows: [WindowObservation]) -> WindowObservation? {
+    windows.max { observationPriority($0.state) < observationPriority($1.state) }
 }
 
 let errors: [(String, String)] = [
@@ -187,7 +222,7 @@ func accessibleSnapshot(_ window: AXUIElement) -> AccessibleSnapshot {
     return AccessibleSnapshot(strings: result, buttons: buttons, stopVisible: stopVisible)
 }
 
-func observation(previousHash: String?, unchangedSince: Date?) -> (Observation, String?, Date?) {
+func observation(history: [String: WindowHistory]) -> (Observation, [String: WindowHistory]) {
     let now = Date()
     let timestamp = ISO8601DateFormatter().string(from: now)
     let permission = AXIsProcessTrusted()
@@ -203,12 +238,18 @@ func observation(previousHash: String?, unchangedSince: Date?) -> (Observation, 
                             conversationTitle: nil, errorHint: nil,
                             unchangedSeconds: nil, uiFingerprint: nil,
                             coverage: "visible_chatgpt_windows_only", windowSource: nil,
-                            accessibilityErrorCode: nil, stopControlVisible: nil), nil, nil)
+                            accessibilityErrorCode: nil, stopControlVisible: nil,
+                            windows: nil), [:])
     }
 
     let app = AXUIElementCreateApplication(chat.processIdentifier)
     AXUIElementSetMessagingTimeout(app, 2.0)
-    let (windows, axError) = applicationWindows(app)
+    let (allWindows, axError) = applicationWindows(app)
+    // AXWindows can include minimized windows. Never report a hidden
+    // conversation as a visible fault when macOS exposes this attribute.
+    let windows = allWindows.filter {
+        (attribute($0, kAXMinimizedAttribute as String) as? Bool) != true
+    }
     let visibleCount = max(windows.count, visibleWindowCount(pid: chat.processIdentifier))
     let source = windows.isEmpty ? "window_server_only" : "accessibility"
     guard !windows.isEmpty else {
@@ -218,32 +259,43 @@ func observation(previousHash: String?, unchangedSince: Date?) -> (Observation, 
                             conversationTitle: nil, errorHint: nil,
                             unchangedSeconds: nil, uiFingerprint: nil,
                             coverage: "visible_chatgpt_windows_only", windowSource: source,
-                            accessibilityErrorCode: axError, stopControlVisible: nil), nil, nil)
+                            accessibilityErrorCode: axError, stopControlVisible: nil,
+                            windows: nil), [:])
     }
 
-    // Only use the first visible window for title and observation. Other
-    // conversations and background tabs cannot be inferred from this result.
-    let window = windows.first
-    let title = window.flatMap { text(attribute($0, kAXTitleAttribute as String)) }
-    let snapshot = window.map(accessibleSnapshot)
-        ?? AccessibleSnapshot(strings: [], buttons: [], stopVisible: false)
-    let values = snapshot.strings
-    let fault = classifyChatFault(snapshot)
-    let hash = String(SHA256.hash(data: Data(values.joined(separator: "\n").utf8))
-                        .map { String(format: "%02x", $0) }.joined().prefix(32))
-    let changedAt = previousHash == hash ? (unchangedSince ?? now) : now
-    let seconds = max(0, Int(now.timeIntervalSince(changedAt)))
-    // UI inactivity alone is not proof the model is stuck. Mark for review;
-    // no automatic click or refresh may be based solely on this timer.
-    let state = fault?.state ?? (seconds >= 300 && snapshot.stopVisible
-        ? "unchanged_needs_review" : "observing")
-    return (Observation(state: state, permissionGranted: true,
+    var nextHistory: [String: WindowHistory] = [:]
+    var observed: [WindowObservation] = []
+    // Bounded traversal avoids one bad/massive AX tree blocking every poll.
+    // Window index and title together isolate unchanged timers; reordering
+    // resets the timer conservatively rather than claiming a false stall.
+    for (index, window) in windows.prefix(8).enumerated() {
+        let title = text(attribute(window, kAXTitleAttribute as String))
+        let snapshot = accessibleSnapshot(window)
+        let fault = classifyChatFault(snapshot)
+        let hash = String(SHA256.hash(data: Data(snapshot.strings.joined(separator: "\n").utf8))
+                            .map { String(format: "%02x", $0) }.joined().prefix(32))
+        let key = "\(index):\(title ?? "")"
+        let since = history[key]?.hash == hash ? (history[key]?.since ?? now) : now
+        nextHistory[key] = WindowHistory(hash: hash, since: since)
+        let seconds = max(0, Int(now.timeIntervalSince(since)))
+        let state = fault?.state ?? (seconds >= 300 && snapshot.stopVisible
+            ? "unchanged_needs_review" : "observing")
+        observed.append(WindowObservation(index: index, conversationTitle: title,
+                                          state: state, errorHint: fault?.hint,
+                                          unchangedSeconds: seconds, uiFingerprint: hash,
+                                          stopControlVisible: snapshot.stopVisible))
+    }
+    let selected = primaryWindow(observed)
+    return (Observation(state: selected?.state ?? "observing", permissionGranted: true,
                         observedAt: timestamp, appRunning: true,
-                        windowCount: visibleCount, conversationTitle: title,
-                        errorHint: fault?.hint, unchangedSeconds: seconds,
-                        uiFingerprint: hash, coverage: "visible_chatgpt_windows_only",
+                        windowCount: visibleCount, conversationTitle: selected?.conversationTitle,
+                        errorHint: selected?.errorHint, unchangedSeconds: selected?.unchangedSeconds,
+                        uiFingerprint: selected?.uiFingerprint,
+                        coverage: windows.count > observed.count
+                            ? "visible_chatgpt_windows_partial" : "visible_chatgpt_windows_only",
                         windowSource: source, accessibilityErrorCode: axError,
-                        stopControlVisible: snapshot.stopVisible), hash, changedAt)
+                        stopControlVisible: selected?.stopControlVisible,
+                        windows: observed), nextHistory)
 }
 
 func save(_ value: Observation, to path: String) {
@@ -290,6 +342,17 @@ if args.count == 2 && args[1] == "--self-test" {
            "quoted send timeout without retry action")
     expect(classifyChatFault(AccessibleSnapshot(strings: ["正常執行"], buttons: [], stopVisible: false)) == nil,
            "no false detection in normal chat")
+    let healthy = WindowObservation(index: 0, conversationTitle: "First", state: "observing",
+                                    errorHint: nil, unchangedSeconds: 0, uiFingerprint: "a",
+                                    stopControlVisible: false)
+    let failed = WindowObservation(index: 1, conversationTitle: "Second", state: "message_send_timeout",
+                                   errorHint: "message_send_timeout", unchangedSeconds: 0,
+                                   uiFingerprint: "b", stopControlVisible: false)
+    expect(primaryWindow([healthy, failed])?.conversationTitle == "Second",
+           "second ChatGPT window fault must not be masked by first window")
+    expect(primaryWindow([failed, healthy])?.state == "message_send_timeout",
+           "window order must not mask a fault")
+    expect(primaryWindow([healthy])?.state == "observing", "normal window remains observing")
     print("Chat Supervisor fault classification tests passed")
     exit(0)
 }
@@ -302,12 +365,10 @@ if args.count != 3 || args[1] != "--watch" {
 // perform it once per process launch to avoid repeated system prompts.
 let promptOptions = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
 _ = AXIsProcessTrustedWithOptions(promptOptions)
-var previous: String? = nil
-var changed: Date? = nil
+var history: [String: WindowHistory] = [:]
 while true {
-    let (result, fingerprint, changedAt) = observation(previousHash: previous, unchangedSince: changed)
-    previous = fingerprint
-    changed = changedAt
+    let (result, nextHistory) = observation(history: history)
+    history = nextHistory
     save(result, to: args[2])
     Thread.sleep(forTimeInterval: 15)
 }

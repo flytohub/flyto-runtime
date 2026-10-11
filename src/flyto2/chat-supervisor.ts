@@ -30,6 +30,18 @@ export interface ChatSupervisorObservation {
   windowSource?: "accessibility" | "window_server_only" | null;
   accessibilityErrorCode?: number | null;
   stopControlVisible?: boolean | null;
+  /** Bounded per-window evidence. Unobservable background tabs are excluded. */
+  windows?: ChatSupervisorWindowObservation[];
+}
+
+export interface ChatSupervisorWindowObservation {
+  index: number;
+  conversationTitle?: string | null;
+  state: string;
+  errorHint?: string | null;
+  unchangedSeconds: number;
+  uiFingerprint: string;
+  stopControlVisible: boolean;
 }
 
 export type ChatRecoveryCategory =
@@ -158,6 +170,23 @@ export function supervisorState(
   return observation.state;
 }
 
+/** A cached status file cannot prove that Accessibility or fault detection is working now. */
+export function supervisorObservationEvidence(
+  enabled: boolean,
+  loaded: boolean,
+  observation: ChatSupervisorObservation | null,
+  now = Date.now(),
+): { permissionGranted: boolean; accessibilityReady: boolean; fresh: boolean } {
+  const state = supervisorState(enabled, loaded, observation, now);
+  const fresh = enabled && loaded && state !== "unresponsive"
+    && state !== "not_running" && state !== "off";
+  const permissionGranted = fresh && observation?.permissionGranted === true;
+  const accessibilityReady = permissionGranted
+    && observation?.windowSource === "accessibility"
+    && state !== "permission_required" && state !== "window_detected_unreadable";
+  return { permissionGranted, accessibilityReady, fresh };
+}
+
 function xmlEscape(value: string): string {
   return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&apos;");
@@ -271,26 +300,29 @@ export function chatSupervisorStatus(paths = chatSupervisorPaths()): object {
   const loaded = platform() === "darwin" && agentLoaded();
   const observation = readSupervisorObservation(paths);
   const state = supervisorState(enabled, loaded, observation);
+  const evidence = supervisorObservationEvidence(enabled, loaded, observation);
   return {
     supported: platform() === "darwin",
     enabled,
     state,
     loaded,
-    permission_granted: observation?.permissionGranted ?? false,
+    permission_granted: evidence.permissionGranted,
     observation,
     recovery: chatRecoveryRecommendation(state),
     capabilities: {
       visible_window_detection: true,
-      accessible_chat_observation: enabled && loaded && observation?.windowSource === "accessibility",
-      error_detection: enabled && loaded && observation?.windowSource === "accessibility",
+      accessible_chat_observation: evidence.accessibilityReady,
+      error_detection: evidence.accessibilityReady,
       automatic_ui_recovery: false,
       automatic_handoff: false,
       automatic_chat_creation: false,
       automatic_delete: false,
     },
-    next: enabled && observation?.permissionGranted !== true
-      ? "Allow Flyto2 Chat Supervisor in macOS System Settings > Privacy & Security > Accessibility."
-      : undefined,
+    next: enabled && loaded && !evidence.fresh
+      ? "Chat Supervisor observation is stale; inspect the LaunchAgent and observer logs."
+      : enabled && loaded && evidence.fresh && !evidence.permissionGranted
+        ? "Allow Flyto2 Chat Supervisor in macOS System Settings > Privacy & Security > Accessibility."
+        : undefined,
   };
 }
 
