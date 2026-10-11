@@ -171,6 +171,41 @@ class ControllerTests(unittest.TestCase):
         self.assertNotIn(['/usr/bin/gh', 'pr', 'merge'], [call[:3] for call in calls])
         self.assertNotIn(['/usr/bin/gh', 'workflow', 'run'], [call[:3] for call in calls])
 
+    def test_publish_pull_request_uses_validated_repo_from_isolated_worktree(self):
+        task = {
+            'id': 'job_test',
+            'repo': 'flyto-runtime',
+            'prompt': 'Implement feature',
+            'checks': [],
+            'verification': 'changes present and checks passed',
+        }
+        checkout = Path('/tmp/flyto-runtime-job_1234567890abcdef')
+        calls = []
+
+        def fake_run(argv, **kwargs):
+            calls.append(argv)
+            if argv[:3] == ['git', '-C', str(checkout)]:
+                return controller.subprocess.CompletedProcess(argv, 0, stdout='', stderr='')
+            if argv[:2] == ['git', 'push']:
+                return controller.subprocess.CompletedProcess(argv, 0, stdout='pushed\n', stderr='')
+            if argv[:3] == ['/usr/bin/gh', 'pr', 'create']:
+                return controller.subprocess.CompletedProcess(
+                    argv, 0, stdout='https://github.com/flytohub/flyto-runtime/pull/123\n', stderr='')
+            if argv[:3] == ['/usr/bin/gh', 'pr', 'view']:
+                return controller.subprocess.CompletedProcess(
+                    argv, 0, stdout=json.dumps({'url': task['pr_url'], 'state': 'OPEN', 'statusCheckRollup': []}), stderr='')
+            self.fail(f'unexpected command: {argv}')
+
+        with mock.patch.object(controller.shutil, 'which', return_value='/usr/bin/gh'):
+            with mock.patch.object(controller.subprocess, 'run', side_effect=fake_run):
+                published, reason = controller.publish_pull_request(checkout, task, 'auto/job_test')
+
+        self.assertTrue(published)
+        self.assertEqual(reason, 'pull request published')
+        create_calls = [call for call in calls if call[:3] == ['/usr/bin/gh', 'pr', 'create']]
+        self.assertEqual(len(create_calls), 1)
+        self.assertEqual(create_calls[0][create_calls[0].index('--repo') + 1], 'flytohub/flyto-runtime')
+
     def test_publish_pull_request_preserves_branch_and_worktree_on_gh_error(self):
         task = {
             'id': 'job_test',
