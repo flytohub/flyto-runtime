@@ -83,57 +83,44 @@ function parseLegacyTaskCommand(
     };
   }
 
-  const status = /^status\s+(\S+)$/.exec(rest);
-  if (status) {
-    return {
-      action: "status",
-      workspace_id: workspaceId,
-      task_id: status[1],
-      include_response: true,
-    };
-  }
+  // Do not use backtracking regexes on caller-controlled commands. A cached
+  // ChatGPT catalog can send arbitrarily long legacy shell strings here.
+  const verbEnd = firstWhitespace(rest, 0);
+  if (verbEnd === rest.length) return undefined;
+  const verb = rest.slice(0, verbEnd);
+  if (!["status", "wait", "continue", "complete", "stop"].includes(verb)) return undefined;
 
-  const wait = /^wait\s+(\S+)$/.exec(rest);
-  if (wait) {
-    return {
-      action: "wait",
-      workspace_id: workspaceId,
-      task_id: wait[1],
-      include_response: true,
-    };
-  }
+  const idStart = skipWhitespace(rest, verbEnd);
+  if (idStart === rest.length) return undefined;
+  const idEnd = firstWhitespace(rest, idStart);
+  const taskId = rest.slice(idStart, idEnd);
+  const promptStart = skipWhitespace(rest, idEnd);
+  const hasPrompt = promptStart < rest.length;
 
-  const continuation = /^continue\s+(\S+)\s+([\s\S]+)$/.exec(rest);
-  if (continuation) {
-    return {
-      action: "continue",
-      workspace_id: workspaceId,
-      task_id: continuation[1],
-      prompt: continuation[2].trim(),
-    };
+  if (verb === "status" || verb === "wait") {
+    if (hasPrompt) return undefined;
+    return { action: verb, workspace_id: workspaceId, task_id: taskId, include_response: true };
   }
+  if (verb === "continue" && !hasPrompt) return undefined;
+  return {
+    action: verb,
+    workspace_id: workspaceId,
+    task_id: taskId,
+    ...(hasPrompt ? { prompt: rest.slice(promptStart).trim() } : {}),
+  };
+}
 
-  const completion = /^complete\s+(\S+)(?:\s+([\s\S]+))?$/.exec(rest);
-  if (completion) {
-    return {
-      action: "complete",
-      workspace_id: workspaceId,
-      task_id: completion[1],
-      ...(completion[2] ? { prompt: completion[2].trim() } : {}),
-    };
+function firstWhitespace(value: string, start: number): number {
+  for (let index = start; index < value.length; index += 1) {
+    if (/\s/u.test(value[index])) return index;
   }
+  return value.length;
+}
 
-  const stop = /^stop\s+(\S+)(?:\s+([\s\S]+))?$/.exec(rest);
-  if (stop) {
-    return {
-      action: "stop",
-      workspace_id: workspaceId,
-      task_id: stop[1],
-      ...(stop[2] ? { prompt: stop[2].trim() } : {}),
-    };
-  }
-
-  return undefined;
+function skipWhitespace(value: string, start: number): number {
+  let index = start;
+  while (index < value.length && /\s/u.test(value[index])) index += 1;
+  return index;
 }
 
 function renameArgument(
