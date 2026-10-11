@@ -2,6 +2,7 @@
 
 | Date | Topic | File | Status |
 | --- | --- | --- | --- |
+| 2026-10-11 | Local capability bridge request throttling | `2026-10-11-local-capability-bridge-rate-limit.md` | Isolated source patch; local suite 386 pass / 4 skip; GitHub CodeQL/CI pending |
 | 2026-10-11 | Chat Supervisor observes multiple visible ChatGPT windows | `2026-10-11-chat-supervisor-multiwindow.md` | Source verified; installed observer upgrade and two-window GUI acceptance pending |
 | 2026-10-07 | Red main CI: Windows EBUSY and timing-dependent process tests | `2026-10-07-red-main-smoke-matrix.md` | Resolved |
 | 2026-09-24 | Release loop hardening: flaky daemon test, ABI, reproducible app, widget | `2026-09-24-closed-loop-hardening.md` | Resolved |
