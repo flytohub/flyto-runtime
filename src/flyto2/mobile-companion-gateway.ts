@@ -42,7 +42,6 @@ export interface MobileGatewayOptions {
 export function createMobileCompanionGateway(options: MobileGatewayOptions): Express {
   const app = express();
   app.disable("x-powered-by");
-  app.use(express.json({ limit: "16kb", strict: true }));
   // Recognized, per-client middleware at each sensitive route. Keep the
   // independent bounded in-memory limiter below as defense in depth.
   const requestLimit = rateLimit({
@@ -84,6 +83,9 @@ export function createMobileCompanionGateway(options: MobileGatewayOptions): Exp
     }
     next();
   });
+  // Reject excessive requests before parsing their bodies. Otherwise malformed
+  // JSON returns a parser error before either route-level limiter can run.
+  app.use(express.json({ limit: "16kb", strict: true }));
   let attempts = 0;
   let used = false;
   const sessions = new Map<string, PairedSession>();

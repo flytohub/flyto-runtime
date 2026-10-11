@@ -96,6 +96,10 @@ test("unauthorized requests are rate-limited before authentication", async (t) =
   assert.equal(response.status, 429);
   assert.equal((await response.json() as { error: string }).error, "mobile_rate_limited");
   assert.ok(Number(response.headers.get("retry-after")) > 0);
+  const invalidBody = await fetch(f.origin + "/pair", {
+    method: "POST", headers: postHeaders, body: "not-json",
+  });
+  assert.equal(invalidBody.status, 429);
 });
 
 test("wrong codes exhaust pairing, and correct code cannot be reused", async (t) => {
