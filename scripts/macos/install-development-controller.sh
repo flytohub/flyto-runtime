@@ -7,13 +7,16 @@ LABEL=com.flyto2.development-controller
 STATE="$HOME/Library/Application Support/Flyto2 Runtime/development-controller"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 test -f "$SCRIPT" || { echo "Missing $SCRIPT; merge and deploy the controller first" >&2; exit 1; }
+command -v codex >/dev/null || { echo "codex CLI missing; refusing to install" >&2; exit 1; }
+CODEX_DIR="$(dirname "$(command -v codex)")"
 mkdir -p "$STATE" "$HOME/Library/LaunchAgents"
-python3 - "$PLIST" "$SCRIPT" "$ROOT" "$STATE" "$LABEL" <<'PY'
+python3 - "$PLIST" "$SCRIPT" "$ROOT" "$STATE" "$LABEL" "$CODEX_DIR" <<'PY'
 import plistlib, sys
-plist, script, root, state, label = sys.argv[1:]
+plist, script, root, state, label, binary_dir = sys.argv[1:]
 with open(plist, 'wb') as f:
     plistlib.dump({'Label': label, 'ProgramArguments': ['/usr/bin/python3', script, '--root', root, '--state', state],
                    'RunAtLoad': True, 'KeepAlive': {'SuccessfulExit': False}, 'ProcessType': 'Background',
+                   'EnvironmentVariables': {'PATH': binary_dir + ':/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin'},
                    'StandardOutPath': state + '/stdout.log', 'StandardErrorPath': state + '/stderr.log'}, f)
 PY
 chmod 600 "$PLIST"
