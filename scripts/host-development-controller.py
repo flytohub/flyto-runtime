@@ -219,6 +219,7 @@ def run(root, state, once):
             data = drain_inbox(state, validate_queue(json.loads(queue.read_text())))
         except (ValueError, OSError, TypeError) as exc:
             write_json(state / 'health.json', {'state': 'blocked_invalid_queue', 'error': str(exc)})
+            lock.close()
             raise SystemExit('Queue invalid; refusing to run tasks') from exc
         tasks = data['tasks']
         pending = next((t for t in tasks if t.get('status') == 'queued'), None)
