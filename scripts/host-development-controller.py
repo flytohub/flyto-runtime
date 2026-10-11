@@ -39,7 +39,7 @@ def validate_queue(data):
     return data
 
 
-def enqueue(state, repo, prompt, checks):
+def enqueue(state, repo, prompt, checks, publish_pr=False):
     if repo not in REPOS or not prompt.strip():
         raise ValueError('valid repository and nonempty task required')
     if any(not check or len(check) > 12 for check in checks):
@@ -47,9 +47,86 @@ def enqueue(state, repo, prompt, checks):
     inbox = state / 'inbox'
     inbox.mkdir(parents=True, exist_ok=True)
     task_id = 'job_' + uuid.uuid4().hex
-    task = {'id': task_id, 'repo': repo, 'prompt': prompt, 'status': 'queued', 'checks': checks}
+    task = {'id': task_id, 'repo': repo, 'prompt': prompt, 'status': 'queued', 'checks': checks, 'publish_pr': publish_pr}
     write_json(inbox / f'{task_id}.json', task)
     return task_id
+
+
+def format_pr_body(task):
+    checks = task.get('checks', [])
+    check_lines = '\n'.join(f"- `{' '.join(check)}`" for check in checks) if checks else '- No extra checks requested.'
+    return (
+        'Automated development-controller publication after independent local verification.\n\n'
+        f"Task: {task.get('prompt', '').strip()}\n\n"
+        'Verification:\n'
+        f"- {task.get('verification', 'not recorded')}\n"
+        f"{check_lines}\n\n"
+        'Safety:\n'
+        '- Draft pull request only.\n'
+        '- No auto-merge, deployment, release, or production scan was requested.\n'
+    )
+
+
+def run_checked(argv, cwd, timeout=900):
+    try:
+        result = subprocess.run(argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return None, str(exc)
+    if result.returncode:
+        return None, result.stdout[-2000:]
+    return result, None
+
+
+def read_ci_state(gh, checkout, pr_url):
+    result = subprocess.run([gh, 'pr', 'view', pr_url, '--json', 'url,state,statusCheckRollup'],
+                            cwd=checkout, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, timeout=120)
+    ci_state = {'command': 'gh pr view', 'exit_code': result.returncode}
+    if result.returncode == 0:
+        try:
+            ci_state['data'] = json.loads(result.stdout or '{}')
+        except json.JSONDecodeError:
+            ci_state['raw'] = result.stdout[-4000:]
+    else:
+        ci_state['error'] = result.stdout[-4000:]
+    return ci_state
+
+
+def publish_pull_request(checkout, task, branch):
+    """Publish only after independent verification; leave branch/worktree intact on failure."""
+    if task.get('verification') != 'changes present and checks passed':
+        return False, 'task is not independently verified'
+    gh = shutil.which('gh')
+    if gh is None:
+        return False, 'gh CLI not found in controller PATH'
+    status = subprocess.run(['git', '-C', str(checkout), 'status', '--porcelain'], capture_output=True, text=True)
+    if status.returncode:
+        return False, 'could not inspect worktree before PR publication'
+    if status.stdout.strip():
+        result, error = run_checked(['git', 'add', '--all'], checkout)
+        if error:
+            return False, f'git add failed: {error}'
+        title = task.get('pr_title') or f"chore: development controller task {task.get('id')}"
+        result, error = run_checked(['git', 'commit', '-m', title], checkout)
+        if error:
+            return False, f'git commit failed: {error}'
+    result, error = run_checked(['git', 'push', '--set-upstream', 'origin', branch], checkout, timeout=900)
+    if error:
+        return False, f'git push failed: {error}'
+    title = task.get('pr_title') or f"chore: development controller task {task.get('id')}"
+    body = format_pr_body(task)
+    result, error = run_checked([gh, 'pr', 'create', '--repo', f"flytohub/{task['repo']}",
+                                 '--draft', '--base', 'main', '--head', branch,
+                                 '--title', title, '--body', body], checkout, timeout=300)
+    if error:
+        return False, f'gh pr create failed: {error}'
+    pr_url = (result.stdout or '').strip().splitlines()[-1].strip()
+    if not pr_url.startswith('https://github.com/'):
+        return False, 'gh pr create did not return a GitHub PR URL'
+    task['pr_url'] = pr_url
+    task['ci_state'] = read_ci_state(gh, checkout, pr_url)
+    return True, 'pull request published'
 
 
 def drain_inbox(state, data):
@@ -58,6 +135,8 @@ def drain_inbox(state, data):
     for file in sorted(inbox.glob('job_*.json')) if inbox.exists() else []:
         task = json.loads(file.read_text())
         if task.get('id') != file.stem or task.get('repo') not in REPOS or not isinstance(task.get('prompt'), str):
+            raise ValueError(f'invalid inbox task {file.name}')
+        if 'publish_pr' in task and type(task.get('publish_pr')) is not bool:
             raise ValueError(f'invalid inbox task {file.name}')
         if task['id'] not in known:
             data['tasks'].append(task)
@@ -380,7 +459,12 @@ def run(root, state, once):
                     verified, reason = verify_result(target, state, pending)
                     pending['verification'] = reason
                     if verified:
-                        pending['status'] = 'review'
+                        if pending.get('publish_pr') is True:
+                            published, publish_reason = publish_pull_request(target, pending, branch)
+                            pending['publication'] = publish_reason
+                            pending['status'] = 'published_pr' if published else 'blocked_pr_publication'
+                        else:
+                            pending['status'] = 'review'
                         break
                     feedback = reason
                     pending['status'] = 'blocked_verification'
@@ -412,13 +496,14 @@ if __name__ == '__main__':
     p.add_argument('--enqueue', choices=sorted(REPOS))
     p.add_argument('--prompt')
     p.add_argument('--check', action='append', default=[], help='JSON argv array for an independent verification command')
+    p.add_argument('--publish-pr', action='store_true', help='after independent verification, publish a draft GitHub PR with gh CLI')
     args = p.parse_args()
     if args.enqueue:
         try:
             checks = [json.loads(item) for item in args.check]
             if any(not isinstance(c, list) or not all(isinstance(v, str) and v for v in c) for c in checks):
                 raise ValueError('checks must be arrays of nonempty strings')
-            print(enqueue(Path(args.state), args.enqueue, args.prompt or '', checks))
+            print(enqueue(Path(args.state), args.enqueue, args.prompt or '', checks, args.publish_pr))
         except (ValueError, TypeError) as exc:
             p.error(str(exc))
     else:
