@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — local-first mobile gateway (2026-10-10)
+
+- Opt-in HTTPS mobile API exposing the registered Runtime capability
+  manifest and invocation/result contract.
+- Added one-use pairing code, 30-minute mobile session, TLS certificate
+  fingerprint display, explicit capability allowlist, high-risk denial
+  and operation-ID replay protection.
+- No change to same-user localhost bridge and no mandatory Cloud service.
+- Added optional installed adapter manifest, dynamic capability composition
+  and bounded, no-shell external provider invocation. Mobile gate remains
+  strictly read/low-risk only until host/device approvals are implemented.
+
 ## Unreleased
 
 ## 1.1.7 - 2026-10-11

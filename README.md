@@ -1,5 +1,10 @@
 # Flyto2 Runtime
 
+Experimental: the optional [locally paired HTTPS mobile companion gateway](docs/mobile-companion-gateway.md)
+exports explicitly allowed installed Runtime capabilities to the Flutter
+App without Flyto2 Cloud or the cybersecurity Engine. It does not grant
+unrestricted host or physical robot control.
+
 **Give ChatGPT secure access to your machine. Turn ChatGPT into Codex.**
 
 ChatGPT can tell you what to change. **Flyto2 Runtime lets it actually do the work.**
