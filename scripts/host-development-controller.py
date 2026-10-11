@@ -90,12 +90,20 @@ def worker_instruction(prompt, feedback=None):
     return policy
 
 
+def worker_command(binary, target, instruction, model=None):
+    argv = [binary, 'exec', '--sandbox', 'workspace-write', '-C', str(target)]
+    if model:
+        argv.extend(['--model', model])
+    return argv + [instruction]
+
+
 def run_worker(target, log, instruction, timeout=7200):
     binary = shutil.which('codex')
     if binary is None:
         raise OSError('codex CLI not found in controller PATH')
     with log.open('a') as output:
-        worker = subprocess.Popen([binary, 'exec', '--sandbox', 'workspace-write', '-C', str(target), instruction],
+        worker = subprocess.Popen(worker_command(binary, target, instruction,
+                                                os.environ.get('FLYTO2_DEV_MODEL', 'gpt-5.5')),
                                   stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
         try:
             worker.wait(timeout=timeout)
