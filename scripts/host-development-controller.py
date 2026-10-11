@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import subprocess
 import time
+import signal
 
 REPOS = {'flyto-app', 'flyto-cloud', 'flyto-engine', 'flyto-code', 'flyto-runtime'}
 
@@ -28,8 +29,20 @@ def run(root, state, once):
     queue = state / 'tasks.json'
     if not queue.exists():
         write_json(queue, {'tasks': []})
+    # A dead controller cannot prove whether its worker committed side effects.
+    # Preserve the worktree and require review rather than replaying the prompt.
+    initial = json.loads(queue.read_text())
+    for task in initial['tasks']:
+        if task.get('status') == 'running':
+            task['status'] = 'blocked_interrupted_review'
+            task['recovery_note'] = 'Inspect worktree, logs and external effects before explicit requeue.'
+    write_json(queue, initial)
     while True:
-        data = json.loads(queue.read_text())
+        try:
+            data = json.loads(queue.read_text())
+        except (ValueError, OSError) as exc:
+            write_json(state / 'health.json', {'state': 'blocked_invalid_queue', 'error': str(exc)})
+            raise SystemExit('Queue invalid; refusing to run tasks') from exc
         tasks = data['tasks']
         pending = next((t for t in tasks if t.get('status') == 'queued'), None)
         if pending is None:
@@ -47,7 +60,8 @@ def run(root, state, once):
             continue
         checkout = root / repo
         # Never run in a dirty checkout or on a non-main base; fail closed.
-        if subprocess.run(['git', '-C', str(checkout), 'status', '--porcelain'], capture_output=True, text=True).stdout.strip():
+        clean = subprocess.run(['git', '-C', str(checkout), 'status', '--porcelain'], capture_output=True, text=True)
+        if clean.returncode != 0 or clean.stdout.strip():
             pending['status'] = 'blocked_dirty_checkout'
             write_json(queue, data)
             continue
@@ -77,10 +91,20 @@ def run(root, state, once):
         log = state / f'{task_id}.log'
         try:
             with log.open('w') as output:
-                outcome = subprocess.run(['codex', 'exec', '--sandbox', 'workspace-write', '-C', str(target), instruction],
-                                         stdout=output, stderr=subprocess.STDOUT, timeout=7200)
-            pending['status'] = 'review' if outcome.returncode == 0 else 'blocked_worker_failure'
-            pending['exit_code'] = outcome.returncode
+                worker = subprocess.Popen(['codex', 'exec', '--sandbox', 'workspace-write', '-C', str(target), instruction],
+                                          stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+                try:
+                    worker.wait(timeout=7200)
+                except subprocess.TimeoutExpired:
+                    os.killpg(worker.pid, signal.SIGTERM)
+                    try:
+                        worker.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(worker.pid, signal.SIGKILL)
+                        worker.wait()
+                    raise
+            pending['status'] = 'review' if worker.returncode == 0 else 'blocked_worker_failure'
+            pending['exit_code'] = worker.returncode
         except subprocess.TimeoutExpired:
             pending['status'] = 'blocked_timeout'
         except OSError as exc:
