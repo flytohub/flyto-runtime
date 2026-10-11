@@ -25,12 +25,21 @@ binary changes and may require renewed consent after upgrades.
 
 Run `flyto2-runtime supervisor status` to see observer state and capability
 coverage. Run `flyto2-runtime supervisor off` to stop and disable the observer.
+Status evidence older than 60 seconds (or unexpectedly future-dated) is
+`unresponsive`: stale status files never advertise active Accessibility or
+error detection. Inspect the LaunchAgent and observer logs before treating
+an old observation as a current permission problem.
 
 ## Current behavior and limits
 
-When enabled and permitted, the observer samples the **visible ChatGPT app
-window** every 15 seconds. It reports window presence, title, generic error
-indicators, and whether the accessible view appears unchanged. UI contents are
+When enabled and permitted, the observer samples up to **eight accessible
+ChatGPT app windows** every 15 seconds. It reports each window's index, title,
+fault state and independent unchanged timer in `observation.windows`. The
+top-level `state` and `conversationTitle` remain backward-compatible and now
+identify the highest-priority visible fault rather than blindly selecting the
+first window. If more than eight windows are exposed, coverage is explicitly
+`visible_chatgpt_windows_partial`; unobserved windows are never assumed healthy.
+UI contents are
 processed locally and **not saved**; only a one-way fingerprint and minimal
 status are stored in a user-private JSON file. An unchanged window for five
 minutes is a *review signal*, **not** evidence of a frozen model.
