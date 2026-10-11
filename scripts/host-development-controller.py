@@ -324,6 +324,11 @@ def poll_pr_ci(checkout, state, task):
     return 'passed'
 
 
+def wait_for_ci_before_next_task(ci_outcome, has_queued_work):
+    """Do not starve independent queued work while GitHub checks are pending."""
+    return ci_outcome != 'pending' or not has_queued_work
+
+
 def worker_instruction(prompt, feedback=None):
     policy = ('Work only in this isolated checkout. Implement the task and run appropriate tests. '
               'Do not push, merge, delete worktrees, deploy, run production scans, or bypass approval gates. '
@@ -391,13 +396,14 @@ def run(root, state, once):
         if ci_task is not None:
             repo = ci_task.get('repo')
             checkout = root / repo if repo in REPOS else root
-            poll_pr_ci(checkout, state, ci_task)
+            ci_outcome = poll_pr_ci(checkout, state, ci_task)
             write_json(queue, data)
             if once:
                 lock.close()
                 break
-            time.sleep(30)
-            continue
+            if wait_for_ci_before_next_task(ci_outcome, any(t.get('status') == 'queued' for t in tasks)):
+                time.sleep(30)
+                continue
         pending = next((t for t in tasks if t.get('status') == 'queued'), None)
         if pending is None:
             write_json(state / 'heartbeat.json', {'at': dt.datetime.now(dt.timezone.utc).isoformat(), 'state': 'idle', 'pending': 0})

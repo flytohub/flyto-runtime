@@ -16,6 +16,11 @@ spec.loader.exec_module(controller)
 
 
 class ControllerTests(unittest.TestCase):
+    def test_pending_ci_does_not_starve_independent_queued_work(self):
+        self.assertFalse(controller.wait_for_ci_before_next_task('pending', True))
+        self.assertTrue(controller.wait_for_ci_before_next_task('pending', False))
+        self.assertTrue(controller.wait_for_ci_before_next_task('blocked', True))
+
     def test_publish_pr_flag_is_atomic_in_inbox(self):
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory)
