@@ -20,6 +20,7 @@ export const MOBILE_COMPANION_BASE = "/flyto2/mobile/v1";
 const PAIR_LIFETIME_MS = 120_000;
 const SESSION_LIFETIME_MS = 30 * 60_000;
 const MAX_PAIR_ATTEMPTS = 5;
+const MAX_REQUESTS_PER_MINUTE = 120;
 const ALLOW_PATTERN = /^[a-zA-Z0-9._:-]{1,128}$/;
 const SAFE_HOST_PATTERN = /^[a-zA-Z0-9.:-]+$/;
 
@@ -45,6 +46,34 @@ export function createMobileCompanionGateway(options: MobileGatewayOptions): Exp
   const code = options.pairingCode ?? randomInt(0, 100_000_000).toString().padStart(8, "0");
   if (!/^\d{8}$/.test(code)) throw new Error("Invalid pairing code");
   const created = now();
+  const requestBuckets = new Map<string, { count: number; until: number }>();
+  // Rate-limit before authorization, including invalid bearer tokens. Bounded
+  // per-client buckets prevent unauthenticated traffic from exhausting memory.
+  app.use(MOBILE_COMPANION_BASE, (req, res, next) => {
+    const current = now();
+    for (const [key, value] of requestBuckets) {
+      if (value.until <= current) requestBuckets.delete(key);
+    }
+    const key = req.socket.remoteAddress ?? "unknown";
+    const existing = requestBuckets.get(key);
+    if (!existing && requestBuckets.size >= 1024) {
+      res.status(429).json({ error: "mobile_rate_limited" });
+      return;
+    }
+    const bucket = existing ?? { count: 0, until: current + 60_000 };
+    if (bucket.until <= current) {
+      bucket.count = 0;
+      bucket.until = current + 60_000;
+    }
+    bucket.count += 1;
+    requestBuckets.set(key, bucket);
+    if (bucket.count > MAX_REQUESTS_PER_MINUTE) {
+      res.setHeader("Retry-After", String(Math.max(1, Math.ceil((bucket.until - current) / 1000))));
+      res.status(429).json({ error: "mobile_rate_limited" });
+      return;
+    }
+    next();
+  });
   let attempts = 0;
   let used = false;
   const sessions = new Map<string, PairedSession>();

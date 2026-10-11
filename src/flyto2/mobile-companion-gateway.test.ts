@@ -86,6 +86,18 @@ test("no anonymous manifest and no credentials leaked to the response", async (t
   assert.ok(!JSON.stringify(result.data).includes("bridge"));
 });
 
+test("unauthorized requests are rate-limited before authentication", async (t) => {
+  const f = await fixture();
+  t.after(f.close);
+  for (let i = 0; i < 120; i += 1) {
+    assert.equal((await fetch(f.origin + "/manifest")).status, 401);
+  }
+  const response = await fetch(f.origin + "/manifest");
+  assert.equal(response.status, 429);
+  assert.equal((await response.json() as { error: string }).error, "mobile_rate_limited");
+  assert.ok(Number(response.headers.get("retry-after")) > 0);
+});
+
 test("wrong codes exhaust pairing, and correct code cannot be reused", async (t) => {
   const f = await fixture();
   t.after(f.close);
