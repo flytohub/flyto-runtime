@@ -16,6 +16,17 @@ spec.loader.exec_module(controller)
 
 
 class ControllerTests(unittest.TestCase):
+    def test_corrupt_startup_queue_writes_health_and_never_starts_worker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            (state / 'tasks.json').write_text('{broken')
+            with mock.patch.object(controller, 'run_worker') as worker:
+                with self.assertRaises(SystemExit):
+                    controller.run(state, state, True)
+            worker.assert_not_called()
+            health = json.loads((state / 'health.json').read_text())
+            self.assertEqual(health['state'], 'blocked_invalid_queue')
+
     def test_pending_ci_does_not_starve_independent_queued_work(self):
         self.assertFalse(controller.wait_for_ci_before_next_task('pending', True))
         self.assertTrue(controller.wait_for_ci_before_next_task('pending', False))
