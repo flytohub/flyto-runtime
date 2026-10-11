@@ -5,6 +5,8 @@ import datetime
 import json
 import pathlib
 import subprocess
+import time
+import hashlib
 
 PROJECTS = ('flyto-app', 'flyto-cloud', 'flyto-engine', 'flyto-code', 'flyto-runtime')
 
@@ -32,7 +34,8 @@ def inspect(repo):
         worktrees.append({'path': str(path), 'branch': branch, 'sha': sha,
                           'dirty_files': len(changes), 'merged_into_main': merged,
                           'status': 'REVIEW_DIRTY' if changes else ('REVIEW_DETACHED' if not branch else ('MERGED_CANDIDATE' if merged and branch != 'main' else 'TRACKED')),
-                          'sample_changes': changes[:8]})
+                          'sample_changes': changes[:8],
+                          'cleanup_allowed': False})
     return {'repository': repo.name, 'worktrees': worktrees}
 
 
@@ -40,8 +43,19 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', default=str(pathlib.Path.home() / 'flytohub'))
     parser.add_argument('--output', help='Optional JSON snapshot file; never changes Git state')
+    parser.add_argument('--watch', type=int, metavar='SECONDS', help='Poll continuously; minimum 60 seconds')
     args = parser.parse_args()
+    if args.watch is not None and args.watch < 60:
+        parser.error('--watch must be at least 60 seconds')
     root = pathlib.Path(args.root).resolve()
+    while True:
+        code = snapshot(root, args.output)
+        if args.watch is None:
+            return code
+        time.sleep(args.watch)
+
+
+def snapshot(root, output):
     result = {'generated_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
               'root': str(root), 'projects': [], 'errors': []}
     for name in PROJECTS:
@@ -50,8 +64,12 @@ def main():
         except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
             result['errors'].append({'project': name, 'error': str(exc)})
     payload = json.dumps(result, ensure_ascii=False, indent=2) + '\n'
-    if args.output:
-        pathlib.Path(args.output).write_text(payload, encoding='utf-8')
+    if output:
+        target = pathlib.Path(output)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_name(target.name + '.tmp')
+        temporary.write_text(payload, encoding='utf-8')
+        temporary.replace(target)
     else:
         print(payload, end='')
     return int(bool(result['errors']))

@@ -1,5 +1,9 @@
 # Flyto2 Runtime
 
+Experimental: an optional paired mobile HTTPS gateway projects selected
+installed Runtime capabilities to Flyto2 App without a Cloud account. It
+does not own Core AI task planning or independently verified robot motion.
+
 Flyto2 Runtime is a standalone local execution runtime for coding and other machine-local capabilities.
 
 ## Owns

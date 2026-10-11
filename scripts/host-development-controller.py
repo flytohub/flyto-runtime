@@ -14,6 +14,13 @@ import sys
 import uuid
 
 REPOS = {'flyto-app', 'flyto-cloud', 'flyto-engine', 'flyto-code', 'flyto-runtime'}
+BACKLOG_FILE_KEYWORDS = ('todo', 'roadmap', 'backlog')
+BACKLOG_EXCLUDED_DIRS = {
+    '.git', '.hg', '.svn', '.idea', '.vscode',
+    'node_modules', 'dist', 'build', '.next', 'coverage',
+    '.venv', 'venv', '__pycache__',
+}
+BACKLOG_MAX_FILE_BYTES = 512 * 1024
 CI_POLL_STATUSES = {'published_pr', 'ci_polling'}
 CI_PASSING = {'pass', 'passing', 'success', 'successful', 'skipped', 'neutral'}
 CI_FAILING = {'fail', 'failed', 'failing', 'failure', 'error', 'cancelled', 'canceled', 'timed_out', 'action_required'}
@@ -22,6 +29,8 @@ DEFAULT_CI_TIMEOUT_SECONDS = 30 * 60
 MAX_CI_TIMEOUT_SECONDS = 2 * 60 * 60
 DEFAULT_CI_MAX_POLLS = 60
 MAX_CI_MAX_POLLS = 240
+DEFAULT_CI_REPAIR_MAX_ATTEMPTS = 1
+MAX_CI_REPAIR_MAX_ATTEMPTS = 3
 
 
 def write_json(path, obj):
@@ -50,6 +59,139 @@ def enqueue(state, repo, prompt, checks, publish_pr=False):
     task = {'id': task_id, 'repo': repo, 'prompt': prompt, 'status': 'queued', 'checks': checks, 'publish_pr': publish_pr}
     write_json(inbox / f'{task_id}.json', task)
     return task_id
+
+
+def is_documented_backlog_file(path):
+    name = path.name.lower()
+    return any(keyword in name for keyword in BACKLOG_FILE_KEYWORDS) and path.suffix.lower() in {
+        '', '.md', '.markdown', '.txt', '.rst', '.adoc',
+    }
+
+
+def should_skip_backlog_dir(path):
+    return path.name in BACKLOG_EXCLUDED_DIRS or path.name.startswith('.flyto')
+
+
+def backlog_item_kind(line):
+    stripped = line.strip()
+    lowered = stripped.lower()
+    if lowered.startswith(('- [ ]', '* [ ]', '+ [ ]')):
+        return 'unchecked_checkbox'
+    if lowered.startswith(('- [x]', '* [x]', '+ [x]')):
+        return 'checked_checkbox'
+    if any(token in lowered for token in ('todo', 'fixme', 'hack', 'backlog')):
+        return 'tagged_note'
+    if stripped.startswith(('-', '*', '+')) and any(token in lowered for token in ('next', 'remaining', 'open', 'pending', 'follow-up', 'follow up')):
+        return 'roadmap_note'
+    if stripped.startswith(('-', '*', '+')):
+        return 'documented_note'
+    return None
+
+
+def classify_backlog_line(line):
+    lowered = line.strip().lower()
+    if lowered.startswith(('- [x]', '* [x]', '+ [x]')):
+        return 'historic', 'completed checkbox'
+    if any(token in lowered for token in ('shipped', 'released', 'done', 'completed', 'fixed', 'superseded', 'deprecated')):
+        return 'historic', 'completion marker'
+    if lowered.startswith(('- [ ]', '* [ ]', '+ [ ]')):
+        return 'actionable', 'unchecked checkbox'
+    if any(token in lowered for token in ('todo', 'fixme', 'remaining', 'pending', 'open issue', 'follow-up', 'follow up')):
+        return 'actionable', 'open work marker'
+    if 'roadmap' in lowered or 'backlog' in lowered:
+        return 'actionable', 'roadmap/backlog marker'
+    return 'historic', 'documented note without open-work marker'
+
+
+def clean_backlog_text(line):
+    text = line.strip()
+    for prefix in ('- [ ]', '* [ ]', '+ [ ]', '- [x]', '* [x]', '+ [x]', '-', '*', '+'):
+        if text.lower().startswith(prefix):
+            return text[len(prefix):].strip()
+    return text
+
+
+def discover_backlog(root):
+    """Read documented backlog files only; never enqueue or execute discovered work."""
+    repos = []
+    actionable = []
+    historic = []
+    for repo in sorted(REPOS):
+        checkout = root / repo
+        repo_record = {'repo': repo, 'path': str(checkout), 'available': checkout.is_dir(), 'files': []}
+        repos.append(repo_record)
+        if not checkout.is_dir():
+            continue
+        for current, dirs, files in os.walk(checkout):
+            current_path = Path(current)
+            dirs[:] = [name for name in dirs if not should_skip_backlog_dir(current_path / name)]
+            for name in sorted(files):
+                path = current_path / name
+                if not is_documented_backlog_file(path) or path.is_symlink():
+                    continue
+                try:
+                    stat = path.stat()
+                except OSError:
+                    continue
+                if stat.st_size > BACKLOG_MAX_FILE_BYTES:
+                    continue
+                try:
+                    lines = path.read_text(encoding='utf-8').splitlines()
+                except UnicodeDecodeError:
+                    lines = path.read_text(encoding='utf-8', errors='replace').splitlines()
+                except OSError:
+                    continue
+                relative = str(path.relative_to(checkout))
+                repo_record['files'].append(relative)
+                for line_number, line in enumerate(lines, start=1):
+                    kind = backlog_item_kind(line)
+                    if kind is None:
+                        continue
+                    classification, reason = classify_backlog_line(line)
+                    evidence = {
+                        'repo': repo,
+                        'file': relative,
+                        'line': line_number,
+                        'text': line.strip()[:500],
+                        'kind': kind,
+                        'classification': classification,
+                        'reason': reason,
+                    }
+                    if classification == 'actionable':
+                        evidence['suggested_prompt'] = f"{repo}: {clean_backlog_text(line)[:240]}"
+                        actionable.append(evidence)
+                    else:
+                        historic.append(evidence)
+    return {
+        'generated_at': now_iso(),
+        'root': str(root),
+        'mode': 'read_only_backlog_discovery',
+        'safety': {
+            'read_only': True,
+            'enqueued_tasks': 0,
+            'auto_execute': False,
+            'requires_explicit_enqueue': True,
+        },
+        'repositories': repos,
+        'actionable': actionable,
+        'historic': historic,
+        'summary': {
+            'repositories': len(repos),
+            'available_repositories': sum(1 for repo in repos if repo['available']),
+            'files': sum(len(repo['files']) for repo in repos),
+            'actionable': len(actionable),
+            'historic': len(historic),
+        },
+    }
+
+
+def write_backlog_discovery(root, state, output=None):
+    state.mkdir(parents=True, exist_ok=True)
+    report = discover_backlog(root)
+    path = Path(output) if output else state / 'backlog-discovery.json'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_json(path, report)
+    return path, report
 
 
 def format_pr_body(task):
@@ -192,9 +334,12 @@ def ci_log_path(state, task):
 
 
 def write_ci_log(state, task, payload):
-    path = ci_log_path(state, task)
+    count = bounded_int(task.get('ci_log_count'), 0, 0, 1000) + 1
+    task['ci_log_count'] = count
+    path = state / f"{task['id']}.ci.{count}.log"
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + '\n')
     task['ci_log'] = str(path)
+    task.setdefault('ci_logs', []).append(str(path))
     return path
 
 
@@ -306,13 +451,21 @@ def poll_pr_ci(checkout, state, task):
     task['ci_checks_failed'] = statuses.count('failed')
     if task['ci_checks_failed']:
         failed = summarize_failed_checks(checks)
-        task['status'] = 'blocked_ci_failed'
+        repair_attempts = bounded_int(task.get('ci_repair_attempts'), 0, 0, MAX_CI_REPAIR_MAX_ATTEMPTS)
+        repair_limit = bounded_int(task.get('ci_repair_max_attempts'), DEFAULT_CI_REPAIR_MAX_ATTEMPTS, 0,
+                                   MAX_CI_REPAIR_MAX_ATTEMPTS)
+        task['status'] = 'ci_repair_queued' if repair_attempts < repair_limit else 'blocked_ci_failed'
         task['ci_summary'] = f"{task['ci_checks_failed']} CI check(s) failed after PR publication."
         task['ci_failed_checks'] = failed
-        task['ci_repair_context'] = 'Repair is bounded to the existing PR/worktree; never auto-merge or deploy.'
+        if task['status'] == 'ci_repair_queued':
+            task['ci_repair_context'] = 'Bounded repair is queued for the existing draft PR/worktree only.'
+            outcome = 'repair'
+        else:
+            task['ci_repair_context'] = 'CI repair attempt limit reached; preserve PR, worktree and logs for review.'
+            outcome = 'blocked'
         write_ci_log(state, task, {'pr': pr_ref, 'status': task['status'], 'failed_checks': failed,
                                    'checks': checks, 'task': task})
-        return 'blocked'
+        return outcome
     if task['ci_checks_pending']:
         task['ci_summary'] = f"{task['ci_checks_pending']} CI check(s) still pending."
         return 'pending'
@@ -322,6 +475,148 @@ def poll_pr_ci(checkout, state, task):
     task['ci_finished_at'] = now_iso()
     write_ci_log(state, task, {'pr': pr_ref, 'status': task['status'], 'checks': checks, 'task': task})
     return 'passed'
+
+
+def ci_repair_attempts_remaining(task):
+    attempts = bounded_int(task.get('ci_repair_attempts'), 0, 0, MAX_CI_REPAIR_MAX_ATTEMPTS)
+    limit = bounded_int(task.get('ci_repair_max_attempts'), DEFAULT_CI_REPAIR_MAX_ATTEMPTS, 0,
+                        MAX_CI_REPAIR_MAX_ATTEMPTS)
+    return attempts < limit
+
+
+def valid_branch_name(branch):
+    return (isinstance(branch, str) and branch and len(branch) <= 200 and not branch.startswith('-')
+            and not branch.startswith('/') and not branch.endswith('/') and '..' not in branch and '//' not in branch
+            and all(not ch.isspace() and ord(ch) >= 33 for ch in branch))
+
+
+def read_pr_metadata(checkout, task):
+    pr_ref = task_pr_reference(task)
+    repo = task.get('repo')
+    if not pr_ref or repo not in REPOS:
+        return None, 'missing PR reference or repository'
+    gh = shutil.which('gh') or 'gh'
+    try:
+        result = subprocess.run([gh, 'pr', 'view', pr_ref, '--repo', f'flytohub/{repo}', '--json',
+                                 'url,state,isDraft,headRefName'],
+                                cwd=checkout, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return None, f'could not read PR metadata: {exc}'
+    if result.returncode:
+        return None, f'gh pr view failed: {(result.stdout or "")[-2000:]}'
+    try:
+        data = json.loads(result.stdout or '{}')
+    except json.JSONDecodeError as exc:
+        return None, f'gh pr view returned invalid JSON: {exc}'
+    if data.get('state') != 'OPEN' or data.get('isDraft') is not True:
+        return None, 'CI repair is allowed only for open draft PRs'
+    branch = data.get('headRefName') or task.get('branch')
+    if not valid_branch_name(branch):
+        return None, 'PR head branch is invalid'
+    task['pr_url'] = data.get('url') or task.get('pr_url')
+    task['branch'] = branch
+    return data, None
+
+
+def current_branch(checkout):
+    result, error = run_checked(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], checkout, timeout=60)
+    if error:
+        return None, f'could not read worktree branch: {error}'
+    branch = (result.stdout or '').strip()
+    return branch, None
+
+
+def remote_branch_exists(checkout, branch):
+    if not valid_branch_name(branch):
+        return False, 'invalid branch'
+    result, error = run_checked(['git', 'ls-remote', '--heads', 'origin', branch], checkout, timeout=120)
+    if error:
+        return False, f'could not inspect remote PR branch: {error}'
+    if not (result.stdout or '').strip():
+        return False, 'remote PR branch does not exist'
+    return True, None
+
+
+def push_existing_pr_branch(checkout, task, branch):
+    exists, reason = remote_branch_exists(checkout, branch)
+    if not exists:
+        return False, reason
+    result, error = run_checked(['git', 'add', '--all'], checkout)
+    if error:
+        return False, f'git add failed: {error}'
+    title = task.get('ci_repair_title') or f"fix: repair CI for {task.get('id')}"
+    result, error = run_checked(['git', 'commit', '-m', title], checkout)
+    if error:
+        return False, f'git commit failed: {error}'
+    result, error = run_checked(['git', 'push', 'origin', f'{branch}:{branch}'], checkout, timeout=900)
+    if error:
+        return False, f'git push failed: {error}'
+    return True, 'repair pushed to existing PR branch'
+
+
+def repair_ci_failure(state, task):
+    target = Path(task.get('worktree') or '')
+    if not target.is_dir():
+        task['status'] = 'blocked_missing_worktree'
+        task['ci_repair_context'] = 'CI repair requires the original isolated worktree.'
+        return 'blocked'
+    attempts = bounded_int(task.get('ci_repair_attempts'), 0, 0, MAX_CI_REPAIR_MAX_ATTEMPTS)
+    max_attempts = bounded_int(task.get('ci_repair_max_attempts'), DEFAULT_CI_REPAIR_MAX_ATTEMPTS, 0,
+                               MAX_CI_REPAIR_MAX_ATTEMPTS)
+    if attempts >= max_attempts:
+        task['status'] = 'blocked_ci_failed'
+        task['ci_repair_context'] = 'CI repair attempt limit reached; preserve PR, worktree and logs for review.'
+        return 'blocked'
+    metadata, error = read_pr_metadata(target, task)
+    if error:
+        task['status'] = 'blocked_ci_repair_pr'
+        task['ci_repair_context'] = error
+        return 'blocked'
+    branch = metadata['headRefName']
+    local_branch, error = current_branch(target)
+    if error or local_branch != branch:
+        task['status'] = 'blocked_ci_repair_branch'
+        task['ci_repair_context'] = error or 'isolated worktree is not on the PR head branch'
+        return 'blocked'
+    clean = subprocess.run(['git', '-C', str(target), 'status', '--porcelain'], capture_output=True, text=True)
+    if clean.returncode != 0 or clean.stdout.strip():
+        task['status'] = 'blocked_dirty_checkout'
+        task['ci_repair_context'] = 'CI repair starts only from a clean isolated PR worktree.'
+        return 'blocked'
+
+    attempts += 1
+    task['ci_repair_attempts'] = attempts
+    task['status'] = 'ci_repair_running'
+    task['ci_repair_started_at'] = now_iso()
+    log = state / f"{task['id']}.ci-repair.{attempts}.log"
+    feedback = task.get('ci_repair_context') or task.get('ci_summary') or 'PR CI failed.'
+    exit_code = run_worker(target, log, worker_instruction(task.get('prompt', ''), feedback))
+    task['ci_repair_log'] = str(log)
+    task.setdefault('ci_repair_logs', []).append(str(log))
+    task['ci_repair_exit_code'] = exit_code
+    if exit_code != 0:
+        task['status'] = 'blocked_ci_repair_worker_failure'
+        task['ci_repair_context'] = f'CI repair worker exited with code {exit_code}; preserve PR, worktree and logs.'
+        return 'blocked'
+    verified, reason = verify_result(target, state, task)
+    task['ci_repair_verification'] = reason
+    if not verified:
+        task['status'] = 'blocked_ci_repair_verification'
+        task['ci_repair_context'] = 'Independent configured checks did not pass after CI repair.'
+        return 'blocked'
+    pushed, reason = push_existing_pr_branch(target, task, branch)
+    task['ci_repair_publication'] = reason
+    if not pushed:
+        task['status'] = 'blocked_ci_repair_push'
+        task['ci_repair_context'] = 'Repair was verified locally but was not pushed.'
+        return 'blocked'
+    task['status'] = 'published_pr'
+    task['ci_poll_attempts'] = 0
+    task['ci_poll_started_at'] = now_iso()
+    task['ci_summary'] = 'CI repair was verified locally and pushed to the existing draft PR branch.'
+    task['ci_repair_finished_at'] = now_iso()
+    return 'repaired'
 
 
 def wait_for_ci_before_next_task(ci_outcome, has_queued_work):
@@ -397,15 +692,28 @@ def run(root, state, once):
             lock.close()
             raise SystemExit('Queue invalid; refusing to run tasks') from exc
         tasks = data['tasks']
+        repair_task = next((t for t in tasks if t.get('status') == 'ci_repair_queued'
+                            or (t.get('status') == 'blocked_ci_failed' and ci_repair_attempts_remaining(t))), None)
+        if repair_task is not None:
+            repair_outcome = repair_ci_failure(state, repair_task)
+            write_json(queue, data)
+            if once:
+                lock.close()
+                break
+            if repair_outcome != 'repaired':
+                time.sleep(30)
+                continue
         ci_task = next((t for t in tasks if t.get('status') in CI_POLL_STATUSES), None)
         if ci_task is not None:
             repo = ci_task.get('repo')
             checkout = root / repo if repo in REPOS else root
             ci_outcome = poll_pr_ci(checkout, state, ci_task)
             write_json(queue, data)
-            if once:
+            if once and ci_outcome != 'repair':
                 lock.close()
                 break
+            if ci_outcome == 'repair':
+                continue
             if wait_for_ci_before_next_task(ci_outcome, any(t.get('status') == 'queued' for t in tasks)):
                 time.sleep(30)
                 continue
@@ -508,8 +816,21 @@ if __name__ == '__main__':
     p.add_argument('--prompt')
     p.add_argument('--check', action='append', default=[], help='JSON argv array for an independent verification command')
     p.add_argument('--publish-pr', action='store_true', help='after independent verification, publish a draft GitHub PR with gh CLI')
+    p.add_argument('--discover-backlog', action='store_true',
+                   help='read documented TODO/roadmap/backlog files across known repositories and write evidence JSON; never enqueues work')
+    p.add_argument('--backlog-output', help='path for --discover-backlog evidence JSON; defaults to state/backlog-discovery.json')
     args = p.parse_args()
-    if args.enqueue:
+    if args.discover_backlog:
+        if args.enqueue:
+            p.error('--discover-backlog is read-only and cannot be combined with --enqueue')
+        path, report = write_backlog_discovery(Path(args.root), Path(args.state), args.backlog_output)
+        print(json.dumps({
+            'ok': True,
+            'evidence': str(path),
+            'summary': report['summary'],
+            'safety': report['safety'],
+        }, indent=2, ensure_ascii=False))
+    elif args.enqueue:
         try:
             checks = [json.loads(item) for item in args.check]
             if any(not isinstance(c, list) or not all(isinstance(v, str) and v for v in c) for c in checks):

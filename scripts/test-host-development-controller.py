@@ -4,6 +4,7 @@ import importlib.util
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -73,10 +74,105 @@ class ControllerTests(unittest.TestCase):
             controller.drain_inbox(state, data)
             self.assertIs(data['tasks'][0]['publish_pr'], True)
 
+    def test_cli_publish_pr_enqueue_survives_inbox_drain_without_publication(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            result = subprocess.run([
+                sys.executable,
+                str(SOURCE),
+                '--state', str(state),
+                '--enqueue', 'flyto-runtime',
+                '--prompt', 'Fix a test',
+                '--publish-pr',
+            ], check=True, capture_output=True, text=True)
+            job = result.stdout.strip()
+
+            data = {'tasks': []}
+            controller.write_json(state / 'tasks.json', data)
+            with mock.patch.object(controller, 'publish_pull_request') as publish_pull_request:
+                controller.drain_inbox(state, data)
+
+            publish_pull_request.assert_not_called()
+            self.assertEqual(data['tasks'][0]['id'], job)
+            self.assertIs(data['tasks'][0]['publish_pr'], True)
+            self.assertFalse((state / 'inbox' / f'{job}.json').exists())
+
     def test_enqueue_rejects_unknown_repo(self):
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaises(ValueError):
                 controller.enqueue(Path(directory), '../unsafe', 'task', [])
+
+    def test_discover_backlog_reads_documented_files_and_classifies_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime = root / 'flyto-runtime'
+            cloud = root / 'flyto-cloud'
+            runtime.mkdir()
+            cloud.mkdir()
+            (runtime / 'TODO.md').write_text(
+                '- [ ] Add runtime adapter regression\n'
+                '- [x] Shipped old migration\n'
+                'Plain historical context\n'
+            )
+            (cloud / 'ROADMAP.md').write_text(
+                '- Remaining: document pairing recovery\n'
+                '- Released: first bridge prototype\n'
+            )
+            (cloud / 'notes.md').write_text('- [ ] not a documented backlog filename\n')
+
+            report = controller.discover_backlog(root)
+
+            self.assertEqual(report['safety']['read_only'], True)
+            self.assertEqual(report['safety']['enqueued_tasks'], 0)
+            self.assertEqual(report['summary']['available_repositories'], 2)
+            self.assertEqual(report['summary']['files'], 2)
+            actionable = {(item['repo'], item['file'], item['line']) for item in report['actionable']}
+            historic = {(item['repo'], item['file'], item['line']) for item in report['historic']}
+            self.assertIn(('flyto-runtime', 'TODO.md', 1), actionable)
+            self.assertIn(('flyto-cloud', 'ROADMAP.md', 1), actionable)
+            self.assertIn(('flyto-runtime', 'TODO.md', 2), historic)
+            self.assertIn(('flyto-cloud', 'ROADMAP.md', 2), historic)
+            self.assertNotIn(('flyto-cloud', 'notes.md', 1), actionable)
+
+    def test_write_backlog_discovery_preserves_evidence_without_enqueueing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'repos'
+            state = Path(directory) / 'state'
+            (root / 'flyto-code').mkdir(parents=True)
+            (root / 'flyto-code' / 'backlog.txt').write_text('TODO: preserve code evidence\n')
+
+            path, report = controller.write_backlog_discovery(root, state)
+
+            self.assertEqual(path, state / 'backlog-discovery.json')
+            self.assertFalse((state / 'inbox').exists())
+            saved = json.loads(path.read_text())
+            self.assertEqual(saved['summary'], report['summary'])
+            self.assertEqual(saved['actionable'][0]['repo'], 'flyto-code')
+
+    def test_discover_backlog_cli_help_and_rejects_enqueue_combination(self):
+        help_result = subprocess.run(
+            [sys.executable, str(SOURCE), '--help'],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=True,
+        )
+        self.assertIn('--discover-backlog', help_result.stdout)
+        self.assertIn('never', help_result.stdout)
+        self.assertIn('enqueues work', help_result.stdout)
+
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(
+                [
+                    sys.executable, str(SOURCE), '--root', directory, '--state', directory,
+                    '--discover-backlog', '--enqueue', 'flyto-runtime', '--prompt', 'no-op',
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('cannot be combined with --enqueue', result.stdout)
 
     def test_repair_instruction_contains_feedback_and_boundaries(self):
         instruction = controller.worker_instruction('Fix widget', 'test failed')
@@ -189,6 +285,41 @@ class ControllerTests(unittest.TestCase):
         self.assertNotIn(['/usr/bin/gh', 'pr', 'merge'], [call[:3] for call in calls])
         self.assertNotIn(['/usr/bin/gh', 'workflow', 'run'], [call[:3] for call in calls])
 
+    def test_publish_pull_request_uses_validated_repo_from_isolated_worktree(self):
+        task = {
+            'id': 'job_test',
+            'repo': 'flyto-runtime',
+            'prompt': 'Implement feature',
+            'checks': [],
+            'verification': 'changes present and checks passed',
+        }
+        checkout = Path('/tmp/flyto-runtime-job_1234567890abcdef')
+        calls = []
+
+        def fake_run(argv, **kwargs):
+            calls.append(argv)
+            if argv[:3] == ['git', '-C', str(checkout)]:
+                return controller.subprocess.CompletedProcess(argv, 0, stdout='', stderr='')
+            if argv[:2] == ['git', 'push']:
+                return controller.subprocess.CompletedProcess(argv, 0, stdout='pushed\n', stderr='')
+            if argv[:3] == ['/usr/bin/gh', 'pr', 'create']:
+                return controller.subprocess.CompletedProcess(
+                    argv, 0, stdout='https://github.com/flytohub/flyto-runtime/pull/123\n', stderr='')
+            if argv[:3] == ['/usr/bin/gh', 'pr', 'view']:
+                return controller.subprocess.CompletedProcess(
+                    argv, 0, stdout=json.dumps({'url': task['pr_url'], 'state': 'OPEN', 'statusCheckRollup': []}), stderr='')
+            self.fail(f'unexpected command: {argv}')
+
+        with mock.patch.object(controller.shutil, 'which', return_value='/usr/bin/gh'):
+            with mock.patch.object(controller.subprocess, 'run', side_effect=fake_run):
+                published, reason = controller.publish_pull_request(checkout, task, 'auto/job_test')
+
+        self.assertTrue(published)
+        self.assertEqual(reason, 'pull request published')
+        create_calls = [call for call in calls if call[:3] == ['/usr/bin/gh', 'pr', 'create']]
+        self.assertEqual(len(create_calls), 1)
+        self.assertEqual(create_calls[0][create_calls[0].index('--repo') + 1], 'flytohub/flyto-runtime')
+
     def test_publish_pull_request_preserves_branch_and_worktree_on_gh_error(self):
         task = {
             'id': 'job_test',
@@ -286,7 +417,7 @@ class ControllerTests(unittest.TestCase):
             ci_log = json.loads(Path(task['ci_log']).read_text())
             self.assertEqual(ci_log['status'], 'review_ci_passed')
 
-    def test_pr_ci_failure_is_blocked_with_logs_and_repair_context(self):
+    def test_pr_ci_failure_queues_bounded_repair_with_logs_and_context(self):
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory) / 'state'
             worktree = Path(directory) / 'worktree'
@@ -314,12 +445,45 @@ class ControllerTests(unittest.TestCase):
             finally:
                 controller.subprocess.run = original_run
 
-            self.assertEqual(result, 'blocked')
-            self.assertEqual(task['status'], 'blocked_ci_failed')
-            self.assertIn('bounded', task['ci_repair_context'])
+            self.assertEqual(result, 'repair')
+            self.assertEqual(task['status'], 'ci_repair_queued')
+            self.assertIn('Bounded repair', task['ci_repair_context'])
             ci_log = json.loads(Path(task['ci_log']).read_text())
             self.assertEqual(ci_log['failed_checks'][0]['name'], 'test')
             self.assertEqual(ci_log['task']['prompt'], 'fix')
+
+    def test_pr_ci_failure_blocks_after_repair_attempt_cap(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / 'state'
+            worktree = Path(directory) / 'worktree'
+            state.mkdir()
+            worktree.mkdir()
+            task = {
+                'id': 'job_ci_failure_cap',
+                'repo': 'flyto-runtime',
+                'prompt': 'fix',
+                'status': 'published_pr',
+                'worktree': str(worktree),
+                'pr_number': 12,
+                'ci_repair_attempts': 1,
+                'ci_repair_max_attempts': 1,
+            }
+            original_run = controller.subprocess.run
+
+            def fake_run(argv, **kwargs):
+                return SimpleNamespace(returncode=0, stdout=json.dumps([
+                    {'name': 'test', 'state': 'FAILURE', 'conclusion': 'failure'},
+                ]))
+
+            controller.subprocess.run = fake_run
+            try:
+                result = controller.poll_pr_ci(worktree, state, task)
+            finally:
+                controller.subprocess.run = original_run
+
+            self.assertEqual(result, 'blocked')
+            self.assertEqual(task['status'], 'blocked_ci_failed')
+            self.assertIn('limit reached', task['ci_repair_context'])
 
     def test_pr_ci_pending_remains_bounded_polling(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -351,6 +515,158 @@ class ControllerTests(unittest.TestCase):
             self.assertEqual(task['status'], 'ci_polling')
             self.assertEqual(task['ci_checks_pending'], 1)
             self.assertNotIn('ci_log', task)
+
+    def test_ci_logs_are_preserved_across_multiple_terminal_observations(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / 'state'
+            state.mkdir()
+            task = {'id': 'job_ci_logs'}
+
+            first = controller.write_ci_log(state, task, {'status': 'first'})
+            second = controller.write_ci_log(state, task, {'status': 'second'})
+
+            self.assertNotEqual(first, second)
+            self.assertTrue(first.exists())
+            self.assertTrue(second.exists())
+            self.assertEqual(task['ci_logs'], [str(first), str(second)])
+
+    def test_ci_repair_verifies_and_pushes_only_existing_pr_branch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / 'state'
+            worktree = Path(directory) / 'worktree'
+            state.mkdir()
+            worktree.mkdir()
+            task = {
+                'id': 'job_ci_repair',
+                'repo': 'flyto-runtime',
+                'prompt': 'fix',
+                'status': 'ci_repair_queued',
+                'worktree': str(worktree),
+                'pr_url': 'https://github.com/flytohub/flyto-runtime/pull/12',
+                'checks': [['python3', 'ok']],
+            }
+            calls = []
+            did_worker = {'value': False}
+            original_run = controller.subprocess.run
+            original_run_worker = controller.run_worker
+
+            def fake_run(argv, **kwargs):
+                calls.append(argv)
+                if Path(argv[0]).name == 'gh' and argv[1:3] == ['pr', 'view']:
+                    return SimpleNamespace(returncode=0, stdout=json.dumps({
+                        'url': task['pr_url'],
+                        'state': 'OPEN',
+                        'isDraft': True,
+                        'headRefName': 'auto/job_ci_repair',
+                    }))
+                if argv[:3] == ['git', 'rev-parse', '--abbrev-ref']:
+                    return SimpleNamespace(returncode=0, stdout='auto/job_ci_repair\n')
+                if argv[:3] == ['git', '-C', str(worktree)]:
+                    return SimpleNamespace(returncode=0, stdout=' M fix.py\n' if did_worker['value'] else '')
+                if argv == ['python3', 'ok']:
+                    return SimpleNamespace(returncode=0, stdout='ok\n')
+                if argv[:3] == ['git', 'ls-remote', '--heads']:
+                    return SimpleNamespace(returncode=0, stdout='abc123\trefs/heads/auto/job_ci_repair\n')
+                if argv[:2] in (['git', 'add'], ['git', 'commit'], ['git', 'push']):
+                    return SimpleNamespace(returncode=0, stdout='')
+                self.fail(f'unexpected command: {argv}')
+
+            def fake_worker(target, log, instruction, timeout=7200):
+                self.assertEqual(target, worktree)
+                self.assertIn('Do not push', instruction)
+                did_worker['value'] = True
+                return 0
+
+            controller.subprocess.run = fake_run
+            controller.run_worker = fake_worker
+            try:
+                outcome = controller.repair_ci_failure(state, task)
+            finally:
+                controller.subprocess.run = original_run
+                controller.run_worker = original_run_worker
+
+            self.assertEqual(outcome, 'repaired')
+            self.assertEqual(task['status'], 'published_pr')
+            self.assertEqual(task['ci_repair_attempts'], 1)
+            self.assertEqual(task['branch'], 'auto/job_ci_repair')
+            self.assertIn(['git', 'push', 'origin', 'auto/job_ci_repair:auto/job_ci_repair'], calls)
+            flattened = ' '.join(' '.join(call) for call in calls)
+            self.assertNotIn('pr merge', flattened)
+            self.assertNotIn('workflow run', flattened)
+            self.assertNotIn('worktree remove', flattened)
+
+    def test_ci_repair_refuses_non_draft_pr_without_worker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / 'state'
+            worktree = Path(directory) / 'worktree'
+            state.mkdir()
+            worktree.mkdir()
+            task = {
+                'id': 'job_ci_repair_refuse',
+                'repo': 'flyto-runtime',
+                'prompt': 'fix',
+                'status': 'ci_repair_queued',
+                'worktree': str(worktree),
+                'pr': '12',
+            }
+            original_run = controller.subprocess.run
+            original_run_worker = controller.run_worker
+
+            def fake_run(argv, **kwargs):
+                if Path(argv[0]).name == 'gh' and argv[1:3] == ['pr', 'view']:
+                    return SimpleNamespace(returncode=0, stdout=json.dumps({
+                        'state': 'OPEN',
+                        'isDraft': False,
+                        'headRefName': 'auto/job_ci_repair_refuse',
+                    }))
+                self.fail(f'unexpected command: {argv}')
+
+            def fail_worker(*args, **kwargs):
+                raise AssertionError('worker must not run for a non-draft PR')
+
+            controller.subprocess.run = fake_run
+            controller.run_worker = fail_worker
+            try:
+                outcome = controller.repair_ci_failure(state, task)
+            finally:
+                controller.subprocess.run = original_run
+                controller.run_worker = original_run_worker
+
+            self.assertEqual(outcome, 'blocked')
+            self.assertEqual(task['status'], 'blocked_ci_repair_pr')
+            self.assertIn('open draft PRs', task['ci_repair_context'])
+
+    def test_run_can_pick_up_previous_blocked_ci_failure_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'root'
+            state = Path(directory) / 'state'
+            root.mkdir()
+            state.mkdir()
+            controller.write_json(state / 'tasks.json', {'tasks': [{
+                'id': 'job_previous_ci_failure',
+                'repo': 'flyto-runtime',
+                'prompt': 'fix',
+                'status': 'blocked_ci_failed',
+                'worktree': str(root),
+                'pr': '12',
+            }]})
+            original_repair = controller.repair_ci_failure
+            calls = []
+
+            def fake_repair(repair_state, task):
+                calls.append((repair_state, task['id']))
+                task['status'] = 'published_pr'
+                return 'repaired'
+
+            controller.repair_ci_failure = fake_repair
+            try:
+                controller.run(root, state, True)
+            finally:
+                controller.repair_ci_failure = original_repair
+
+            self.assertEqual(calls, [(state, 'job_previous_ci_failure')])
+            task = json.loads((state / 'tasks.json').read_text())['tasks'][0]
+            self.assertEqual(task['status'], 'published_pr')
 
     def test_pr_ci_timeout_fails_closed_before_polling_gh(self):
         with tempfile.TemporaryDirectory() as directory:
