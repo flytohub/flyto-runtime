@@ -4,6 +4,7 @@ import importlib.util
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -77,6 +78,78 @@ class ControllerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaises(ValueError):
                 controller.enqueue(Path(directory), '../unsafe', 'task', [])
+
+    def test_discover_backlog_reads_documented_files_and_classifies_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime = root / 'flyto-runtime'
+            cloud = root / 'flyto-cloud'
+            runtime.mkdir()
+            cloud.mkdir()
+            (runtime / 'TODO.md').write_text(
+                '- [ ] Add runtime adapter regression\n'
+                '- [x] Shipped old migration\n'
+                'Plain historical context\n'
+            )
+            (cloud / 'ROADMAP.md').write_text(
+                '- Remaining: document pairing recovery\n'
+                '- Released: first bridge prototype\n'
+            )
+            (cloud / 'notes.md').write_text('- [ ] not a documented backlog filename\n')
+
+            report = controller.discover_backlog(root)
+
+            self.assertEqual(report['safety']['read_only'], True)
+            self.assertEqual(report['safety']['enqueued_tasks'], 0)
+            self.assertEqual(report['summary']['available_repositories'], 2)
+            self.assertEqual(report['summary']['files'], 2)
+            actionable = {(item['repo'], item['file'], item['line']) for item in report['actionable']}
+            historic = {(item['repo'], item['file'], item['line']) for item in report['historic']}
+            self.assertIn(('flyto-runtime', 'TODO.md', 1), actionable)
+            self.assertIn(('flyto-cloud', 'ROADMAP.md', 1), actionable)
+            self.assertIn(('flyto-runtime', 'TODO.md', 2), historic)
+            self.assertIn(('flyto-cloud', 'ROADMAP.md', 2), historic)
+            self.assertNotIn(('flyto-cloud', 'notes.md', 1), actionable)
+
+    def test_write_backlog_discovery_preserves_evidence_without_enqueueing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'repos'
+            state = Path(directory) / 'state'
+            (root / 'flyto-code').mkdir(parents=True)
+            (root / 'flyto-code' / 'backlog.txt').write_text('TODO: preserve code evidence\n')
+
+            path, report = controller.write_backlog_discovery(root, state)
+
+            self.assertEqual(path, state / 'backlog-discovery.json')
+            self.assertFalse((state / 'inbox').exists())
+            saved = json.loads(path.read_text())
+            self.assertEqual(saved['summary'], report['summary'])
+            self.assertEqual(saved['actionable'][0]['repo'], 'flyto-code')
+
+    def test_discover_backlog_cli_help_and_rejects_enqueue_combination(self):
+        help_result = subprocess.run(
+            [sys.executable, str(SOURCE), '--help'],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=True,
+        )
+        self.assertIn('--discover-backlog', help_result.stdout)
+        self.assertIn('never', help_result.stdout)
+        self.assertIn('enqueues work', help_result.stdout)
+
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(
+                [
+                    sys.executable, str(SOURCE), '--root', directory, '--state', directory,
+                    '--discover-backlog', '--enqueue', 'flyto-runtime', '--prompt', 'no-op',
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('cannot be combined with --enqueue', result.stdout)
 
     def test_repair_instruction_contains_feedback_and_boundaries(self):
         instruction = controller.worker_instruction('Fix widget', 'test failed')
