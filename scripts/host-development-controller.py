@@ -10,6 +10,7 @@ import subprocess
 import time
 import signal
 import shutil
+import sys
 
 REPOS = {'flyto-app', 'flyto-cloud', 'flyto-engine', 'flyto-code', 'flyto-runtime'}
 
@@ -27,6 +28,28 @@ def validate_queue(data):
     if len(ids) != len(data['tasks']) or len(ids) != len(set(ids)):
         raise ValueError('tasks must be objects with unique IDs')
     return data
+
+
+def verify_result(checkout, state, task):
+    """Independent bounded checks; never mistake a worker's prose for proof."""
+    changed = subprocess.run(['git', '-C', str(checkout), 'status', '--porcelain'], capture_output=True, text=True)
+    if changed.returncode or not changed.stdout.strip():
+        return False, 'no verifiable working-tree changes'
+    checks = task.get('checks', [])
+    if not isinstance(checks, list) or len(checks) > 8:
+        return False, 'invalid checks'
+    for check in checks:
+        if not isinstance(check, list) or not check or len(check) > 12 or not all(isinstance(x, str) and x for x in check):
+            return False, 'invalid check argv'
+        try:
+            result = subprocess.run(check, cwd=checkout, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                    text=True, timeout=900)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return False, f'check failed: {exc}'
+        if result.returncode:
+            (state / f"{task['id']}.verification.log").write_text(result.stdout[-20000:])
+            return False, f'check returned {result.returncode}: {check[0]}'
+    return True, 'changes present and checks passed'
 
 
 def run(root, state, once):
@@ -121,7 +144,12 @@ def run(root, state, once):
                         os.killpg(worker.pid, signal.SIGKILL)
                         worker.wait()
                     raise
-            pending['status'] = 'review' if worker.returncode == 0 else 'blocked_worker_failure'
+            if worker.returncode == 0:
+                verified, reason = verify_result(target, state, pending)
+                pending['status'] = 'review' if verified else 'blocked_verification'
+                pending['verification'] = reason
+            else:
+                pending['status'] = 'blocked_worker_failure'
             pending['exit_code'] = worker.returncode
         except subprocess.TimeoutExpired:
             pending['status'] = 'blocked_timeout'
