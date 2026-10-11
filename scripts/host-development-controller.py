@@ -52,6 +52,35 @@ def verify_result(checkout, state, task):
     return True, 'changes present and checks passed'
 
 
+def worker_instruction(prompt, feedback=None):
+    policy = ('Work only in this isolated checkout. Implement the task and run appropriate tests. '
+              'Do not push, merge, delete worktrees, deploy, run production scans, or bypass approval gates. '
+              'If blocked, report the blocker. Task: ' + prompt)
+    if feedback:
+        policy += '\nIndependent verification failed; fix the implementation, preserve previous changes: ' + feedback
+    return policy
+
+
+def run_worker(target, log, instruction, timeout=7200):
+    binary = shutil.which('codex')
+    if binary is None:
+        raise OSError('codex CLI not found in controller PATH')
+    with log.open('a') as output:
+        worker = subprocess.Popen([binary, 'exec', '--sandbox', 'workspace-write', '-C', str(target), instruction],
+                                  stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+        try:
+            worker.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            os.killpg(worker.pid, signal.SIGTERM)
+            try:
+                worker.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                os.killpg(worker.pid, signal.SIGKILL)
+                worker.wait()
+            raise
+    return worker.returncode
+
+
 def run(root, state, once):
     state.mkdir(parents=True, exist_ok=True)
     lock = (state / 'controller.lock').open('w')
@@ -123,34 +152,32 @@ def run(root, state, once):
             continue
         pending.update(status='running', worktree=str(target), started_at=dt.datetime.now(dt.timezone.utc).isoformat())
         write_json(queue, data)
-        instruction = ('Work only in this isolated checkout. Implement the following task and run appropriate tests. '
-                       'Do not push, merge, delete worktrees, deploy, run production scans, or bypass approval gates. '
-                       'If blocked, report the blocker. Task: ' + prompt)
         log = state / f'{task_id}.log'
         try:
-            binary = shutil.which('codex')
-            if binary is None:
-                raise OSError('codex CLI not found in controller PATH')
-            with log.open('w') as output:
-                worker = subprocess.Popen([binary, 'exec', '--sandbox', 'workspace-write', '-C', str(target), instruction],
-                                          stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
-                try:
-                    worker.wait(timeout=7200)
-                except subprocess.TimeoutExpired:
-                    os.killpg(worker.pid, signal.SIGTERM)
-                    try:
-                        worker.wait(timeout=10)
-                    except subprocess.TimeoutExpired:
-                        os.killpg(worker.pid, signal.SIGKILL)
-                        worker.wait()
-                    raise
-            if worker.returncode == 0:
-                verified, reason = verify_result(target, state, pending)
-                pending['status'] = 'review' if verified else 'blocked_verification'
-                pending['verification'] = reason
-            else:
-                pending['status'] = 'blocked_worker_failure'
-            pending['exit_code'] = worker.returncode
+            max_attempts = pending.get('max_attempts', 2)
+            if type(max_attempts) is not int or not 1 <= max_attempts <= 3:
+                max_attempts = 1
+            feedback = None
+            for attempt in range(1, max_attempts + 1):
+                pending['attempts'] = attempt
+                write_json(queue, data)
+                exit_code = run_worker(target, log, worker_instruction(prompt, feedback))
+                pending['exit_code'] = exit_code
+                if exit_code == 0:
+                    verified, reason = verify_result(target, state, pending)
+                    pending['verification'] = reason
+                    if verified:
+                        pending['status'] = 'review'
+                        break
+                    feedback = reason
+                    pending['status'] = 'blocked_verification'
+                else:
+                    feedback = f'worker exited with code {exit_code}; inspect prior changes and log'
+                    pending['status'] = 'blocked_worker_failure'
+                write_json(queue, data)
+                if attempt < max_attempts:
+                    pending['status'] = 'running'
+                    write_json(queue, data)
         except subprocess.TimeoutExpired:
             pending['status'] = 'blocked_timeout'
         except OSError as exc:

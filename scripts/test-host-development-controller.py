@@ -13,6 +13,12 @@ spec.loader.exec_module(controller)
 
 
 class ControllerTests(unittest.TestCase):
+    def test_repair_instruction_contains_feedback_and_boundaries(self):
+        instruction = controller.worker_instruction('Fix widget', 'test failed')
+        self.assertIn('test failed', instruction)
+        self.assertIn('Do not push', instruction)
+        self.assertIn('Fix widget', instruction)
+
     def test_empty_worktree_cannot_claim_success(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
