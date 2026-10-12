@@ -119,6 +119,49 @@ test("cached ChatGPT can persist and recover host-owned durable tasks through le
   assert.equal(call("echo @flyto2/task start nope").params.name, "exec_command");
 });
 
+test("legacy task parser preserves optional prompts and Unicode whitespace", () => {
+  const call = (command: string) => normalizeLegacyMcpInput({ method: "tools/call", params: { name: "bash", arguments: {
+    workspaceId: "ws_a", command,
+  } } }, "codex") as { params: { name: string; arguments: Record<string, unknown> } };
+
+  assert.deepEqual(call("@flyto2/task status\ttask_12345678").params.arguments, {
+    action: "status", workspace_id: "ws_a", task_id: "task_12345678", include_response: true,
+  });
+  assert.deepEqual(call("@flyto2/task wait\ntask_12345678").params.arguments, {
+    action: "wait", workspace_id: "ws_a", task_id: "task_12345678", include_response: true,
+  });
+  assert.deepEqual(call("@flyto2/task continue\ttask_12345678\nNext\nstep").params.arguments, {
+    action: "continue", workspace_id: "ws_a", task_id: "task_12345678", prompt: "Next\nstep",
+  });
+  for (const action of ["complete", "stop"] as const) {
+    assert.deepEqual(call(`@flyto2/task ${action} task_12345678`).params.arguments, {
+      action, workspace_id: "ws_a", task_id: "task_12345678",
+    });
+  }
+  for (const command of [
+    "@flyto2/task status task_12345678 extra",
+    "@flyto2/task wait task_12345678 extra",
+    "@flyto2/task continue task_12345678",
+    "@flyto2/task stop",
+    "@flyto2/task start\tNot a supported legacy command",
+  ]) {
+    assert.equal(call(command).params.name, "exec_command", command);
+  }
+});
+
+test("legacy task parsing handles long adversarial inputs without regex backtracking", () => {
+  const call = (command: string) => normalizeLegacyMcpInput({ method: "tools/call", params: { name: "bash", arguments: {
+    workspaceId: "ws_a", command,
+  } } }, "codex") as { params: { name: string; arguments: Record<string, unknown> } };
+  const longId = "a".repeat(100_000);
+  const longSpaces = " ".repeat(100_000);
+  for (const verb of ["status", "wait", "continue", "complete", "stop"]) {
+    const invalid = call(`@flyto2/task ${verb} ${longId}${longSpaces}extra`);
+    assert.equal(invalid.params.name, verb === "status" || verb === "wait" ? "exec_command" : "background_task");
+  }
+  assert.equal(call(`@flyto2/task continue ${longId}${longSpaces}`).params.name, "exec_command");
+});
+
 test("cached ChatGPT @flyto2/job commands continue a Codex process session", () => {
   const session = `proc_${"a".repeat(32)}`;
   const poll = (command: string) => normalizeLegacyMcpInput({ method: "tools/call", params: { name: "bash", arguments: {
